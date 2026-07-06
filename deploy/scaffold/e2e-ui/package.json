@@ -1,0 +1,14 @@
+{
+  "name": "{{PROJECT_NAME}}-e2e-ui",
+  "version": "1.0.0",
+  "private": true,
+  "description": "UI E2E for {{PROJECT_NAME}} operator portal (Playwright). Start deploy/run.sh + serve portal/operator first, then npm test.",
+  "scripts": {
+    "test": "playwright test",
+    "test:smoke": "playwright test --grep @smoke",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

@@ -1,0 +1,8 @@
+node_modules/
+*.log
+
+# Run logs go in logs/ (e.g. `npm run test:full 2>&1 | tee logs/run-full.log`).
+# The repo-root .gitignore has a bare `logs` rule that would ignore the whole dir; re-include
+# it here so the directory persists in git, while logs/.gitignore keeps its contents out.
+!logs/
+!logs/.gitignore

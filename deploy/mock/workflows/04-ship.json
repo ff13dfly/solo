@@ -1,0 +1,16 @@
+{
+  "id": "wf-ship",
+  "name": "Ship (event test)",
+  "desc": "Triggered by EVENT:SHIPMENT:CREATED (market's _event). Ships the shipment (assigns tracking). $input = { shipmentId, orderId, paymentId, state, trackingNo }.",
+  "category": "event-test",
+  "allowed_triggers": ["event"],
+  "event_subscriptions": [{ "stream": "EVENT:SHIPMENT:CREATED" }],
+  "steps": [
+    {
+      "id": "ship",
+      "service": "market",
+      "method": "market.shipment.ship",
+      "params": { "id": "$input.shipmentId" }
+    }
+  ]
+}

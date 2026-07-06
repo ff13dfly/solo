@@ -1,0 +1,301 @@
+/**
+ * Summary Card Styles
+ */
+
+.summary-card {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 16px;
+  padding: 16px;
+  margin: 8px 16px;
+  color: white;
+  box-shadow: 0 4px 20px rgba(102, 126, 234, 0.4);
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Status variations */
+.summary-card.status-pending {
+  background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+}
+
+.summary-card.status-executing {
+  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+}
+
+.summary-card.status-completed {
+  background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%);
+}
+
+.summary-card.status-failed {
+  background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
+}
+
+/* Header */
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.status-icon {
+  font-size: 20px;
+}
+
+.workflow-name {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.progress-indicator {
+  font-size: 12px;
+  opacity: 0.9;
+  font-family: monospace;
+  background: rgba(255, 255, 255, 0.2);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.close-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.close-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Progress Bar */
+.progress-bar-container {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background: white;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* Params List */
+.params-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.param-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.param-row:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.param-row.filled {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.param-row.missing {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+}
+
+.param-icon {
+  font-size: 14px;
+}
+
+.param-label {
+  font-size: 13px;
+  opacity: 0.9;
+  min-width: 80px;
+}
+
+.param-value {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: right;
+}
+
+.param-group {
+  margin-top: 4px;
+}
+
+.param-group-header {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 6px;
+  padding-left: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toggle-icon {
+  font-family: monospace;
+  font-size: 10px;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  line-height: 1;
+  transition: all 0.2s;
+}
+
+.param-group-header:hover .toggle-icon {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.param-group-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 12px;
+  border-left: 1.5px solid rgba(255, 255, 255, 0.15);
+}
+
+.confidence {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-left: 4px;
+}
+
+/* Hint Message */
+.hint-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+.hint-icon {
+  font-size: 16px;
+}
+
+.hint-text {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Error Message */
+.error-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 0, 0, 0.2);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.error-icon {
+  font-size: 16px;
+}
+
+.error-text {
+  font-size: 13px;
+}
+
+/* Action Buttons */
+.action-buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.btn-cancel,
+.btn-confirm,
+.btn-retry {
+  flex: 1;
+  padding: 12px 16px;
+  border: none;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-cancel {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.btn-cancel:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.btn-confirm {
+  background: white;
+  color: #667eea;
+}
+
+.btn-confirm:hover {
+  transform: scale(1.02);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.btn-retry {
+  background: white;
+  color: #ff4b2b;
+}
+
+/* Completed Message */
+.completed-message {
+  text-align: center;
+  padding: 16px;
+  font-size: 18px;
+  font-weight: 600;
+}

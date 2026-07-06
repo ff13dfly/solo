@@ -1,0 +1,23 @@
+{
+  "id": "wf-example-event",
+  "name": "Example · event-triggered (inbound webhook → notify)",
+  "desc": "事件触发链路：ingress 收到的 webhook 落到流 EVENT:WEBHOOK:EXAMPLE 时触发。$input = ingress 信封 { request_id, data:<webhook body> }，所以 body 字段在 $input.data.*。要被事件触发，allowed_triggers 必须含 'event' 且声明 event_subscriptions。",
+  "category": "example",
+  "allowed_triggers": ["event"],
+  "event_subscriptions": [
+    { "stream": "EVENT:WEBHOOK:EXAMPLE", "filter": { "type": "webhook.received" } }
+  ],
+  "steps": [
+    {
+      "id": "notify",
+      "service": "notification",
+      "method": "notification.send",
+      "params": {
+        "targetId": "$input.data.userId",
+        "type": "webhook.example",
+        "sourceId": "ingress",
+        "payload": { "ref": "$input.data.ref" }
+      }
+    }
+  ]
+}

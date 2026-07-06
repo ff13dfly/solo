@@ -1,0 +1,301 @@
+name: CI
+
+# Solo framework quality gate. npm workspace project (api/package-lock.json);
+# all work runs under api/.
+#
+#   static — autocheck --static PER SERVICE (declaration/registration sync,
+#            param conventions, auth-fork ban, etc.). No Redis.
+#            ⚠️ Run it per service dir: pointed at the api root the structure
+#            check bails out ("纯文档/设计阶段") and the gate silently checks
+#            NOTHING — that hollow form is exactly how drift accumulated.
+#   test   — jest against a Redis service. Runs the proven-green hermetic subset
+#            (allow-list in jest.ci.config.js — 61 suites / 790 tests as of
+#            2026-06-11). Excluded suites (external-API agent tests, script-style
+#            "tests", validator's open OOM bug) are tracked in jest.ci.config.js.
+#   e2e    — full-stack black-box regression (e2e/ standalone project): boots the
+#            REAL 13-service mesh + mock-listener chain against redis-stack and
+#            runs all 54 suites. This is the gate that catches "behavior changed,
+#            tests didn't" drift the hermetic subset can't see (toFix §6.x).
+#   portal-tsc — type-check both portals (system + operator). Cheap, no mesh.
+#   frontend-build — build the EXACT artifacts init.sh ships (deploy/build-frontend.sh
+#            → portal/publish + client/publish tarballs) and upload them. portal-tsc
+#            only type-checks source and ui-e2e serves source via vite — neither
+#            exercises the shipped bundle, so a build break in the distributed
+#            artifact path was previously invisible to CI. Uploaded artifacts are
+#            the version-pinned (.solo-version) bundles other projects consume.
+#   ui-e2e — Playwright against the REAL system portal + mesh (e2e/ui). This is the
+#            FRONTEND's regression net — the layer that catches human-journey breaks
+#            the API tests can't (it's how the create-drops-event_subscriptions gap
+#            surfaced). NON-BLOCKING for now (continue-on-error) while we stabilize;
+#            promote to blocking once it's proven low-flake.
+#
+# static / test / e2e / portal-tsc / frontend-build are blocking; ui-e2e is non-blocking (for now).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+defaults:
+  run:
+    working-directory: api
+
+jobs:
+  static:
+    name: Static quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - name: autocheck --static (per service — root form is a silent no-op)
+        run: |
+          set -e
+          fail=0
+          for d in apps/collection apps/planner apps/fulfillment apps/storage apps/market apps/approval \
+                   core/ingress core/notification core/user core/agent core/nexus core/orchestrator \
+                   core/administrator core/gateway sample; do
+            echo "::group::autocheck $d"
+            if ! node autocheck/checker.js "$d" --static; then
+              echo "::error::autocheck failed for $d"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
+      - name: doc-drift (CLAUDE.md §2 ↔ services.json)
+        working-directory: .
+        run: node deploy/check-doc-drift.js
+      - name: error-code coverage + collision (library/jsonrpc.js CODES registry)
+        working-directory: .
+        run: node deploy/check-error-codes.js
+      - name: lockfile hygiene (npm only · single public registry)
+        working-directory: .
+        run: |
+          set -e
+          if git ls-files '*yarn.lock' | grep -q .; then
+            echo "::error::yarn.lock committed — repo standardizes on npm (package-lock.json only):"
+            git ls-files '*yarn.lock'; exit 1
+          fi
+          bad=$(git ls-files '*package-lock.json' | xargs grep -lE 'registry\.(npmmirror\.com|npm\.taobao\.org|cnpmjs\.org)' 2>/dev/null || true)
+          if [ -n "$bad" ]; then
+            echo "::error::package-lock pinned to a mirror registry (normalize resolved URLs to registry.npmjs.org):"
+            echo "$bad"; exit 1
+          fi
+          echo "lockfile hygiene OK"
+
+  test:
+    name: Unit + Redis-backed tests
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        # redis-stack-server (not plain redis): some services use RedisJSON/Search.
+        image: redis/redis-stack-server:latest
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      REDIS_URL: redis://localhost:6379
+      REDIS_PORT: "6379"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - name: jest (green subset — see jest.ci.config.js)
+        run: npx jest -c jest.ci.config.js --ci --runInBand
+
+  e2e:
+    name: Full-stack e2e (live mesh, 54 suites)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      redis:
+        # The harness reuses an external Redis when one answers on 6699
+        # (redis-stack: orchestrator/storage need RedisJSON).
+        image: redis/redis-stack-server:latest
+        ports:
+          - 6699:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      REDIS_URL: redis://localhost:6699
+      E2E_PROFILE: full
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            e2e/package-lock.json
+      - name: install api deps (services spawn from api/)
+        run: npm ci
+      - name: install e2e deps (standalone project)
+        working-directory: e2e
+        run: npm ci
+      - name: full-stack regression (harness boots Router + 13 services + mock chain)
+        working-directory: e2e
+        run: npx jest --runInBand
+
+  portal-tsc:
+    name: Portal type-check (system + operator)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # One lockfile per portal (npm only — yarn.lock removed, registries
+      # normalized to npmjs.org) so `npm ci` installs the committed tree
+      # deterministically and fails loudly on drift instead of rewriting it.
+      - name: tsc — portal/system
+        working-directory: portal/system
+        run: npm ci && npx tsc --noEmit
+      - name: tsc — portal/operator
+        working-directory: portal/operator
+        run: npm ci && npx tsc --noEmit
+
+  frontend-build:
+    name: Frontend bundles (build shipped artifacts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: build operator + system + mobile bundles (deploy/build-frontend.sh)
+        working-directory: .
+        run: bash deploy/build-frontend.sh
+      - name: upload version-pinned frontend bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-bundles
+          path: |
+            portal/publish/*.tar.gz
+            client/publish/*.tar.gz
+          retention-days: 14
+
+  ui-e2e:
+    name: UI e2e (Playwright — system + operator, mesh-backed)
+    runs-on: ubuntu-latest
+    # BLOCKING on the stable core (--grep-invert @quarantine). Known-unstable deep-flow
+    # specs (AI-sentinel/bot-provisioning/fulfillment-profile/watcher creation) are tagged
+    # @quarantine and run in a SEPARATE non-blocking step until stabilized — see
+    # e2e/ui/README.md "Quarantine". This keeps the gate green-or-red on what's reliable.
+    timeout-minutes: 30
+    services:
+      redis:
+        image: redis/redis-stack-server:latest
+        ports:
+          - 6699:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      REDIS_URL: redis://localhost:6699
+      E2E_PROFILE: full
+      SOLO_ROUTER_URL: http://localhost:8600
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: changeme
+      # operator portal login gates on categories.POWER === 'operator'; meshup seeds this user.
+      TEST_USER: e2e-operator
+      TEST_PASSWORD: changeme
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: install api deps (services spawn from api/)
+        working-directory: api
+        run: npm ci
+      - name: install e2e deps
+        working-directory: e2e
+        run: npm ci
+      - name: install e2e/ui deps (Playwright)
+        working-directory: e2e/ui
+        run: npm ci
+      - name: install portal/system deps
+        working-directory: portal/system
+        run: npm ci
+      - name: install portal/operator deps
+        working-directory: portal/operator
+        run: npm ci
+      - name: install Playwright chromium
+        working-directory: e2e/ui
+        run: npx playwright install --with-deps chromium
+      - name: bring up mesh (13 services + admin & operator seed)
+        run: |
+          set -e
+          ( node e2e/ui/scripts/meshup.js > /tmp/ui-meshup.log 2>&1 & )
+          for i in $(seq 1 180); do curl -sf http://127.0.0.1:8699/ >/dev/null 2>&1 && break; sleep 1; done
+          if ! curl -sf http://127.0.0.1:8699/ >/dev/null 2>&1; then echo "::error::mesh failed to start"; tail -60 /tmp/ui-meshup.log; exit 1; fi
+          echo "mesh ready (admin + e2e-operator seeded)"
+      # Playwright's webServer auto-serves the system (:9200) + operator (:9300) portals
+      # (playwright.config.ts) — no manual vite choreography. globalSetup logs in admin
+      # (system) + e2e-operator (operator).
+      - name: ui-e2e stable core (system + operator) — BLOCKING
+        working-directory: e2e/ui
+        run: npx playwright test --grep-invert "@quarantine"
+      - name: ui-e2e quarantine (known-unstable deep-flow specs) — non-blocking, stabilizing
+        working-directory: e2e/ui
+        continue-on-error: true
+        run: npx playwright test --grep "@quarantine"
+      - name: upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-ui
+          path: e2e/ui/playwright-report
+          retention-days: 7
+
+  ui-e2e-mobile:
+    name: UI e2e (Playwright — mobile, route-mocked)
+    runs-on: ubuntu-latest
+    # BLOCKING — route-mocked, no mesh/Redis, so it's fast and deterministic.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: install e2e/ui deps (Playwright)
+        working-directory: e2e/ui
+        run: npm ci
+      - name: install client/mobile deps
+        working-directory: client/mobile
+        run: npm ci
+      - name: install Playwright chromium
+        working-directory: e2e/ui
+        run: npx playwright install --with-deps chromium
+      # Route-mocked (helpers/mobile.ts): no mesh, no Redis. The mobile config's webServer
+      # boots vite :9500.
+      - name: ui-e2e mobile (route-mocked) — BLOCKING
+        working-directory: e2e/ui
+        run: npx playwright test --config=playwright.mobile.config.ts
+      - name: upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-mobile
+          path: e2e/ui/playwright-report
+          retention-days: 7

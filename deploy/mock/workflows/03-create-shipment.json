@@ -1,0 +1,16 @@
+{
+  "id": "wf-create-shipment",
+  "name": "Create Shipment (event test)",
+  "desc": "Triggered by EVENT:PAYMENT:SETTLED (collection's _event). Creates a shipment in market. $input = { paymentId, orderId, amount, currency, state }.",
+  "category": "event-test",
+  "allowed_triggers": ["event"],
+  "event_subscriptions": [{ "stream": "EVENT:PAYMENT:SETTLED" }],
+  "steps": [
+    {
+      "id": "create",
+      "service": "market",
+      "method": "market.shipment.create",
+      "params": { "orderId": "$input.orderId", "paymentId": "$input.paymentId" }
+    }
+  ]
+}

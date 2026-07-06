@@ -1,0 +1,7 @@
+{
+  "name": "Emergency Procurement",
+  "desc": "Create a purchase order in the ERP system",
+  "steps": [
+    { "id": "s1", "service": "supply", "method": "purchase.create", "params": { "supplier": "Global Logistics", "amount": 50000 } }
+  ]
+}

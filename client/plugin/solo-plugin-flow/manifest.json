@@ -1,0 +1,8 @@
+{
+    "id": "solo-plugin-flow",
+    "name": "Export Maker",
+    "version": "1.0.0",
+    "author": "Solo",
+    "icon": "Layers",
+    "entry": "FlowPlugin.tsx"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "collection",
+  "version": "0.1.0",
+  "description": "Mock 收款 (payment collection) business service — event-flow test fixture (NOT a framework service)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "jest tests/logic.test.js --reporters=default"
+  },
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {}
+}

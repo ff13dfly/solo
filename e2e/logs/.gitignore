@@ -1,0 +1,4 @@
+# E2E run logs live here (e.g. `npm run test:full 2>&1 | tee logs/run-full.log`).
+# Keep the directory tracked, but never commit the log files themselves.
+*
+!.gitignore

@@ -1,0 +1,13 @@
+# Tauri / Rust
+/src-tauri/target/
+/src-tauri/Cargo.lock
+
+# Node / Vite
+node_modules
+/dist
+/dist-tauri
+.env
+.env.*
+
+# Logs
+*.log

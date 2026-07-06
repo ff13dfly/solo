@@ -1,0 +1,16 @@
+{
+  "id": "wf-settle-payment",
+  "name": "Settle Payment (event test)",
+  "desc": "Triggered by EVENT:PAYMENT:RECEIVED (collection's _event). Settles the payment. $input = collection event payload { paymentId, orderId, amount, currency, state }.",
+  "category": "event-test",
+  "allowed_triggers": ["event"],
+  "event_subscriptions": [{ "stream": "EVENT:PAYMENT:RECEIVED" }],
+  "steps": [
+    {
+      "id": "settle",
+      "service": "collection",
+      "method": "collection.payment.settle",
+      "params": { "id": "$input.paymentId" }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "approval",
+  "version": "0.1.0",
+  "description": "Solo Approval Protocol (SAP): gated, auditable change approval with a state machine and evidence trail",
+  "license": "Apache-2.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest",
+    "start": "node index.js"
+  },
+  "type": "commonjs",
+  "dependencies": {},
+  "devDependencies": {
+    "jest": "^30.2.0"
+  }
+}

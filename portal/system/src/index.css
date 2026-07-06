@@ -1,0 +1,167 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-primary: #0d1117;
+  --color-bg-secondary: #161b22;
+  --color-text-primary: #c9d1d9;
+  --color-text-secondary: #8b949e;
+  --color-accent: #58a6ff;
+  --color-accent-dim: rgba(56, 139, 253, 0.1);
+  --color-border: #30363d;
+  --color-error: #da3633;
+  --color-success: #2ea043;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+:root {
+  box-sizing: border-box;
+  --bg-color: var(--color-bg-primary);
+  --text-color: var(--color-text-primary);
+  --accent-color: var(--color-accent);
+  --border-color: var(--color-border);
+  --error-color: var(--color-error);
+  --success-color: var(--color-success);
+  --font-mono: var(--font-mono);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: inherit;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: var(--font-mono);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+}
+
+input,
+button {
+  font-family: inherit;
+  outline: none;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+
+
+/* =========================================
+   Sidebar Collapse Transition
+   ========================================= */
+.sys-sidebar {
+  width: 260px;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              padding 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+
+.sys-sidebar.collapsed {
+  width: 52px;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* =========================================
+   Service Button (still used by workflow-detail sub-components)
+   ========================================= */
+.service-btn {
+  background: rgba(56, 139, 253, 0.1);
+  border: 1px solid rgba(56, 139, 253, 0.4);
+  color: #58a6ff;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+}
+
+.service-btn:hover:not(:disabled) {
+  background: #1f6feb;
+  border-color: #388bfd;
+  color: #ffffff;
+}
+
+.service-btn.danger {
+  background: rgba(248, 81, 73, 0.1);
+  border-color: rgba(248, 81, 73, 0.4);
+  color: #f85149;
+}
+
+.service-btn.danger:hover:not(:disabled) {
+  background: #da3633;
+  border-color: #f85149;
+  color: #ffffff;
+}
+
+.service-btn.small {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.service-btn.success {
+  background: rgba(46, 160, 67, 0.1);
+  border-color: rgba(46, 160, 67, 0.4);
+  color: #3fb950;
+}
+
+.service-btn.success:hover:not(:disabled) {
+  background: #238636;
+  border-color: #3fb950;
+  color: #ffffff;
+}
+
+
+
+
+/* Popover fade-in animation */
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Modal animation */
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+/* Toast animation */
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

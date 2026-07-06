@@ -1,0 +1,154 @@
+# Orchestrator Boundary Tests
+# Tests for input validation and error handling
+
+# --- Missing Required Fields ---
+- id: BOUND-CREATE-01
+  method: orchestrator.workflow.create
+  desc: Missing id field
+  input:
+    category: Test
+    name: Test
+    desc: Test
+    steps: []
+  expect:
+    ok: false
+    error: "MISSING_PARAM: id required"
+
+- id: BOUND-CREATE-02
+  method: orchestrator.workflow.create
+  desc: Missing category field
+  input:
+    id: test_bound
+    name: Test
+    desc: Test
+    steps: []
+  expect:
+    ok: false
+    error: "MISSING_PARAM: category required"
+
+- id: BOUND-CREATE-03
+  method: orchestrator.workflow.create
+  desc: Missing steps field
+  input:
+    id: test_bound
+    category: Test
+    name: Test
+    desc: Test
+  expect:
+    ok: false
+    error: "MISSING_PARAM: steps array required"
+
+- id: BOUND-CREATE-04
+  method: orchestrator.workflow.create
+  desc: Steps is not an array
+  input:
+    id: test_bound
+    category: Test
+    name: Test
+    desc: Test
+    steps: "not an array"
+  expect:
+    ok: false
+    error: "MISSING_PARAM: steps array required"
+
+# --- Invalid Step Structure ---
+- id: BOUND-STEP-01
+  method: orchestrator.workflow.create
+  desc: Step missing id
+  input:
+    id: test_step_bound
+    category: Test
+    name: Test
+    desc: Test
+    steps:
+      - service: sample
+        method: sample.ping
+        params: {}
+  expect:
+    ok: false
+    error: "INVALID_STEP: step.id required"
+
+- id: BOUND-STEP-02
+  method: orchestrator.workflow.create
+  desc: Step missing service
+  input:
+    id: test_step_bound
+    category: Test
+    name: Test
+    desc: Test
+    steps:
+      - id: s1
+        method: sample.ping
+        params: {}
+  expect:
+    ok: false
+    error: "INVALID_STEP: step.service required"
+
+- id: BOUND-STEP-03
+  method: orchestrator.workflow.create
+  desc: Step missing method
+  input:
+    id: test_step_bound
+    category: Test
+    name: Test
+    desc: Test
+    steps:
+      - id: s1
+        service: sample
+        params: {}
+  expect:
+    ok: false
+    error: "INVALID_STEP: step.method required"
+
+# --- Get/Update/Delete Missing ID ---
+- id: BOUND-GET-01
+  method: orchestrator.workflow.get
+  desc: Get without id
+  input: {}
+  expect:
+    ok: false
+    error: "MISSING_PARAM: id required"
+
+- id: BOUND-UPDATE-01
+  method: orchestrator.workflow.update
+  desc: Update without id
+  input:
+    name: New Name
+  expect:
+    ok: false
+    error: "MISSING_PARAM: id required"
+
+- id: BOUND-DELETE-01
+  method: orchestrator.workflow.delete
+  desc: Delete without id
+  input: {}
+  expect:
+    ok: false
+    error: "MISSING_PARAM: id required"
+
+- id: BOUND-RESTORE-01
+  method: orchestrator.workflow.restore
+  desc: Restore without id
+  input: {}
+  expect:
+    ok: false
+    error: "MISSING_PARAM: id required"
+
+# --- Runner Validation ---
+- id: BOUND-RUN-01
+  method: orchestrator.run
+  desc: Run without workflowId
+  input:
+    input: {}
+  expect:
+    ok: false
+    error: "MISSING_PARAM: workflowId required"
+
+- id: BOUND-RUN-02
+  method: orchestrator.run
+  desc: Run non-existent workflow
+  input:
+    workflowId: does_not_exist
+  expect:
+    ok: false
+    error: WORKFLOW_NOT_FOUND

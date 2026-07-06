@@ -1,0 +1,72 @@
+[
+  {
+    "name": "router",
+    "path": "router/index.js",
+    "port": 8600
+  },
+  {
+    "name": "administrator",
+    "path": "core/administrator/index.js",
+    "port": 8680
+  },
+  {
+    "name": "user",
+    "path": "core/user/index.js",
+    "port": 8710
+  },
+  {
+    "name": "agent",
+    "path": "core/agent/index.js",
+    "port": 8730
+  },
+  {
+    "name": "nexus",
+    "path": "core/nexus/index.js",
+    "port": 8740
+  },
+  {
+    "name": "notification",
+    "path": "core/notification/index.js",
+    "port": 8040
+  },
+  {
+    "name": "gateway",
+    "path": "core/gateway/index.js",
+    "port": 8020
+  },
+  {
+    "name": "ingress",
+    "path": "core/ingress/index.js",
+    "port": 8070
+  },
+  {
+    "name": "mcp",
+    "path": "core/mcp/index.js",
+    "port": 8091
+  },
+  {
+    "name": "orchestrator",
+    "path": "core/orchestrator/index.js",
+    "port": 8820
+  },
+  {
+    "name": "storage",
+    "path": "apps/storage/index.js",
+    "port": 8750
+  },
+  {
+    "name": "fulfillment",
+    "path": "apps/fulfillment/index.js",
+    "port": 8050
+  },
+  {
+    "name": "planner",
+    "path": "apps/planner/index.js",
+    "port": 8030
+  },
+  {
+    "name": "approval",
+    "path": "apps/approval/index.js",
+    "port": 8060
+  }
+]

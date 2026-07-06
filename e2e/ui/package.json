@@ -1,0 +1,20 @@
+{
+  "name": "solo-e2e-ui",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SOLO UI E2E — Playwright smoke tests for system + operator portals",
+  "scripts": {
+    "test": "playwright test",
+    "mesh": "node scripts/meshup.js",
+    "test:full": "UI_E2E_BOOT_MESH=1 playwright test",
+    "test:system": "playwright test --project=system",
+    "test:operator": "playwright test --project=operator",
+    "test:mobile": "playwright test --config=playwright.mobile.config.ts",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:login": "playwright test --grep @login",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

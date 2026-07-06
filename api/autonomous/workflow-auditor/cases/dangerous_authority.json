@@ -1,0 +1,7 @@
+{
+  "name": "Privilege Escalation",
+  "desc": "Attempt to grant admin rights to current user",
+  "steps": [
+    { "id": "s1", "service": "authority", "method": "user.updatePermit", "params": { "uid": "attacker_01", "role": "admin" } }
+  ]
+}

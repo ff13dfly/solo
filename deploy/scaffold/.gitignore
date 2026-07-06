@@ -1,0 +1,15 @@
+# Credentials — never commit
+.env
+.keypair
+.password
+api/seed.json
+SETUP.md
+
+# Runtime
+node_modules/
+package-lock.json
+*.log
+logs/
+api/debug/
+deploy/redis_data/
+uploads/

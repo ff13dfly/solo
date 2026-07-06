@@ -1,0 +1,189 @@
+# Orchestrator Unit Tests
+# Tests for workflow CRUD operations and soft delete
+
+# --- CREATE ---
+- id: ORCH-CREATE-01
+  method: orchestrator.workflow.create
+  desc: Create a valid workflow
+  input:
+    id: test_workflow_1
+    category: Testing
+    name: Test Workflow
+    desc: A test workflow for unit testing
+    priority: 80
+    tags: ["test", "unit"]
+    examples: ["run test workflow"]
+    defaults:
+      timeout: 30
+    steps:
+      - id: step1
+        service: sample
+        method: sample.echo
+        params:
+          message: hello
+  expect:
+    ok: true
+    assert:
+      - { field: id, equals: test_workflow_1 }
+      - { field: status, equals: ACTIVE }
+      - { field: category, equals: Testing }
+
+- id: ORCH-CREATE-02
+  method: orchestrator.workflow.create
+  desc: Create workflow with minimal fields
+  input:
+    id: test_workflow_minimal
+    category: Minimal
+    name: Minimal Workflow
+    desc: Minimal test
+    steps:
+      - id: s1
+        service: sample
+        method: sample.ping
+        params: {}
+  expect:
+    ok: true
+    assert:
+      - { field: priority, equals: 50 }
+      - { field: tags, type: array }
+
+# --- GET ---
+- id: ORCH-GET-01
+  method: orchestrator.workflow.get
+  desc: Get existing workflow
+  depends: [ORCH-CREATE-01]
+  input:
+    id: test_workflow_1
+  expect:
+    ok: true
+    assert:
+      - { field: id, equals: test_workflow_1 }
+      - { field: name, equals: Test Workflow }
+
+- id: ORCH-GET-02
+  method: orchestrator.workflow.get
+  desc: Get non-existent workflow
+  input:
+    id: non_existent_workflow
+  expect:
+    ok: false
+    error: WORKFLOW_NOT_FOUND
+
+# --- LIST ---
+- id: ORCH-LIST-01
+  method: orchestrator.workflow.list
+  desc: List all workflows
+  depends: [ORCH-CREATE-01, ORCH-CREATE-02]
+  input: {}
+  expect:
+    ok: true
+    assert:
+      - { field: items, type: array }
+      - { field: total, notNull: true }
+
+- id: ORCH-LIST-02
+  method: orchestrator.workflow.list
+  desc: List with category filter
+  depends: [ORCH-CREATE-01]
+  input:
+    category: Testing
+  expect:
+    ok: true
+    assert:
+      - { field: items, type: array }
+
+# --- UPDATE ---
+- id: ORCH-UPDATE-01
+  method: orchestrator.workflow.update
+  desc: Update workflow name
+  depends: [ORCH-CREATE-01]
+  input:
+    id: test_workflow_1
+    name: Updated Test Workflow
+    priority: 90
+  expect:
+    ok: true
+    assert:
+      - { field: name, equals: Updated Test Workflow }
+      - { field: priority, equals: 90 }
+
+# --- DELETE (Soft) ---
+- id: ORCH-DELETE-01
+  method: orchestrator.workflow.delete
+  desc: Soft delete workflow
+  depends: [ORCH-CREATE-02]
+  input:
+    id: test_workflow_minimal
+  expect:
+    ok: true
+    assert:
+      - { field: success, equals: true }
+
+- id: ORCH-DELETE-02
+  method: orchestrator.workflow.get
+  desc: Verify deleted workflow still accessible
+  depends: [ORCH-DELETE-01]
+  input:
+    id: test_workflow_minimal
+  expect:
+    ok: true
+    assert:
+      - { field: status, equals: DELETED }
+
+- id: ORCH-DELETE-03
+  method: orchestrator.workflow.list
+  desc: Verify deleted excluded from default list
+  depends: [ORCH-DELETE-01]
+  input:
+    category: Minimal
+    includeDeleted: false
+  expect:
+    ok: true
+    assert:
+      - { field: total, equals: 0 }
+
+- id: ORCH-DELETE-04
+  method: orchestrator.workflow.list
+  desc: Verify deleted included with flag
+  depends: [ORCH-DELETE-01]
+  input:
+    category: Minimal
+    includeDeleted: true
+  expect:
+    ok: true
+    assert:
+      - { field: total, notNull: true }
+
+# --- RESTORE ---
+- id: ORCH-RESTORE-01
+  method: orchestrator.workflow.restore
+  desc: Restore deleted workflow
+  depends: [ORCH-DELETE-01]
+  input:
+    id: test_workflow_minimal
+  expect:
+    ok: true
+    assert:
+      - { field: success, equals: true }
+
+- id: ORCH-RESTORE-02
+  method: orchestrator.workflow.get
+  desc: Verify restored workflow is active
+  depends: [ORCH-RESTORE-01]
+  input:
+    id: test_workflow_minimal
+  expect:
+    ok: true
+    assert:
+      - { field: status, equals: ACTIVE }
+
+# --- CATEGORIES ---
+- id: ORCH-CAT-01
+  method: orchestrator.categories
+  desc: Get unique categories
+  depends: [ORCH-CREATE-01]
+  input: {}
+  expect:
+    ok: true
+    assert:
+      - { field: ".", type: array }

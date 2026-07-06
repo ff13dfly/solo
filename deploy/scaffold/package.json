@@ -1,0 +1,17 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "serve": "^14.2.4",
+    "@solana/web3.js": "^1.98.4",
+    "body-parser": "^2.2.1",
+    "bs58": "^6.0.0",
+    "chalk": "^4.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "redis": "^5.10.0",
+    "tweetnacl": "^1.0.3"
+  }
+}

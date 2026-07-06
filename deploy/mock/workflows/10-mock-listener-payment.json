@@ -1,0 +1,27 @@
+{
+  "id": "wf-mock-listener-payment",
+  "name": "Mock Listener → Record Payment",
+  "desc": "Triggered by EVENT:WEBHOOK:MOCK-LISTENER. POST body becomes $input.data.*. Expects: { orderId, amount (number), currency, externalRef? }. Send real payloads via POST /hook on the mock listener; the listener no longer emits synthetic heartbeats (those had no amount and produced endless FAILED runs).",
+  "category": "mock",
+  "allowed_triggers": ["event"],
+  "event_subscriptions": [
+    {
+      "stream": "EVENT:WEBHOOK:MOCK-LISTENER",
+      "filter": { "type": "webhook.received" }
+    }
+  ],
+  "steps": [
+    {
+      "id": "record",
+      "service": "collection",
+      "method": "collection.payment.record",
+      "params": {
+        "source": "mock-listener",
+        "orderId":     "$input.data.orderId",
+        "amount":      "$input.data.amount",
+        "currency":    "$input.data.currency",
+        "externalRef": "$input.data.externalRef"
+      }
+    }
+  ]
+}

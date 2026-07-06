@@ -1,0 +1,15 @@
+[
+  { "name": "router",        "path": "router/index.js",             "port": 8400 },
+  { "name": "administrator", "path": "core/administrator/index.js", "port": 8401 },
+  { "name": "user",          "path": "core/user/index.js",          "port": 8402 },
+  { "name": "agent",         "path": "core/agent/index.js",         "port": 8403 },
+  { "name": "nexus",         "path": "core/nexus/index.js",         "port": 8404 },
+  { "name": "notification",  "path": "core/notification/index.js",  "port": 8405 },
+  { "name": "gateway",       "path": "core/gateway/index.js",       "port": 8406 },
+  { "name": "ingress",       "path": "core/ingress/index.js",       "port": 8407 },
+  { "name": "orchestrator",  "path": "core/orchestrator/index.js",  "port": 8408 },
+  { "name": "storage",       "path": "apps/storage/index.js",       "port": 8409 },
+  { "name": "fulfillment",   "path": "apps/fulfillment/index.js",   "port": 8410 },
+  { "name": "planner",       "path": "apps/planner/index.js",       "port": 8411 },
+  { "name": "approval",      "path": "apps/approval/index.js",      "port": 8412 }
+]

@@ -1,0 +1,8 @@
+{
+  "name": "Inventory Check",
+  "desc": "Check products with low stock and query vendor info",
+  "steps": [
+    { "id": "s1", "service": "commodity", "method": "product.list", "params": { "stock_less_than": 10 } },
+    { "id": "s2", "service": "supply", "method": "vendor.get", "params": { "id": "$step.s1.result.items[0].vendorId" } }
+  ]
+}

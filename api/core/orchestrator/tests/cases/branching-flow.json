@@ -1,0 +1,22 @@
+{
+  "id": "wf_branch_demo",
+  "category": "process",
+  "name": "Branching demo flow",
+  "desc": "Sends an SMS only when the customer's tier is gold. Template for conditional (skippable) steps.",
+  "required_inputs": ["customerId"],
+  "steps": [
+    {
+      "id": "s1",
+      "service": "user",
+      "method": "user.profile.get",
+      "params": { "uid": "$input.customerId" }
+    },
+    {
+      "id": "s2",
+      "service": "gateway",
+      "method": "gateway.sms.send",
+      "params": { "to": "$step.s1.result.phone" },
+      "condition": {"===": [{"var": "step.s1.result.tier"}, "gold"]}
+    }
+  ]
+}

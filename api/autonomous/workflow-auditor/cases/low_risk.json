@@ -1,0 +1,7 @@
+{
+  "name": "Add Summer Label",
+  "desc": "Create a new label for summer season products",
+  "steps": [
+    { "id": "s1", "service": "commodity", "method": "category.create", "params": { "name": "Summer 2024", "type": "label" } }
+  ]
+}

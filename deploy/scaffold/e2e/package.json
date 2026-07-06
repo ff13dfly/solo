@@ -1,0 +1,14 @@
+{
+  "name": "{{PROJECT_NAME}}-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "E2E tests for {{PROJECT_NAME}} — run deploy/run.sh first, then npm test.",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0",
+    "redis": "^4.6.13"
+  }
+}

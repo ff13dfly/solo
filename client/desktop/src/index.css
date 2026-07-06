@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        --apple-blue: #0071e3;
+        --apple-bg: #f5f5f7;
+        --apple-text: #1d1d1f;
+        --apple-secondary-text: #86868b;
+        --apple-tertiary-text: #424245;
+        --apple-border: #d2d2d7;
+        --apple-gray-bg: #fbfbfd;
+        --apple-card-shadow: 0 4px 24px -10px rgba(0, 0, 0, 0.05);
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    }
+
+    html,
+    body,
+    #root {
+        @apply m-0 p-0 overflow-hidden bg-[#f5f5f7] antialiased text-[#1d1d1f];
+        width: 100vw;
+        height: 100vh;
+        overscroll-behavior-x: contain;
+    }
+
+    * {
+        overscroll-behavior-x: inherit;
+    }
+}
+
+@layer utilities {
+    .no-scrollbar::-webkit-scrollbar {
+        display: none;
+    }
+
+    .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+}

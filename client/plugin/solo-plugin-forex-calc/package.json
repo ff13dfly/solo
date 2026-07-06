@@ -1,0 +1,18 @@
+{
+    "name": "solo-plugin-forex-calc",
+    "private": true,
+    "version": "1.0.0",
+    "type": "module",
+    "scripts": {
+        "build": "vite build"
+    },
+    "devDependencies": {
+        "@vitejs/plugin-react": "^4.2.1",
+        "vite": "^5.1.4"
+    },
+    "peerDependencies": {
+        "react": "^18.2.0",
+        "framer-motion": "^11.0.3",
+        "lucide-react": "^0.323.0"
+    }
+}

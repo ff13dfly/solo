@@ -1,0 +1,13 @@
+{
+  "name": "mcp",
+  "version": "0.1.0",
+  "description": "MCP (Model Context Protocol) adapter — exposes orchestrator workflows as MCP tools",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest",
+    "start": "node index.js"
+  },
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {}
+}

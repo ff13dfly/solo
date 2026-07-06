@@ -1,0 +1,9 @@
+{
+    "id": "erp",
+    "name": "ERP Integration",
+    "version": "1.0.0",
+    "author": "Fuu",
+    "description": "Query warehouses and products from Yongyou T+ ERP",
+    "icon": "Database",
+    "entry": "ErpPlugin.tsx"
+}

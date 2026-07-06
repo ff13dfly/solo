@@ -1,0 +1,16 @@
+{
+  "name": "solo-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SOLO 黑盒 E2E 测试系统 — 独立项目(自带 jest+redis,不入根 workspaces)。见 README.md。",
+  "scripts": {
+    "test": "jest",
+    "test:lite": "E2E_PROFILE=lite jest",
+    "test:full": "E2E_PROFILE=full jest",
+    "test:unit": "jest --config jest.unit.config.js"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0",
+    "redis": "^4.6.13"
+  }
+}

@@ -1,0 +1,9 @@
+{
+    "id": "capabilities",
+    "name": "Router Capabilities",
+    "version": "1.0.0",
+    "author": "Fuu",
+    "description": "Browse real-time Router services and capabilities",
+    "icon": "Cpu",
+    "entry": "CapabilitiesView.tsx"
+}

@@ -1,0 +1,9 @@
+{
+    "id": "forex-calc",
+    "name": "Forex Calc",
+    "version": "1.0.0",
+    "author": "Fuu",
+    "description": "Real-time currency converter",
+    "icon": "DollarSign",
+    "entry": "ForexCalc.tsx"
+}

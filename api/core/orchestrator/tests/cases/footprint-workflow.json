@@ -1,0 +1,21 @@
+{
+  "id": "wf_footprint_test",
+  "category": "process",
+  "name": "Footprint pre-check test workflow",
+  "desc": "Two steps using fictitious service methods. Used to verify H6 footprint pre-check without real downstream services.",
+  "required_inputs": [],
+  "steps": [
+    {
+      "id": "s1",
+      "service": "ledger",
+      "method": "ledger.transfer",
+      "params": { "amount": 100 }
+    },
+    {
+      "id": "s2",
+      "service": "mail",
+      "method": "mail.send",
+      "params": { "to": "x@example.com" }
+    }
+  ]
+}

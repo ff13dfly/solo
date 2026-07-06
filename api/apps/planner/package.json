@@ -1,0 +1,13 @@
+{
+  "name": "@solo/planner",
+  "version": "0.1.0",
+  "description": "Solo Planner Microservice",
+  "main": "index.js",
+  "scripts": {
+    "test": "node tests/basic.test.js",
+    "start": "node index.js"
+  },
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {}
+}

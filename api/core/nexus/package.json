@@ -1,0 +1,16 @@
+{
+  "name": "nexus",
+  "version": "0.1.0",
+  "description": "Agent asset & lifecycle management hub",
+  "license": "Apache-2.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest",
+    "start": "node index.js"
+  },
+  "type": "commonjs",
+  "dependencies": {},
+  "devDependencies": {
+    "jest": "^30.2.0"
+  }
+}

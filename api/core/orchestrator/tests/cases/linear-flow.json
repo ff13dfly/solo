@@ -1,0 +1,25 @@
+{
+  "id": "wf_linear_demo",
+  "category": "process",
+  "name": "Linear demo flow",
+  "desc": "Two sequential steps; step 2 consumes step 1's result plus the original input. Template for a straight-line workflow.",
+  "required_inputs": ["customerId"],
+  "steps": [
+    {
+      "id": "s1",
+      "service": "user",
+      "method": "user.profile.get",
+      "params": { "uid": "$input.customerId" }
+    },
+    {
+      "id": "s2",
+      "service": "gateway",
+      "method": "gateway.email.send",
+      "params": {
+        "to": "$step.s1.result.email",
+        "name": "$step.s1.result.name",
+        "customerId": "$input.customerId"
+      }
+    }
+  ]
+}

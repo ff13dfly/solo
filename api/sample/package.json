@@ -1,0 +1,14 @@
+{
+  "name": "sample",
+  "version": "0.1.0",
+  "description": "Sample Microservice Template",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest",
+    "start": "node index.js"
+  },
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {}
+
+}

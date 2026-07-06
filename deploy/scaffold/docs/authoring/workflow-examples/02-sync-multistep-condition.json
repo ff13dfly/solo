@@ -1,0 +1,36 @@
+{
+  "id": "wf-example-multistep",
+  "name": "Example · multi-step with $step chaining + JsonLogic condition",
+  "desc": "同步两步链路（核心服务 notification + planner）：step 'notify' 发一条通知（返回 {id,status}）；step 'log' 仅当上一步产出了 id 时执行，用 $step.notify.result.id 把上一步结果接进参数。condition 必须是 JsonLogic 对象（字符串会被引擎拒绝）；ignore_error 让非关键步失败不阻断整条。注意：$ 变量必须整串就是变量，'id=$step...' 这种嵌进字符串里的不会被解析。",
+  "category": "example",
+  "allowed_triggers": ["sync"],
+  "required_inputs": ["userId"],
+  "input_schema": [
+    { "name": "userId", "required": true, "type": "string", "maxLength": 64, "pattern": "id" },
+    { "name": "note", "type": "string", "maxLength": 512 }
+  ],
+  "steps": [
+    {
+      "id": "notify",
+      "service": "notification",
+      "method": "notification.send",
+      "params": {
+        "targetId": "$input.userId",
+        "type": "example.ping",
+        "sourceId": "example",
+        "payload": { "note": "$input.note" }
+      }
+    },
+    {
+      "id": "log",
+      "service": "planner",
+      "method": "planner.todo.create",
+      "condition": { "!!": { "var": "step.notify.result.id" } },
+      "ignore_error": true,
+      "params": {
+        "name": "notified",
+        "content": "$step.notify.result.id"
+      }
+    }
+  ]
+}

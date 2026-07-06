@@ -1,0 +1,17 @@
+{
+  "name": "orchestrator",
+  "version": "0.1.0",
+  "description": "Workflow Orchestration Microservice",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest tests/scripts --json --outputFile=tests/report/result.json || true",
+    "start": "node index.js"
+  },
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {},
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "js-yaml": "^4.1.0"
+  }
+}

@@ -1,0 +1,22 @@
+# Storage Service Test Cases
+
+- name: storage.asset.upload
+  params:
+    file: "SGVsbG8gV29ybGQ="
+    filename: "hello.txt"
+    mimeType: "text/plain"
+  expect:
+    id: "length:8"
+    size: 11
+
+- name: storage.asset.get
+  params:
+    id: "${last.id}"
+  expect:
+    originalName: "hello.txt"
+
+- name: storage.asset.resolve
+  params:
+    id: "${last.id}"
+  expect:
+    url: "contains:http"

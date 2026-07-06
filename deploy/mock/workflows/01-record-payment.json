@@ -1,0 +1,22 @@
+{
+  "id": "wf-record-payment",
+  "name": "Record Payment (event test)",
+  "desc": "Triggered by a Stripe webhook (EVENT:WEBHOOK:STRIPE). Records the incoming payment in collection. $input = ingress envelope payload { request_id, data:<stripe object> }, so the stripe fields are at $input.data.data.object.*",
+  "category": "event-test",
+  "allowed_triggers": ["event"],
+  "event_subscriptions": [{ "stream": "EVENT:WEBHOOK:STRIPE" }],
+  "steps": [
+    {
+      "id": "record",
+      "service": "collection",
+      "method": "collection.payment.record",
+      "params": {
+        "source": "stripe",
+        "orderId": "$input.data.data.object.metadata.order_id",
+        "amount": "$input.data.data.object.amount",
+        "currency": "$input.data.data.object.currency",
+        "externalRef": "$input.data.data.object.id"
+      }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "ingress",
+  "version": "0.1.0",
+  "description": "Inbound webhook ingress adapter — central control plane (API key auth, dedup, emit EVENT:WEBHOOK:*)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {}
+}

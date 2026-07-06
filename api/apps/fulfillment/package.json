@@ -1,0 +1,14 @@
+{
+  "name": "@solo/fulfillment",
+  "version": "0.2.0",
+  "description": "Fulfillment Lifecycle Engine",
+  "license": "Apache-2.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "jest tests/logic.test.js --reporters=default",
+    "autocheck": "node ../../sample/autocheck.js ."
+  }
+}

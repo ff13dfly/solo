@@ -1,0 +1,16 @@
+[
+  {
+    "key": "USER:CONFIG:CATEGORY:ROLE",
+    "value": {
+      "key": "ROLE",
+      "type": "LIST",
+      "scope": "LOCAL",
+      "desc": "User System Roles",
+      "status": "ACTIVE",
+      "items": [
+        { "id": "normal",   "label": { "zh": "普通用户", "en": "Normal User"  }, "desc": "Standard system user",          "parentId": null },
+        { "id": "operator", "label": { "zh": "运维人员", "en": "Operator"     }, "desc": "System maintenance personnel",   "parentId": null }
+      ]
+    }
+  }
+]

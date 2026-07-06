@@ -1,0 +1,19 @@
+{
+  "name": "solo-router",
+  "version": "0.1.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "dependencies": {
+    "http-proxy-middleware": "^3.0.5"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0"
+  }
+}

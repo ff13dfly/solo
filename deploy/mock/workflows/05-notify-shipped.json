@@ -1,0 +1,25 @@
+{
+  "id": "wf-notify-shipped",
+  "name": "Notify Shipped (event test)",
+  "desc": "Triggered by EVENT:SHIPMENT:SHIPPED (market's _event). Sends a notification via the SYSTEM notification service — closes the chain using a core service. $input = { shipmentId, orderId, paymentId, state, trackingNo }.",
+  "category": "event-test",
+  "allowed_triggers": ["event"],
+  "event_subscriptions": [{ "stream": "EVENT:SHIPMENT:SHIPPED" }],
+  "steps": [
+    {
+      "id": "notify",
+      "service": "notification",
+      "method": "notification.send",
+      "params": {
+        "targetId": "$input.orderId",
+        "type": "order.shipped",
+        "sourceId": "market",
+        "payload": {
+          "shipmentId": "$input.shipmentId",
+          "orderId": "$input.orderId",
+          "trackingNo": "$input.trackingNo"
+        }
+      }
+    }
+  ]
+}

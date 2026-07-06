@@ -1,0 +1,54 @@
+{
+    "build": {
+        "beforeBuildCommand": "npm run build",
+        "beforeDevCommand": "npm run dev",
+        "devPath": "http://localhost:1420",
+        "distDir": "../dist"
+    },
+    "package": {
+        "productName": "Solo Desktop",
+        "version": "0.1.0"
+    },
+    "tauri": {
+        "allowlist": {
+            "all": false,
+            "http": {
+                "all": true,
+                "request": true,
+                "scope": [
+                    "http://localhost:8030/*"
+                ]
+            },
+            "shell": {
+                "all": false,
+                "open": true
+            }
+        },
+        "bundle": {
+            "active": true,
+            "targets": "all",
+            "identifier": "com.solo.planner",
+            "icon": [
+                "icons/32x32.png",
+                "icons/128x128.png",
+                "icons/128x128@2x.png",
+                "icons/icon.icns",
+                "icons/icon.ico"
+            ]
+        },
+        "security": {
+            "csp": null
+        },
+        "windows": [
+            {
+                "fullscreen": false,
+                "resizable": true,
+                "title": "Solo Desktop",
+                "width": 1000,
+                "height": 700,
+                "decorations": true,
+                "transparent": true
+            }
+        ]
+    }
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "name": "collection",
+    "path": "apps/collection/index.js",
+    "port": 8055
+  },
+  {
+    "name": "market",
+    "path": "apps/market/index.js",
+    "port": 8056
+  }
+]

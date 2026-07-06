@@ -1,0 +1,20 @@
+{
+  "id": "wf-example-minimal",
+  "name": "Example · minimal single sync step",
+  "desc": "最简单的可执行模板：同步触发，单步创建一条 planner todo（planner 是随栈默认启动的核心服务）。把 service/method/params 换成你自己 capability 目录里的方法即可。",
+  "category": "example",
+  "allowed_triggers": ["sync"],
+  "required_inputs": ["title"],
+  "input_schema": [
+    { "name": "title", "required": true, "type": "string", "maxLength": 128 },
+    { "name": "body", "type": "string", "maxLength": 4000 }
+  ],
+  "steps": [
+    {
+      "id": "make",
+      "service": "planner",
+      "method": "planner.todo.create",
+      "params": { "name": "$input.title", "content": "$input.body" }
+    }
+  ]
+}

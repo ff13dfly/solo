@@ -1,0 +1,11 @@
+{
+  "event": "order.placed",
+  "order_id": "ORD-2087",
+  "customer": "uid-abc123",
+  "items": [
+    { "sku": "SKU-1", "qty": 2 },
+    { "sku": "SKU-9", "qty": 1 }
+  ],
+  "total": 129.5,
+  "placed_at": "2026-06-02T10:05:00Z"
+}

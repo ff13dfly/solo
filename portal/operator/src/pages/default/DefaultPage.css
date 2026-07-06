@@ -1,0 +1,439 @@
+
+/* Model-Driven UI Shared Styles */
+
+.service-mgr-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Header & Tabs */
+.entity-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: #f1f5f9;
+  border-radius: 12px;
+  width: fit-content;
+  margin-bottom: 8px;
+}
+
+.entity-tab-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  transition: all 0.2s;
+}
+
+.entity-tab-btn.active {
+  background: #ffffff;
+  color: #1e293b;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+/* Category Manager */
+.category-manager-container {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 24px;
+}
+
+.category-title-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #94a3b8;
+  letter-spacing: 0.05em;
+  background: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-right: 4px;
+  text-transform: uppercase;
+}
+
+.category-pill-list {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.category-pill-btn {
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  font-size: 12px;
+  color: #1e293b;
+  cursor: pointer;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.category-pill-btn:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+}
+
+/* Item List in Modal */
+.category-item-card {
+  border-radius: 8px;
+  border: 1px solid #f1f5f9;
+  overflow: hidden;
+  transition: all 0.2s;
+  background: #f8fafc;
+}
+
+.category-item-card.expanded {
+  background: rgba(59, 130, 246, 0.05);
+  border-color: var(--accent-color);
+}
+
+.category-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.category-item-form {
+  padding: 12px 14px;
+  border-top: 1px solid #f1f5f9;
+  background: white;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Generic List Table */
+.generic-list-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-x: auto;
+  background: #fff;
+  padding-bottom: 8px;
+}
+
+.generic-list-header {
+  padding: 12px 24px;
+  background: #f8fafc;
+  font-weight: 600;
+  font-size: 11px;
+  color: #64748b;
+  border-bottom: 1px solid #e2e8f0;
+  display: grid;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.generic-list-row {
+  display: grid;
+  align-items: center;
+  border-bottom: 1px solid #f1f5f9;
+  padding: 0 24px;
+  box-sizing: border-box;
+  background: #fff;
+  transition: background 0.1s;
+}
+
+.generic-list-row:hover {
+  background: #f9fafb;
+}
+
+/* Action Buttons */
+.btn-action-edit {
+  padding: 2px 8px;
+  font-size: 10px;
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #dbeafe;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.btn-action-delete {
+  padding: 2px 10px;
+  font-size: 10px;
+  background: #fef2f2;
+  color: #ef4444;
+  border: 1px solid #fee2e2;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* RJSF Form Overrides */
+.rjsf-vertical-form {
+  width: 100%;
+  padding: 4px 0;
+}
+
+.rjsf-vertical-form fieldset {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 1.5rem !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.rjsf-vertical-form label {
+  display: block !important;
+  font-size: 0.75rem !important;
+  font-weight: 800 !important;
+  color: #475569 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.1em !important;
+  margin-bottom: 0.5rem !important;
+}
+
+/* Entity Header Styles */
+.header-view-toggle {
+  display: flex;
+  align-items: stretch;
+  height: 34px;
+  background: #f1f5f9;
+  padding: 2px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.view-toggle-btn {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.view-toggle-btn.active {
+  background: #ffffff;
+  color: var(--accent-color);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+/* Inner divider separating two functional areas within one .header-view-toggle group
+   (e.g. field-config gear | view-mode toggles). */
+.header-tool-divider {
+  flex-shrink: 0;
+  align-self: center;
+  width: 1px;
+  height: 18px;
+  background: #d1d5db;
+  margin: 0 5px;
+}
+
+/* The field-config gear gets a faint accent tint so the left "config" zone reads as
+   distinct from the neutral view-mode toggles on the right of the divider. Placed after
+   the .view-toggle-btn rules so it wins at equal specificity (no !important needed). */
+.header-config-btn {
+  background: var(--accent-surface, #eff6ff);
+  color: var(--accent-color, #2563eb);
+}
+
+.header-config-btn.active {
+  background: #dbeafe;
+}
+
+.header-config-btn:hover {
+  background: #dbeafe;
+}
+
+/* The container IS the search pill; search input + trailing filter button live inside it
+   so the two read as one integrated search/filter field. */
+.search-box-container {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  gap: 4px;
+  width: 300px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  padding: 0 6px 0 12px;
+  transition: all 0.2s ease;
+}
+
+.search-box-container:focus-within {
+  background: #ffffff;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.search-box-icon {
+  flex-shrink: 0;
+  opacity: 0.4;
+  font-size: 12px;
+  line-height: 0;
+}
+
+.search-box-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 7px 2px !important;
+  font-size: 13px !important;
+  color: #1e293b;
+  outline: none;
+  box-shadow: none !important;
+}
+
+.search-box-clear {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: #94a3b8;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.search-box-divider {
+  flex-shrink: 0;
+  width: 1px;
+  height: 18px;
+  background: #d1d5db;
+  margin: 0 2px;
+}
+
+.search-box-filter {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.search-box-filter:hover {
+  background: #e2e8f0;
+  color: var(--accent-color);
+}
+
+.search-box-filter svg {
+  display: block;
+  stroke: currentColor;
+}
+
+.btn-icon-circle {
+  font-size: 16px;
+  padding: 4px 12px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  cursor: pointer;
+  border-radius: 20px;
+  color: #64748b;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.btn-icon-circle:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: var(--accent-surface);
+}
+
+/* Entity Edit Modal Styles */
+.modal-header-tabs {
+  display: flex;
+  background: #f1f5f9;
+  padding: 4px;
+  border-radius: 8px;
+  gap: 4px;
+}
+
+.modal-tab-btn {
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.modal-tab-btn.active {
+  background: white;
+  color: var(--accent-color);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.raw-json-editor {
+  flex: 1;
+  height: 100%;
+  width: 100%;
+  background: #0f172a;
+  color: #38bdf8;
+  padding: 20px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  line-height: 1.6;
+  border: none;
+  resize: none;
+  outline: none;
+}
+
+.qr-preview-panel {
+  width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 32px 24px;
+  background: #f8fafc;
+}
+
+.qr-code-wrapper {
+  padding: 16px;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  border: 1px solid #e2e8f0;
+}
+
+.modal-footer-btn {
+  padding: 10px 24px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  transition: all 0.2s;
+}

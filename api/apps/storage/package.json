@@ -1,0 +1,16 @@
+{
+  "name": "solo-storage",
+  "version": "0.1.0",
+  "description": "Solo Core Storage Microservice",
+  "license": "Apache-2.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node tests/scripts/unit.test.js .",
+    "autocheck": "node ../../sample/autocheck.js ."
+  },
+  "devDependencies": {
+  },
+  "dependencies": {
+  }
+}
