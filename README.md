@@ -4,6 +4,8 @@
 
 **Version 1.1.10**
 
+English | [简体中文](README.zh-CN.md)
+
 ---
 
 ## What is SOLO?
@@ -93,10 +95,12 @@ bash deploy/dev.sh
 
 ## Documentation
 
-- **[Docs Index](docs/README.md)** — 全量地图:protocol 规范 · planning 台账 · runbook · reference
-- [Technical Overview](docs/reference/overview.md) — 系统架构与设计决策(⚠️ 含产品愿景,注意区分已实现/设想)
-- [Protocol Specs](docs/protocol/zh/) — API 协议规范(中文);先读 [治理协议总览](docs/protocol/zh/governance.md)
-- [Planning](docs/planning/) — [VERSION](docs/planning/VERSION.md)(封板线) · [BACKLOG](docs/planning/BACKLOG.md)(滚动待办) · [security](docs/planning/security.md) · [toFix](docs/planning/toFix.md)
+> 📖 The documentation linked below (protocol specs, planning ledger, runbooks) is written in Chinese (中文). This README is currently the only English-language entry point.
+
+- **[Docs Index](docs/README.md)** — full documentation map: protocol specs · planning ledger · runbooks · reference
+- [Technical Overview](docs/reference/overview.md) — system architecture and design decisions (⚠️ contains product vision — distinguish implemented vs. aspirational)
+- [Protocol Specs](docs/protocol/zh/) — API protocol specifications (Chinese); start with the [governance protocol overview](docs/protocol/zh/governance.md)
+- [Planning](docs/planning/) — [VERSION](docs/planning/VERSION.md) (release-scope boundary) · [BACKLOG](docs/planning/BACKLOG.md) (rolling backlog) · [security](docs/planning/security.md) · [toFix](docs/planning/toFix.md)
 
 ---
 
