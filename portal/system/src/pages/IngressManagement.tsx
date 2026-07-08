@@ -137,7 +137,12 @@ function SourcesTab() {
 
   const openFireModal = (s: Source) => {
     setFireModal(s);
-    setFirePayload('{}');
+    setFirePayload(JSON.stringify({
+      orderId: "order-123",
+      amount: 100,
+      currency: "USD",
+      externalRef: "ref-456"
+    }, null, 2));
     setFirePayloadErr(null);
   };
 
