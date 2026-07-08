@@ -7,7 +7,7 @@ import { GenericList } from '../default/GenericList';
 import { prepareEntityForEditing } from '../default/EntityUtils';
 import { FulfillmentCard } from './components/FulfillmentCard';
 import { ProfileEditModal } from './components/transitions';
-import { ProfileList } from './components/ProfileList';
+import { ProfileList } from './components/profile-list';
 import { InstanceDetailModal } from './components/InstanceDetailModal';
 import { InstanceTraceModal } from './components/InstanceTraceModal';
 import { callRpc } from '../../utils/rpc';
