@@ -6,7 +6,7 @@ import ServiceManagement from './ServiceManagement';
 import Overview from './Overview';
 import UserManagement from './UserManagement';
 import BotManagement from './BotManagement';
-import WorkflowManagement from './WorkflowManagement';
+import WorkflowManagement from './workflows';
 import NexusHub from './NexusHub';
 import IngressManagement from './IngressManagement';
 import ErrorLogs from './ErrorLogs';
