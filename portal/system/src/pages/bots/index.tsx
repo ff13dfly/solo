@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
-import { callRpc } from '../utils/rpc';
-import { useUI } from '../providers/UIProvider';
-import { useLang } from '../providers/LanguageProvider';
-import { Modal } from '../components/ui/Modal';
-import { Button } from '../components/ui/Button';
-import { PERMIT_CONFIG } from '../config/permit';
-import PermitEditorModal from '../components/permit/PermitEditorModal';
-import IssueTokenModal from '../components/bot-management/IssueTokenModal';
-import { useBots } from '../hooks/useBots';
-import { formatDate } from '../utils/format';
-import type { Bot, Permit, ServiceInfo } from '../types';
+import { callRpc } from '../../utils/rpc';
+import { useUI } from '../../providers/UIProvider';
+import { useLang } from '../../providers/LanguageProvider';
+import { Modal } from '../../components/ui/Modal';
+import { Button } from '../../components/ui/Button';
+import { PERMIT_CONFIG } from '../../config/permit';
+import PermitEditorModal from '../../components/permit/PermitEditorModal';
+import IssueTokenModal from '../../components/bot-management/IssueTokenModal';
+import BotCreateModal from './BotCreateModal';
+import { useBots } from '../../hooks/useBots';
+import { formatDate } from '../../utils/format';
+import type { Bot, ServiceInfo } from '../../types';
 
 const BOT_UID_PREFIX = 'system.';
 
@@ -51,9 +52,6 @@ export default function BotManagement() {
 
     // Create bot
     const [showCreate, setShowCreate] = useState(false);
-    const [newUid, setNewUid] = useState('');
-    const [newDesc, setNewDesc] = useState('');
-    const [creating, setCreating] = useState(false);
 
     // Permit edit
     const [permitTarget, setPermitTarget] = useState<Bot | null>(null);
@@ -112,28 +110,7 @@ export default function BotManagement() {
         s => !existingBotIds.has(BOT_UID_PREFIX + s.id)
     );
 
-    const handleCreate = async () => {
-        const uid = newUid.trim();
-        if (!uid) return toast.error(t('bot_mgmt.selectAService'));
-        const fullUid = BOT_UID_PREFIX + uid;
-        setCreating(true);
-        try {
-            await callRpc('user.bot.create', {
-                uid: fullUid,
-                desc: newDesc.trim(),
-                permit: { allow_all: false, services: {} },
-            });
-            toast.success(t('bot_mgmt.botCreated', { uid: fullUid }));
-            setShowCreate(false);
-            setNewUid('');
-            setNewDesc('');
-            refresh();
-        } catch (err: any) {
-            toast.error(err.message || t('bot_mgmt.createFailed'));
-        } finally {
-            setCreating(false);
-        }
-    };
+
 
     // Derives the relay service name from a system.* UID, null otherwise.
     const serviceNameFromUid = (uid: string) =>
@@ -433,63 +410,13 @@ export default function BotManagement() {
             </div>
 
             {/* Create Modal */}
-            <Modal
-                isOpen={showCreate}
-                onClose={() => !creating && setShowCreate(false)}
-                title={t('bot_mgmt.createBotAccount')}
-                size="md"
-                footer={
-                    <>
-                        <Button onClick={() => setShowCreate(false)} variant="secondary" disabled={creating}>{t('bot_mgmt.cancel')}</Button>
-                        <Button onClick={handleCreate} disabled={creating || !newUid || servicesAvailableForCreate.length === 0}>
-                            {creating ? t('bot_mgmt.creating') : t('bot_mgmt.create')}
-                        </Button>
-                    </>
-                }
-            >
-                <div className="flex flex-col gap-4">
-                    {servicesAvailableForCreate.length === 0 ? (
-                        <div className="text-[12px] text-text-secondary border border-border rounded-md p-4 bg-white/[0.02] text-center">
-                            {t('bot_mgmt.allServicesHaveBot')}
-                        </div>
-                    ) : (
-                        <>
-                            <div>
-                                <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('bot_mgmt.serviceLabel')}</label>
-                                <select
-                                    value={newUid}
-                                    onChange={(e) => setNewUid(e.target.value)}
-                                    className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
-                                >
-                                    <option value="">{t('bot_mgmt.selectServiceOption')}</option>
-                                    {servicesAvailableForCreate.map(s => (
-                                        <option key={s.id} value={s.id}>
-                                            {BOT_UID_PREFIX}{s.id}
-                                        </option>
-                                    ))}
-                                </select>
-                                <div className="mt-1 text-[10px] text-text-secondary">
-                                    {t('bot_mgmt.onlyServicesWithoutBot')}
-                                </div>
-                            </div>
-
-                            <div>
-                                <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('bot_mgmt.descriptionLabel')}</label>
-                                <input
-                                    value={newDesc}
-                                    onChange={(e) => setNewDesc(e.target.value)}
-                                    placeholder={t('bot_mgmt.descriptionPlaceholder')}
-                                    className="w-full bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
-                                />
-                            </div>
-
-                            <div className="text-[11px] text-text-secondary border border-border rounded-md p-3 bg-white/[0.02] leading-relaxed">
-                                {t('bot_mgmt.emptyPermitBeforeStrong')}<strong>{t('bot_mgmt.permit')}</strong>{t('bot_mgmt.emptyPermitAfterStrong')}
-                            </div>
-                        </>
-                    )}
-                </div>
-            </Modal>
+            {showCreate && (
+                <BotCreateModal
+                    onClose={() => setShowCreate(false)}
+                    onSuccess={refresh}
+                    servicesAvailableForCreate={servicesAvailableForCreate}
+                />
+            )}
 
             {/* Permit Modal */}
             {permitTarget && (

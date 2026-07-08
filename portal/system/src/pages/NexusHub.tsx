@@ -2,7 +2,7 @@ import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-
 import NexusStreamCatalog from './NexusStreamCatalog';
 import NexusManagement from './NexusManagement';
 import EventManagement from './EventManagement';
-import AutomationControl from './AutomationControl';
+import AutomationControl from './automation';
 import { useLang } from '../providers/LanguageProvider';
 
 /**

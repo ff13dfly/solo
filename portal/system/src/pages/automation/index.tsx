@@ -1,35 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { callRpc } from '../utils/rpc';
-import { useUI } from '../providers/UIProvider';
-import { useLang } from '../providers/LanguageProvider';
-import { Button } from '../components/ui/Button';
-
-// The operator seam: see + flip the whole automation plane (auto ↔ manual).
-// Pausing degrades to manual — the auto loops stop, every RPC handler keeps working.
-
-interface ServicePause { paused: boolean }
-interface AutomationStatus {
-  services: Record<string, ServicePause>;
-  allPaused: boolean;
-  anyPaused: boolean;
-}
-interface Glance { sentinels: number; online: number; schedules: number; dlq: number; pausedRuns: number }
-
-// toFix §6.7 — the "last mile": runs waiting on a human + dead-letter drill-downs.
-interface CleanupStep { id: string; method: string; result_summary?: string | null; compensate?: any }
-interface CompEntry { forStep: string; compensate?: string; method?: string | null; status?: string; error?: string }
-interface Compensation { ran?: boolean; failed?: boolean; entries?: CompEntry[] }
-interface RunRow {
-  id: string; workflowId: string; status: string;
-  workflowVersion?: number | null;
-  missingMethods?: string[];
-  failedStep?: string | null; lastError?: string | null;
-  cleanupManifest?: CleanupStep[] | null;
-  compensation?: Compensation | null;   // Saga rollback outcome (run.fail persists it)
-  startedAt?: number; pausedAt?: number; failedAt?: number; stalledAt?: number;
-}
-// ops_run_stalled (and grant-needed) alerts the worker sends to the 'ops' inbox.
-interface OpsAlert { id: string; type: string; payload?: any; createdAt?: number }
+import { callRpc } from '../../utils/rpc';
+import { useUI } from '../../providers/UIProvider';
+import { useLang } from '../../providers/LanguageProvider';
+import { Button } from '../../components/ui/Button';
+import type { AutomationStatus, RunRow, Glance, OpsAlert } from './types';
 const ATTENTION_STATUSES = ['PAUSED_AWAITING_HUMAN', 'FAILED', 'STALLED'] as const;
 const STATUS_BADGE: Record<string, string> = {
   PAUSED_AWAITING_HUMAN: 'text-warning border-warning',
