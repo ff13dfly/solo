@@ -1,21 +1,20 @@
 import React from 'react';
 import './Badge.css';
 
-interface BadgeProps {
-  children: React.ReactNode;
+interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   variant?: 'neutral' | 'primary' | 'success' | 'warning' | 'error';
   size?: 'xs' | 'sm' | 'md';
-  className?: string;
 }
 
 export const Badge: React.FC<BadgeProps> = ({
   children,
   variant = 'neutral',
   size = 'sm',
-  className = ''
+  className = '',
+  ...props
 }) => {
   return (
-    <span className={`badge badge-${variant} badge-${size} ${className}`.trim()}>
+    <span className={`badge badge-${variant} badge-${size} ${className}`.trim()} {...props}>
       {children}
     </span>
   );

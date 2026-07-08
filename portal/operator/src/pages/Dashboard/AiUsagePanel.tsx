@@ -168,7 +168,7 @@ export default function AiUsagePanel({ daily, recent, loading }: Props) {
         setAiSelectedDate(entry.date);
         setAiHourlyLoading(true);
 
-        const start = entry.ts;
+        const start = new Date(entry.date).getTime();
         const end = start + 86400000;
         const step = 3600000;
 

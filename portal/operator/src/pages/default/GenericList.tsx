@@ -1,6 +1,5 @@
-import { useState, memo, type MouseEvent } from 'react';
+import { useState, memo } from 'react';
 import { List } from 'react-window';
-import type { EntityDefinition } from '../../providers/ServicesProvider';
 import { EntityResolver } from './EntityResolver';
 import { useUI } from '../../providers/UIProvider';
 import { useLang } from '../../providers/LanguageProvider';

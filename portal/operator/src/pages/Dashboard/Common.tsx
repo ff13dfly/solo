@@ -1,5 +1,3 @@
-import React from 'react';
-
 export function EmptyState({ label }: { label: string }) {
     return (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '28px 0', color: 'var(--text-secondary)' }}>

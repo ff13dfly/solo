@@ -47,12 +47,12 @@ export const GenericCardList: React.FC<GenericCardListProps> = ({
     return rendererRegistry.render({ value: val, type: cf.fieldType, field: cf.key, item, serviceId, format: cf.format, formatOptions: cf.formatOptions });
   };
 
-  const fields = Object.entries(entityDef.fields || {});
+  const fields: [string, any][] = Object.entries(entityDef.fields || {});
   // Resolved display fields (manifest + personal), or null → keep the auto-pick default.
   const resolved = resolveEffectiveFields(entityDef, manifest, getFieldConfig(scope));
 
   // Mapping Logic
-  const getFieldInfo = (item: any) => {
+  const getFieldInfo = () => {
     const titleField = fields.find(([key]) => ['name', 'title', 'label'].includes(key)) || fields.find(([_, def]) => def.type === 'string') || ['id', { type: 'string' }];
     const titleKey = (manifest && manifest.primaryField) || titleField[0];
 
@@ -86,7 +86,7 @@ export const GenericCardList: React.FC<GenericCardListProps> = ({
       padding: '4px'
     }}>
       {items.map((item) => {
-        const { titleKey, statusKey, timeKey, contentFields } = getFieldInfo(item);
+        const { titleKey, statusKey, timeKey, contentFields } = getFieldInfo();
         
         return (
           <div 
