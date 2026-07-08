@@ -339,11 +339,11 @@ module.exports = async function globalSetup() {
     //      ① bootstrap.js → ingress source + keys.env(对 harness 的全新 redis 幂等重建);
     //      ② inject-workflows --active → wf-mock-listener-payment 等 ACTIVE 工作流
     //        (它也写事件注册表,但 6b 紧随其后用 harness 的超集覆盖——顺序 load-bearing);
-    //      ③ 起 listener(:8091),用 keys.env 里的 API key 经 Router 调 ingress.ingest。
+    //      ③ 起 listener(:8090),用 keys.env 里的 API key 经 Router 调 ingress.ingest。
     let listenerUrl = null;
     if (PROFILE === 'full') {
         const DEPLOY_MOCK = path.join(API_DIR, '..', 'deploy', 'mock');
-        const LISTENER_PORT = parseInt(process.env.MOCK_PORT || String(8091 + PORT_OFFSET), 10);
+        const LISTENER_PORT = parseInt(process.env.MOCK_PORT || String(8090 + PORT_OFFSET), 10);
         listenerUrl = `http://localhost:${LISTENER_PORT}`;
         const listenerProbe = () => httpGet(`http://localhost:${LISTENER_PORT}/health`).then((r) => r.status === 200).catch(() => false);
         // keys.env 是 dev 栈共用的文件:harness 一律用 logDir 下的 per-run 副本,

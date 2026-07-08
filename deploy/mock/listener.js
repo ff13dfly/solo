@@ -14,7 +14,7 @@
 // API key never lands in RPC params / audit logs. ingress.ingest is a public method.
 //
 // Config (env):
-//   MOCK_PORT             listen port                 (default 8091)
+//   MOCK_PORT             listen port                 (default 8090)
 //   ROUTER_URL            router base url              (default https://127.0.0.1:8800)
 //                         8800 = dev SSL proxy → Router 8600 (needs `dev.sh --ssl`);
 //                         override to http://127.0.0.1:8600 to skip TLS.
@@ -23,10 +23,10 @@
 //   LISTENER_ARCHIVE_DIR  raw-request archive dir      (default <repo>/logs/listener-<source>)
 //
 // Usage once running:
-//   curl -X POST localhost:8091/hook -H 'content-type: application/json' -d '{"hello":"world"}'
+//   curl -X POST localhost:8090/hook -H 'content-type: application/json' -d '{"hello":"world"}'
 //   # same delivery twice (fixed request_id) → ingress dedup kicks in:
-//   curl -X POST localhost:8091/hook -H 'x-request-id: fixed-123' -d '{"n":1}'
-//   curl -X POST localhost:8091/hook -H 'x-request-id: fixed-123' -d '{"n":2}'   # → duplicate
+//   curl -X POST localhost:8090/hook -H 'x-request-id: fixed-123' -d '{"n":1}'
+//   curl -X POST localhost:8090/hook -H 'x-request-id: fixed-123' -d '{"n":2}'   # → duplicate
 //
 const http = require('http');
 const https = require('https');
@@ -35,7 +35,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { URL } = require('url');
 
-const PORT = parseInt(process.env.MOCK_PORT || '8091', 10);
+const PORT = parseInt(process.env.MOCK_PORT || '8090', 10);
 const ROUTER_URL = (process.env.ROUTER_URL || 'https://127.0.0.1:8800').replace(/\/$/, '');
 const API_KEY = process.env.INGRESS_API_KEY;
 const SOURCE_NAME = process.env.SOURCE_NAME || 'mock';

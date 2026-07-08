@@ -96,7 +96,7 @@ cleanup() {
     kill -9 $OSS_PID 2>/dev/null
     kill -9 $(lsof -ti:8755) 2>/dev/null
     kill $MOCK_LISTENER_PID 2>/dev/null
-    kill -9 $(lsof -ti:8091) 2>/dev/null
+    kill -9 $(lsof -ti:8090) 2>/dev/null
 }
 trap cleanup EXIT INT TERM
 
@@ -113,11 +113,11 @@ node "$SCRIPT_DIR/seed-registry.js"
 echo "Bootstrapping mock webhook source..."
 node "$SCRIPT_DIR/mock/bootstrap.js"
 
-# Start the mock listener in the background (port 8091). It connects to the
+# Start the mock listener in the background (port 8090). It connects to the
 # Router at http://127.0.0.1:8600 which starts a few seconds later; errors
 # before the Router is up are silently ignored. Heartbeat fires every 30 s.
 MOCK_KEY=$(grep "^SRC_mock-listener=" "$SCRIPT_DIR/mock/keys.env" 2>/dev/null | cut -d'=' -f2 | tr -d '[:space:]')
-export MOCK_LISTENER_PORT="8091"
+export MOCK_LISTENER_PORT="8090"
 MOCK_LISTENER_PID=""
 if [ -n "$MOCK_KEY" ]; then
     lsof -ti:$MOCK_LISTENER_PORT | xargs kill -9 2>/dev/null

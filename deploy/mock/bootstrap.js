@@ -15,7 +15,7 @@ const { createClient } = require('../../api/node_modules/redis');
 
 const REDIS_URL   = process.env.REDIS_URL   || 'redis://127.0.0.1:6699';
 const SOURCE_NAME  = process.env.SOURCE_NAME  || 'mock-listener';
-const HEALTH_URL   = process.env.HEALTH_URL   || `http://localhost:${process.env.MOCK_PORT || 8091}/health`;
+const HEALTH_URL   = process.env.HEALTH_URL   || `http://localhost:${process.env.MOCK_PORT || 8090}/health`;
 // MOCK_KEYS_FILE:e2e harness 用独立 Redis 跑时必须给 per-run 路径——否则这里会把
 // dev 栈正在用的 deploy/mock/keys.env 顶掉(key 注册在别的 Redis 里,dev 下次起就废了)。
 const KEYS_FILE   = process.env.MOCK_KEYS_FILE || path.join(__dirname, 'keys.env');

@@ -16,7 +16,7 @@
 //   --direct            send to Router ingress.ingest instead of a listener
 //   --id <REQUEST_ID>   fixed request_id (reuse to test dedup)
 //   -n <COUNT>          send COUNT times (default 1; with fixed --id → dedup)
-//   --url <URL>         (listener mode) hook url   (default http://localhost:8091/hook)
+//   --url <URL>         (listener mode) hook url   (default http://localhost:8090/hook)
 //   --router <URL>      (direct mode)  router base (default https://127.0.0.1:8800)
 //   --key <APIKEY>      (direct mode)  override key (else env INGRESS_API_KEY / keys.env SRC_<source>)
 //
@@ -129,7 +129,7 @@ function listenerUrl() {
             }
         }
     }
-    return 'http://localhost:8091/hook';
+    return 'http://localhost:8090/hook';
 }
 
 async function sendViaListener(requestId) {

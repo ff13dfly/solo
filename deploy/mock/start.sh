@@ -3,7 +3,7 @@
 # start.sh — launch one mock listener per source configured in keys.env (DEV ONLY).
 #
 # Reads deploy/mock/keys.env (SRC_<name>=ingk_...), starts a listener.js per source
-# on auto-assigned ports (8091, 8092, ...), in the background, and cleans them all up
+# on auto-assigned ports (8090, 8091, ...), in the background, and cleans them all up
 # on Ctrl+C. The realistic path: external sample → listener → raw-archive → Router →
 # ingress. (For quick multi-source firing without listeners, use simulate.js --direct.)
 #
@@ -13,7 +13,7 @@
 #   node deploy/mock/simulate.js github       # fires at the github listener (auto-routed)
 #
 # Env:
-#   MOCK_PORT_BASE   first port (default 8091)
+#   MOCK_PORT_BASE   first port (default 8090)
 #   ROUTER_URL       router base for listeners (default https://127.0.0.1:8800)
 #
 set -e
@@ -30,7 +30,7 @@ if [ ! -f "$KEYS" ]; then
     exit 1
 fi
 
-BASE_PORT="${MOCK_PORT_BASE:-8091}"
+BASE_PORT="${MOCK_PORT_BASE:-8090}"
 export ROUTER_URL="${ROUTER_URL:-https://127.0.0.1:8800}"
 LOG_DIR="$ROOT_DIR/logs"
 mkdir -p "$LOG_DIR"

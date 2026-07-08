@@ -14,7 +14,7 @@
 #
 # Usage:
 #   INGRESS_API_KEY=ingk_xxx bash deploy/mock.sh
-#   INGRESS_API_KEY=ingk_xxx MOCK_PORT=8091 SOURCE_NAME=github bash deploy/mock.sh
+#   INGRESS_API_KEY=ingk_xxx MOCK_PORT=8090 SOURCE_NAME=github bash deploy/mock.sh
 #   bash deploy/mock.sh ingk_xxx          # key as first arg also works
 #
 set -e
@@ -36,7 +36,7 @@ if [ -z "$INGRESS_API_KEY" ]; then
     exit 1
 fi
 
-export MOCK_PORT="${MOCK_PORT:-8091}"
+export MOCK_PORT="${MOCK_PORT:-8090}"
 # Default to the HTTPS front (dev SSL proxy 8800 → Router 8600), mirroring real
 # usage. Needs the proxy up: `bash deploy/dev.sh --ssl`. To skip TLS, override:
 #   ROUTER_URL=http://127.0.0.1:8600 bash deploy/mock.sh

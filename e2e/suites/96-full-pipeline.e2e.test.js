@@ -3,7 +3,7 @@
  *
  * 五服务全链路端到端测试：
  *
- *   POST /hook (mock listener :8091)
+ *   POST /hook (mock listener :8090)
  *     → ingress.ingest → EVENT:WEBHOOK:MOCK-LISTENER
  *     → orchestrator matcher → worker → runner
  *     → fulfillment.instance.transition (DRAFT → PROCESSING)
@@ -33,7 +33,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // listener 地址以 harness context 为准(支持 E2E_PORT_OFFSET 平移);env 可显式覆盖.
 const { read: readCtx } = require('../lib/context');
-const LISTENER_URL = process.env.LISTENER_URL || readCtx().listenerUrl || 'http://localhost:8091';
+const LISTENER_URL = process.env.LISTENER_URL || readCtx().listenerUrl || 'http://localhost:8090';
 const PID = process.pid;
 const WF_ID  = `wf-96-pipeline-${PID}`;
 const TAG    = `pipe96-${PID}`;

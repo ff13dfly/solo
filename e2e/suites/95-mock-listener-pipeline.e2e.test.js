@@ -3,7 +3,7 @@
  *
  * 覆盖从 "Portal SEND VIA LISTENER" 到 "workflow run" 的完整路径：
  *
- *   POST /hook(mock listener :8091)
+ *   POST /hook(mock listener :8090)
  *     → ingress.ingest (Router, ApiKey auth)
  *     → relay.call('event.emit')  ← 需要 RELAY:TOKEN:ingress
  *     → EVENT:WEBHOOK:MOCK-LISTENER (Redis stream)
@@ -26,7 +26,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const { read: readCtx } = require('../lib/context');
 const REDIS_URL    = process.env.REDIS_URL    || readCtx().redisUrl    || 'redis://localhost:6699';
 const ROUTER_URL   = process.env.ROUTER_URL   || (readCtx().routerUrl || 'http://localhost:8600/').replace(/\/$/, '');
-const LISTENER_URL = process.env.LISTENER_URL || readCtx().listenerUrl || 'http://localhost:8091';
+const LISTENER_URL = process.env.LISTENER_URL || readCtx().listenerUrl || 'http://localhost:8090';
 const WF_ID        = 'wf-mock-listener-payment';
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
