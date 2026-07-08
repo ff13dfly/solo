@@ -51,6 +51,9 @@ echo ""
 
 # ─── 2. Setup Independent Redis ────────────────────────────────────────
 export REDIS_URL="redis://127.0.0.1:6699"
+# Get Router Public Key dynamically from .keypair
+export ROUTER_PUBLIC_KEY=$(node -e "try { const { loadOrGenerateKeypair, getKeypair } = require('./api/router/handlers/keypair'); loadOrGenerateKeypair(); console.log(getKeypair().publicKey.toBase58()); } catch(e) { console.log('8HrBBG5X9BSKWFaX8QW7hoektDyRZFePb2R9Ad5D84ji'); }" | tail -n 1)
+echo "Using Router Public Key: $ROUTER_PUBLIC_KEY"
 REDIS_DATA_DIR="$SCRIPT_DIR/redis_data"
 mkdir -p "$REDIS_DATA_DIR"
 

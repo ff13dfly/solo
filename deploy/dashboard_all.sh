@@ -89,6 +89,9 @@ trap cleanup SIGINT SIGTERM EXIT
 clear
 printf "${BLUE}${BOLD}=== Solo.AI Unified Startup ===${NC}\n"
 
+# Get Router Public Key dynamically from .keypair
+export ROUTER_PUBLIC_KEY=$(node -e "try { const { loadOrGenerateKeypair, getKeypair } = require('./api/router/handlers/keypair'); loadOrGenerateKeypair(); console.log(getKeypair().publicKey.toBase58()); } catch(e) { console.log('8HrBBG5X9BSKWFaX8QW7hoektDyRZFePb2R9Ad5D84ji'); }" | tail -n 1)
+
 # Backend
 printf "Launching Backends...\r"
 mkdir -p "$ROOT_DIR/api/debug"
