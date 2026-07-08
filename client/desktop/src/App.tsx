@@ -141,30 +141,7 @@ export default function App() {
         return { default: Component };
     });
 
-    const FlowSource = lazy(async () => {
-        const module = await import("@plugins/solo-plugin-flow/FlowPlugin");
-        const Component = (typeof module.default === 'function' ? module.default(SoloSDK) : module.default) as any;
-        return { default: Component };
-    });
 
-    const FlowBundle = lazy(async () => {
-        // Fallback to source for now since bundle doesn't exist
-        const module = await import("@plugins/solo-plugin-flow/FlowPlugin");
-        const Component = (typeof module.default === 'function' ? module.default(SoloSDK) : module.default) as any;
-        return { default: Component };
-    });
-
-    const ErpSource = lazy(async () => {
-        const module = await import("@plugins/solo-plugin-erp/ErpPlugin");
-        const Component = (typeof module.default === 'function' ? module.default(SoloSDK) : module.default) as any;
-        return { default: Component };
-    });
-
-    const ErpBundle = lazy(async () => {
-        const module = await import("@plugins/solo-plugin-erp/ErpPlugin");
-        const Component = (typeof module.default === 'function' ? module.default(SoloSDK) : module.default) as any;
-        return { default: Component };
-    });
 
     // Sync debug mode when localStorage changes (simple implementation)
     useEffect(() => {
@@ -208,8 +185,7 @@ export default function App() {
         { id: "analyze", label: t('sidebar.analyze'), icon: <Activity size={18} /> },
         { id: "forex-calc", label: "Forex Calc", icon: <DollarSign size={18} /> },
         { id: "capabilities", label: "Capabilities", icon: <Cpu size={18} /> },
-        { id: "flow-plugin", label: "Export Maker", icon: <Layers size={18} /> },
-        { id: "erp-plugin", label: "ERP", icon: <Database size={18} /> },
+
     ];
 
     return (
@@ -378,48 +354,7 @@ export default function App() {
                                     </ErrorBoundary>
                                 </div>
                             </div>
-                        ) : activeTab === "flow-plugin" ? (
-                            <div className="h-full flex flex-col">
-                                <div className={`px-4 py-1 text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 ${isDebugMode ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'}`}>
-                                    <span className={`w-1.5 h-1.5 rounded-full ${isDebugMode ? 'bg-amber-500 animate-pulse' : 'bg-green-500'}`}></span>
-                                    {isDebugMode ? 'Flow Debug Mode' : 'Flow Production Mode'}
-                                </div>
-                                <div className="flex-1 overflow-hidden relative">
-                                    <ErrorBoundary>
-                                        <Suspense fallback={
-                                            <div className="absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-sm z-10">
-                                                <div className="flex flex-col items-center gap-3">
-                                                    <RefreshCcw size={24} className="text-[#0071e3] animate-spin" />
-                                                    <span className="text-xs font-medium text-[#86868b]">Loading Flow...</span>
-                                                </div>
-                                            </div>
-                                        }>
-                                            {isDebugMode ? <FlowSource /> : <FlowBundle />}
-                                        </Suspense>
-                                    </ErrorBoundary>
-                                </div>
-                            </div>
-                        ) : activeTab === "erp-plugin" ? (
-                            <div className="h-full flex flex-col">
-                                <div className={`px-4 py-1 text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 ${isDebugMode ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'}`}>
-                                    <span className={`w-1.5 h-1.5 rounded-full ${isDebugMode ? 'bg-amber-500 animate-pulse' : 'bg-green-500'}`}></span>
-                                    {isDebugMode ? 'ERP Debug Mode' : 'ERP Production Mode'}
-                                </div>
-                                <div className="flex-1 overflow-hidden relative">
-                                    <ErrorBoundary>
-                                        <Suspense fallback={
-                                            <div className="absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-sm z-10">
-                                                <div className="flex flex-col items-center gap-3">
-                                                    <RefreshCcw size={24} className="text-[#0071e3] animate-spin" />
-                                                    <span className="text-xs font-medium text-[#86868b]">Loading ERP...</span>
-                                                </div>
-                                            </div>
-                                        }>
-                                            {isDebugMode ? <ErpSource /> : <ErpBundle />}
-                                        </Suspense>
-                                    </ErrorBoundary>
-                                </div>
-                            </div>
+
                         ) : activeTab === "analyze" ? (
                             <AIToolsView />
                         ) : (
