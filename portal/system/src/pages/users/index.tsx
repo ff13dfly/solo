@@ -1,20 +1,19 @@
 import { useState, useEffect } from 'react';
-import { callRpc } from '../utils/rpc';
-import { useLang } from '../providers/LanguageProvider';
-import { useUI } from '../providers/UIProvider';
-import { Modal } from '../components/ui/Modal';
-import { Button } from '../components/ui/Button';
-import { PERMIT_CONFIG } from '../config/permit';
-import CategoryManager from '../components/CategoryManager';
-import UserLogModal from '../components/user-management/UserLogModal';
-import PermitEditorModal from '../components/permit/PermitEditorModal';
-import { formatDate } from '../utils/format';
-import { generateSalt } from '../utils/crypto';
-import CryptoJS from 'crypto-js';
+import { callRpc } from '../../utils/rpc';
+import { useLang } from '../../providers/LanguageProvider';
+import { useUI } from '../../providers/UIProvider';
+import { Modal } from '../../components/ui/Modal';
+import { Button } from '../../components/ui/Button';
+import { PERMIT_CONFIG } from '../../config/permit';
+import CategoryManager from '../../components/CategoryManager';
+import UserLogModal from '../../components/user-management/UserLogModal';
+import PermitEditorModal from '../../components/permit/PermitEditorModal';
+import { formatDate } from '../../utils/format';
+import UserCreateModal from './UserCreateModal';
 
-import type { User, Permit, CategoryConfig, CategoryItem, ServiceInfo } from '../types';
+import type { User, Permit, CategoryConfig, CategoryItem, ServiceInfo } from '../../types';
 
-import { useUsers } from '../hooks/useUsers';
+import { useUsers } from '../../hooks/useUsers';
 
 export default function UserManagement() {
   const { t, lang } = useLang();
@@ -28,14 +27,9 @@ export default function UserManagement() {
     total,
     pageSize,
     loading,
-    error: fetchError,
     refresh: fetchUsers,
     updateUserInfo
   } = useUsers({ page, searchKeyword });
-
-  const [error, setError] = useState('');
-  const [isServiceError, setIsServiceError] = useState(false);
-  const [serviceUrl, setServiceUrl] = useState('');
 
   // Category State
   const [categories, setCategories] = useState<CategoryConfig[]>([]);
@@ -54,10 +48,6 @@ export default function UserManagement() {
 
   // Create Operator Modal State
   const [showCreateOperator, setShowCreateOperator] = useState(false);
-  const [newOpName, setNewOpName] = useState('');
-  const [newOpPassword, setNewOpPassword] = useState('');
-  const [createOpLoading, setCreateOpLoading] = useState(false);
-  const [createOpError, setCreateOpError] = useState('');
 
   // Log Modal State
   const [showLogModal, setShowLogModal] = useState(false);
@@ -177,29 +167,7 @@ export default function UserManagement() {
     }
   };
 
-  const handleCreateOperator = async () => {
-    const name = newOpName.trim().toLowerCase();
-    if (!name || !newOpPassword) return;
-    setCreateOpLoading(true);
-    setCreateOpError('');
-    try {
-      const salt = generateSalt();
-      // operator portal login uses SHA256(password+salt) — must match
-      const hash = CryptoJS.SHA256(newOpPassword + salt).toString();
-      const { uid } = await callRpc<{ uid: string }>('user.register', { name, salt, hash });
-      await callRpc('user.account.update', { uid, categories: { POWER: 'operator' } });
-      await callRpc('user.permit.update', { uid, permit: { allow_all: true, services: {} } });
-      toast.success(`Operator "${name}" created`);
-      setShowCreateOperator(false);
-      setNewOpName('');
-      setNewOpPassword('');
-      fetchUsers();
-    } catch (err: any) {
-      setCreateOpError(err.message || 'Create failed');
-    } finally {
-      setCreateOpLoading(false);
-    }
-  };
+
 
   const totalPages = Math.ceil(total / pageSize);
 
@@ -276,7 +244,7 @@ export default function UserManagement() {
           {/* Create Operator */}
           <button
             className="bg-accent-dim border border-accent/40 text-accent rounded-md px-3 py-1 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all"
-            onClick={() => { setShowCreateOperator(true); setCreateOpError(''); }}
+            onClick={() => setShowCreateOperator(true)}
           >
             + Operator
           </button>
@@ -308,23 +276,7 @@ export default function UserManagement() {
 
       {/* Content Area */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {error && (
-          <div className={`p-4 ${isServiceError ? 'bg-orange-500/10' : 'bg-transparent'}`}>
-            <div className="mb-2 text-error">Error: {error}</div>
-            {isServiceError && serviceUrl && (
-              <div className="p-3 bg-orange-500/15 rounded-md border border-orange-500/30 text-[13px] flex items-center gap-3">
-                <span className="text-orange-500">⚠️ 服务未注册，请在 <strong className="text-accent">Service Registry</strong> 添加:</span>
-                <code className="bg-black/30 px-2 py-1 rounded text-white">{serviceUrl}</code>
-                <button
-                  className="bg-accent-dim border border-accent/40 text-accent rounded-md px-2 py-0.5 text-[11px] hover:bg-[#1f6feb] hover:text-white transition-all"
-                  onClick={() => { navigator.clipboard.writeText(serviceUrl); toast.success('已复制'); }}
-                >
-                  COPY
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+
 
         {/* Header Row */}
         <div className="grid gap-4 px-5 py-3 border-b-2 border-border bg-bg-secondary font-bold text-[11px] text-accent uppercase tracking-wider sticky top-0 z-10 grid-cols-[1.5fr_3fr_1.5fr_2fr_1fr_1.5fr]">
@@ -499,52 +451,12 @@ export default function UserManagement() {
       )}
 
       {/* Create Operator Modal */}
-      <Modal
-        isOpen={showCreateOperator}
-        onClose={() => setShowCreateOperator(false)}
-        title="CREATE OPERATOR USER"
-        size="sm"
-        footer={
-          <div className="flex gap-2 items-center w-full">
-            {createOpError && <span className="text-error text-xs mr-auto">{createOpError}</span>}
-            <Button variant="ghost" onClick={() => setShowCreateOperator(false)}>CANCEL</Button>
-            <Button
-              onClick={handleCreateOperator}
-              disabled={createOpLoading || !newOpName.trim() || !newOpPassword}
-            >
-              {createOpLoading ? 'CREATING…' : 'CREATE'}
-            </Button>
-          </div>
-        }
-      >
-        <div className="flex flex-col gap-4 py-1">
-          <p className="text-xs text-text-secondary leading-relaxed">
-            创建一个可登录 Operator Portal 的用户账号（POWER = operator）。凭证仅显示一次，创建后请妥善保管。
-          </p>
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-semibold text-text-secondary uppercase tracking-wide">Username *</label>
-            <input
-              autoFocus
-              value={newOpName}
-              onChange={e => setNewOpName(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleCreateOperator()}
-              placeholder="e.g. ops_alice"
-              className="bg-bg-primary border border-border rounded-md px-3 py-2 text-sm text-text-primary outline-none focus:border-accent transition-colors"
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-semibold text-text-secondary uppercase tracking-wide">Password *</label>
-            <input
-              type="password"
-              value={newOpPassword}
-              onChange={e => setNewOpPassword(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleCreateOperator()}
-              placeholder="••••••••"
-              className="bg-bg-primary border border-border rounded-md px-3 py-2 text-sm text-text-primary outline-none focus:border-accent transition-colors"
-            />
-          </div>
-        </div>
-      </Modal>
+      {showCreateOperator && (
+        <UserCreateModal
+          onClose={() => setShowCreateOperator(false)}
+          onSuccess={fetchUsers}
+        />
+      )}
 
       {/* Raw JSON Modal */}
       <Modal

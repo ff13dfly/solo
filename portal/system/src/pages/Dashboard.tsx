@@ -4,7 +4,7 @@ import { useNavigate, useLocation, Routes, Route, Navigate } from 'react-router-
 import { getCurrentRouterUrl } from '../utils/routerManager';
 import ServiceManagement from './ServiceManagement';
 import Overview from './Overview';
-import UserManagement from './UserManagement';
+import UserManagement from './users';
 import BotManagement from './BotManagement';
 import WorkflowManagement from './workflows';
 import NexusHub from './NexusHub';
