@@ -11,7 +11,7 @@ import NexusHub from './NexusHub';
 import IngressManagement from './IngressManagement';
 import ErrorLogs from './ErrorLogs';
 import { useLang } from '../providers/LanguageProvider';
-import Settings from './Settings';
+import Settings from './settings';
 
 export default function DashboardLayout() {
   const navigate = useNavigate();

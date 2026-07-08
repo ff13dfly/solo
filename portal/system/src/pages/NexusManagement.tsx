@@ -6,7 +6,7 @@ import { useLang } from '../providers/LanguageProvider';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
 import { formatDate } from '../utils/format';
-import type { Sentinel, SentinelContext, FetcherRow } from './nexus_mgmt/types';
+import type { Sentinel, SentinelContext, FetcherRow } from './nexus/types';
 import {
   TRACK_OPTIONS,
   REACHABILITY_OPTIONS,
@@ -14,9 +14,9 @@ import {
   READ_SUFFIXES,
   emptyFetcher,
   fetcherToRow,
-} from './nexus_mgmt/utils';
-import SentinelPermitModal from './nexus_mgmt/SentinelPermitModal';
-import SentinelDeliveriesModal from './nexus_mgmt/SentinelDeliveriesModal';
+} from './nexus/utils';
+import SentinelPermitModal from './nexus/SentinelPermitModal';
+import SentinelDeliveriesModal from './nexus/SentinelDeliveriesModal';
 
 const defaultForm = {
   name: '',

@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useLang } from '../providers/LanguageProvider';
-import SchedulesTab from './event_mgmt/SchedulesTab';
-import RunsTab from './event_mgmt/RunsTab';
-import StreamTab from './event_mgmt/StreamTab';
-import FormatTab from './event_mgmt/FormatTab';
-import type { Tab } from './event_mgmt/types';
+import SchedulesTab from './events/SchedulesTab';
+import RunsTab from './events/RunsTab';
+import StreamTab from './events/StreamTab';
+import FormatTab from './events/FormatTab';
+import type { Tab } from './events/types';
 
 export default function EventManagement() {
   const { t } = useLang();
