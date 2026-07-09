@@ -21,7 +21,7 @@ export default function EventManagement() {
     <div className="border border-border bg-bg-primary flex flex-row h-full">
 
       {/* Vertical Tab Bar on the Left */}
-      <div className="w-[180px] border-r border-border shrink-0 bg-bg-secondary flex flex-col py-3 gap-1">
+      <div className="w-[130px] border-r border-border shrink-0 bg-bg-secondary flex flex-col py-3 gap-1">
         {TABS.map(t => (
           <button
             key={t.id}

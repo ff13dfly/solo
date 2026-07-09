@@ -41,7 +41,7 @@ export function TransitionEditor({ transition, onChange, metaFields, states, sta
       const newSentinel = {
         name: finalName,
         description: `Auto-generated sentinel for ${profileId} transition to ${transition.to}`,
-        authorityRole: 'system.nexus',
+        authorityRole: '',
         status: 'DISABLED',
         eventSubscriptions: ['EVENT:FULFILLMENT:TRANSITIONED'],
         context: {
