@@ -446,6 +446,8 @@ export default {
     "clickToManage": "Click card to manage and execute actions",
     "manage": "Manage",
     "activeSelection": "Selected",
+    "doubleClickToEdit": "Double click to edit description",
+    "descUpdated": "Description updated",
     "botAccounts": "BOT ACCOUNTS",
     "botCreated": "Bot \"{uid}\" created",
     "botCreatedSetPermit": "Bot \"{uid}\" created — set its PERMIT, then INJECT a token",

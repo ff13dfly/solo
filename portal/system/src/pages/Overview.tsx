@@ -4,6 +4,7 @@ import { useLang } from '../providers/LanguageProvider';
 import { StatsCards } from '../components/overview/StatsCards';
 import { PublicMethods } from '../components/overview/PublicMethods';
 import { ServiceCapabilities } from '../components/overview/ServiceCapabilities';
+import { AutomationPanel } from '../components/overview/AutomationPanel';
 
 import { useSystemStats } from '../hooks/useSystemStats';
 import { useServiceDiscovery } from '../hooks/useServiceDiscovery';
@@ -78,7 +79,10 @@ export default function Overview() {
       <div className="max-w-[1920px] mx-auto grid grid-cols-1 xl:grid-cols-4 gap-4 items-start">
         {/* Main Content (3 cols on large screens) */}
         <div className="xl:col-span-3 flex flex-col gap-3 min-w-0 w-full">
-          <PublicMethods systemMethods={systemMethods} serviceMethods={servicePublicMethods} />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+            <PublicMethods systemMethods={systemMethods} serviceMethods={servicePublicMethods} />
+            <AutomationPanel />
+          </div>
           <ServiceCapabilities
             loading={loading}
             activeTab={activeTab}

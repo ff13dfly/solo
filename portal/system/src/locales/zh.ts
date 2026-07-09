@@ -446,6 +446,8 @@ export default {
     "clickToManage": "点击卡片管理并执行操作",
     "manage": "管理",
     "activeSelection": "已选中",
+    "doubleClickToEdit": "双击编辑描述",
+    "descUpdated": "描述已更新",
     "botAccounts": "BOT 账号",
     "botCreated": "Bot「{uid}」已创建",
     "botCreatedSetPermit": "Bot「{uid}」已创建 — 先设置其 PERMIT，再 INJECT 一个 token",

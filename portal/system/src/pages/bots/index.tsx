@@ -67,6 +67,10 @@ export default function BotManagement() {
     // Card Selection State
     const [selectedId, setSelectedId] = useState<string | null>(null);
 
+    // Inline description editing state
+    const [editingId, setEditingId] = useState<string | null>(null);
+    const [editValue, setEditValue] = useState<string>('');
+
     useEffect(() => {
         callRpc<ServiceInfo[]>('system.service.list', {})
             .then(result => {
@@ -114,6 +118,30 @@ export default function BotManagement() {
     );
 
 
+
+    const handleStartEdit = (e: React.MouseEvent, botId: string, currentDesc: string) => {
+        e.stopPropagation();
+        setEditingId(botId);
+        setEditValue(currentDesc || '');
+    };
+
+    const handleSaveEdit = async (botId: string) => {
+        const trimmed = editValue.trim();
+        setEditingId(null);
+
+        const currentBot = bots.find(b => b.id === botId);
+        if (!currentBot || currentBot.desc === trimmed) {
+            return;
+        }
+
+        try {
+            await callRpc('user.bot.update', { uid: botId, desc: trimmed });
+            updateBotInfo(botId, { desc: trimmed });
+            toast.success(t('bot_mgmt.descUpdated'));
+        } catch (e: any) {
+            toast.error(e.message || 'Failed to update description');
+        }
+    };
 
     // Derives the relay service name from a system.* UID, null otherwise.
     const serviceNameFromUid = (uid: string) =>
@@ -391,9 +419,29 @@ export default function BotManagement() {
 
                                     {/* Body (Description + Token Cell) */}
                                     <div className="flex-1 flex flex-col gap-2.5 mt-1">
-                                        <div className="text-[12px] text-text-secondary line-clamp-2 min-h-[32px] leading-relaxed" title={bot.desc}>
-                                            {bot.desc || <span className="opacity-30 italic">No description</span>}
-                                        </div>
+                                        {editingId === bot.id ? (
+                                            <textarea
+                                                value={editValue}
+                                                onChange={(e) => setEditValue(e.target.value)}
+                                                onBlur={() => handleSaveEdit(bot.id)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Escape') {
+                                                        setEditingId(null);
+                                                    }
+                                                }}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="w-full text-[12px] bg-bg-primary text-text-primary border border-accent rounded p-1 leading-normal font-mono focus:outline-none resize-none h-[42px]"
+                                                autoFocus
+                                            />
+                                        ) : (
+                                            <div
+                                                onDoubleClick={(e) => handleStartEdit(e, bot.id, bot.desc)}
+                                                className="text-[12px] text-text-secondary line-clamp-2 min-h-[32px] leading-relaxed cursor-text select-text"
+                                                title={t('bot_mgmt.doubleClickToEdit')}
+                                            >
+                                                {bot.desc || <span className="opacity-30 italic">No description</span>}
+                                            </div>
+                                        )}
 
                                         <div className="flex items-center justify-between text-[11px] border border-white/5 rounded px-2.5 py-2 bg-white/[0.01]">
                                             <span className="text-text-secondary/70 font-semibold uppercase tracking-wider text-[9px]">{t('bot_mgmt.colToken')}</span>
