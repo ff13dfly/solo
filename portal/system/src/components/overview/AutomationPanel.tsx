@@ -136,39 +136,27 @@ export const AutomationPanel: React.FC = () => {
         </div>
       }
       headerAction={
-        <div className="flex items-center gap-2">
-          {!isCollapsed && (
-            <button
-              onClick={refresh}
-              disabled={loading || busy}
-              className="p-1 hover:bg-white/10 rounded transition-all text-text-secondary hover:text-text-primary disabled:opacity-50 cursor-pointer outline-none border-none bg-transparent"
-              title={t('automation.refresh') || 'Refresh'}
-            >
-              <span className={`inline-block text-xs font-bold ${loading ? 'animate-spin' : ''}`}>↻</span>
-            </button>
-          )}
-          <button
-            onClick={() => {
-              if (isCollapsed) {
-                refresh();
-              }
-              setIsCollapsed(!isCollapsed);
-            }}
-            className="p-1 hover:bg-white/10 rounded transition-all cursor-pointer outline-none border-none text-text-secondary hover:text-text-primary bg-transparent"
-            title={isCollapsed ? 'Expand' : 'Collapse'}
+        <button
+          onClick={() => {
+            if (isCollapsed) {
+              refresh();
+            }
+            setIsCollapsed(!isCollapsed);
+          }}
+          className="p-1 hover:bg-white/10 rounded transition-all cursor-pointer outline-none border-none text-text-secondary hover:text-text-primary bg-transparent"
+          title={isCollapsed ? 'Expand' : 'Collapse'}
+        >
+          <svg
+            className={`w-5 h-5 transition-transform duration-300 ${isCollapsed ? '-rotate-90' : ''}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor"
           >
-            <svg
-              className={`w-5 h-5 transition-transform duration-300 ${isCollapsed ? '-rotate-90' : ''}`}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-        </div>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
       }
     >
       {!isCollapsed && (
-        <div className="p-4 flex flex-col gap-4 animate-in fade-in slide-in-from-top-2 duration-300">
+        <div className="h-[386px] p-4 flex flex-col gap-4 animate-in fade-in slide-in-from-top-2 duration-300 overflow-y-auto no-scrollbar">
           {/* Master status */}
           <div className={`border rounded-lg p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${anyPaused ? 'border-warning bg-warning/5' : 'border-success bg-success/5'}`}>
             <div>

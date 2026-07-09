@@ -76,15 +76,15 @@ export const PublicMethods: React.FC<PublicMethodsProps> = ({ systemMethods, ser
       }
     >
       {!isCollapsed && (
-        <>
+        <div className="h-[386px] flex flex-col animate-in fade-in slide-in-from-top-2 duration-300">
           <Tabs
             tabs={tabs}
             activeTab={activeTab}
             onChange={setActiveTab}
-            className="justify-end"
+            className="justify-end shrink-0"
           />
 
-          <div className="flex h-72 animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex-1 min-h-0 flex">
             {/* Sidebar */}
             <div className="w-[23%] border-r border-border bg-bg-secondary/10 flex flex-col overflow-hidden">
               <div className="p-2 space-y-2 overflow-y-auto no-scrollbar">
@@ -99,13 +99,13 @@ export const PublicMethods: React.FC<PublicMethodsProps> = ({ systemMethods, ser
                 >
                   all methods
                 </button>
-                <div className="grid grid-cols-2 gap-1">
+                <div className="flex flex-col gap-1">
                   {namespaces.map(ns => (
                     <button
                       key={ns}
                       onClick={() => setSelectedNamespace(ns)}
                       className={`
-                        text-center px-2 py-2 rounded text-[11px] font-medium transition-all cursor-pointer outline-none overflow-hidden text-ellipsis whitespace-nowrap border !normal-case
+                        w-full text-center px-2 py-2 rounded text-[11px] font-medium transition-all cursor-pointer outline-none overflow-hidden text-ellipsis whitespace-nowrap border !normal-case
                         ${selectedNamespace === ns
                           ? 'bg-accent/10 text-accent border-accent/20'
                           : 'text-text-secondary/70 hover:bg-white/5 hover:text-text-primary border-transparent'}
@@ -139,7 +139,7 @@ export const PublicMethods: React.FC<PublicMethodsProps> = ({ systemMethods, ser
               )}
             </div>
           </div>
-        </>
+        </div>
       )}
     </Card>
   );
