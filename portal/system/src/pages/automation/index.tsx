@@ -27,7 +27,7 @@ function Stat({ label, value, sub, warn }: { label: string; value: string | numb
   );
 }
 
-export default function AutomationControl() {
+export default function AutomationControl({ refreshTrigger }: { refreshTrigger?: number }) {
   const { toast, confirm } = useUI();
   const { t } = useLang();
   const [status, setStatus] = useState<AutomationStatus | null>(null);
@@ -90,6 +90,12 @@ export default function AutomationControl() {
   }, [toast, t]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => {
+    if (refreshTrigger) {
+      refresh();
+    }
+  }, [refreshTrigger, refresh]);
 
   const pauseAll = async () => {
     const ok = await confirm({
@@ -191,11 +197,6 @@ export default function AutomationControl() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex justify-between items-center px-5 py-3 border-b border-border bg-white/[0.01] shrink-0">
-        <div className="font-mono text-[13px] uppercase tracking-wider text-accent">{t('automation.title')}</div>
-        <Button variant="ghost" size="sm" onClick={refresh} disabled={loading || busy}>↻ {t('automation.refresh')}</Button>
-      </div>
-
       <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-5">
         {/* Master status */}
         <div className={`border rounded-lg p-5 flex items-center justify-between ${anyPaused ? 'border-warning bg-warning/5' : 'border-success bg-success/5'}`}>

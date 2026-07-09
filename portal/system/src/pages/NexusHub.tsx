@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import NexusStreamCatalog from './NexusStreamCatalog';
 import NexusManagement from './NexusManagement';
@@ -24,6 +25,10 @@ export default function NexusHub() {
   const location = useLocation();
   const navigate = useNavigate();
 
+  const [streamsRefreshCount, setStreamsRefreshCount] = useState(0);
+  const [controlRefreshCount, setControlRefreshCount] = useState(0);
+  const [sentinelsCreateTrigger, setSentinelsCreateTrigger] = useState(0);
+
   const tabs = [
     { id: 'streams',   path: '/nexus/streams',   label: t('nexusHub.tab_streams') || 'Streams' },
     { id: 'sentinels', path: '/nexus/sentinels', label: t('nexusHub.tab_sentinels') || 'Sentinels' },
@@ -33,15 +38,15 @@ export default function NexusHub() {
   const active = tabs.find(tb => location.pathname.startsWith(tb.path))?.id || 'streams';
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Sub-tab bar + the one-line mental model */}
-      <div className="border-b border-border bg-bg-primary shrink-0">
-        <div className="flex items-center gap-1 px-4 pt-3">
+    <div className="border border-border bg-bg-primary flex flex-col h-full">
+      {/* Header with Tabs & Dynamic Actions */}
+      <div className="px-4 h-[60px] border-b border-border bg-white/[0.03] flex justify-between items-center shrink-0 gap-4">
+        <div className="flex h-full items-center gap-1">
           {tabs.map(tb => (
             <button
               key={tb.id}
               onClick={() => navigate(tb.path)}
-              className={`font-mono text-xs uppercase tracking-wide px-4 py-2 border-b-2 transition-all
+              className={`h-full px-4 flex items-center border-b-2 font-mono text-xs uppercase tracking-wider transition-all font-bold
                 ${active === tb.id
                   ? 'border-accent text-accent'
                   : 'border-transparent text-text-secondary hover:text-text-primary'}`}
@@ -50,19 +55,44 @@ export default function NexusHub() {
             </button>
           ))}
         </div>
-        <div className="px-5 pb-2 pt-1 text-[10px] text-text-secondary tracking-wide">
-          {t('nexusHub.subtitle_flow') ||
-            'Events flow on the bus → Sentinels subscribe & react (AI) → Control runs the plane'}
+
+        <div className="flex items-center gap-4">
+          <div className="flex gap-2">
+            {active === 'streams' && (
+              <button
+                onClick={() => setStreamsRefreshCount(c => c + 1)}
+                className="bg-accent-dim border border-accent/40 text-accent rounded-md px-3 py-1.5 text-xs font-medium hover:bg-[#1f6feb] hover:text-white transition-all whitespace-nowrap"
+              >
+                {t('nexus_catalog.refresh') || 'Refresh'}
+              </button>
+            )}
+            {active === 'sentinels' && (
+              <button
+                onClick={() => setSentinelsCreateTrigger(c => c + 1)}
+                className="bg-accent-dim border border-accent/40 text-accent rounded-md px-3 py-1.5 text-xs font-medium hover:bg-[#1f6feb] hover:text-white transition-all whitespace-nowrap"
+              >
+                {t('nexus_mgmt.new_sentinel') || 'New Sentinel'}
+              </button>
+            )}
+            {active === 'control' && (
+              <button
+                onClick={() => setControlRefreshCount(c => c + 1)}
+                className="bg-accent-dim border border-accent/40 text-accent rounded-md px-3 py-1.5 text-xs font-medium hover:bg-[#1f6feb] hover:text-white transition-all whitespace-nowrap"
+              >
+                ↻ {t('automation.refresh') || 'Refresh'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Active sub-view — same flex-1 container Dashboard used to give each page */}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         <Routes>
-          <Route path="streams" element={<NexusStreamCatalog />} />
-          <Route path="sentinels" element={<NexusManagement />} />
+          <Route path="streams" element={<NexusStreamCatalog refreshTrigger={streamsRefreshCount} />} />
+          <Route path="sentinels" element={<NexusManagement createTrigger={sentinelsCreateTrigger} />} />
           <Route path="events" element={<EventManagement />} />
-          <Route path="control" element={<AutomationControl />} />
+          <Route path="control" element={<AutomationControl refreshTrigger={controlRefreshCount} />} />
           <Route index element={<Navigate to="/nexus/streams" replace />} />
           <Route path="*" element={<Navigate to="/nexus/streams" replace />} />
         </Routes>

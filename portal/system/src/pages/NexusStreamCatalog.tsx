@@ -39,7 +39,7 @@ interface StreamRow {
   consumers: Edge[];
 }
 
-export default function NexusStreamCatalog() {
+export default function NexusStreamCatalog({ refreshTrigger }: { refreshTrigger?: number }) {
   const { t } = useLang();
   const [rows, setRows] = useState<StreamRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -93,6 +93,12 @@ export default function NexusStreamCatalog() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    if (refreshTrigger) {
+      load();
+    }
+  }, [refreshTrigger, load]);
+
   const chip = (e: Edge, i: number) => (
     <span
       key={`${e.kind}-${e.name}-${i}`}
@@ -105,29 +111,14 @@ export default function NexusStreamCatalog() {
   );
 
   return (
-    <div className="border border-border bg-bg-primary flex flex-col h-full font-sans">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-white/[0.01] shrink-0">
-        <div>
-          <div className="text-sm font-bold text-text-primary">{t('nexus_catalog.title') || 'Stream Catalog'}</div>
-          <div className="text-[10px] text-text-secondary mt-0.5 max-w-3xl">
-            {t('nexus_catalog.desc') ||
-              'Every EVENT:* stream — who emits to it (producers) and who reacts (consumers). Producers may also be fulfillment transitions / ingress / manual broadcasts.'}
-          </div>
-        </div>
-        <button
-          onClick={load}
-          className="bg-accent-dim border border-accent/40 text-accent px-2 py-1 text-xs font-medium hover:bg-[#1f6feb] hover:text-white transition-all shrink-0 rounded"
-        >
-          {t('nexus_catalog.refresh') || 'Refresh'}
-        </button>
-      </div>
-
-      {/* Body */}
+    <div className="flex flex-col h-full font-sans">
       <div
         className="flex-1 min-h-0 overflow-auto p-5"
         onClick={() => setSelectedId(null)}
       >
+        <div className="text-[11px] text-text-secondary mb-4 max-w-4xl leading-relaxed">
+          {t('nexus_catalog.desc') || 'Every EVENT:* stream on the bus — who emits to it (producers) and who reacts (consumers).'}
+        </div>
         {error && <div className="text-error text-xs mb-3">{error}</div>}
         {loading && <div className="text-text-secondary text-xs font-mono">Loading streams...</div>}
         {!loading && rows.length === 0 && (

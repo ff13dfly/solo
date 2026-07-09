@@ -176,17 +176,6 @@ export default function RunsTab() {
 
       {error && <div className="p-4 text-error text-[13px]">{t('event_mgmt.error_prefix')}: {error}</div>}
 
-      {/* Column headers */}
-      <div className="grid px-5 py-3 border-b-2 border-border bg-bg-secondary font-bold text-[11px] text-accent uppercase tracking-wider sticky top-0 z-10"
-        style={{ gridTemplateColumns: '2fr 2fr 1.5fr 1.2fr 0.8fr 2.5fr' }}>
-        <div>{t('event_mgmt.col_run_id')}</div>
-        <div>{t('event_mgmt.col_workflow')}</div>
-        <div>{t('event_mgmt.col_started')}</div>
-        <div>{t('event_mgmt.col_status')}</div>
-        <div>{t('event_mgmt.col_attempts')}</div>
-        <div>{t('event_mgmt.col_actions')}</div>
-      </div>
-
       <div className="flex-1 overflow-y-auto">
         {loading && <div className="p-5 text-center opacity-50 text-sm">{t('event_mgmt.loading')}</div>}
 
@@ -282,7 +271,7 @@ export default function RunsTab() {
                       TRACE: {item.trace}
                     </span>
                     <span className="text-[9px] bg-accent/10 border border-accent/20 text-accent px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider">
-                      {item.runs.length} Workflows
+                      {item.runs.length} Tasks
                     </span>
                   </div>
                   <div className="flex items-center gap-4">

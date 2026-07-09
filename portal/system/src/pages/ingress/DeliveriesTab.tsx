@@ -5,12 +5,11 @@ import { formatDate } from '../../utils/format';
 import type { Delivery } from './types';
 import { OUTCOMES, outcomeBadge } from './utils';
 
-export default function DeliveriesTab() {
+export default function DeliveriesTab({ outcome, refreshTrigger }: { outcome: string; refreshTrigger?: number }) {
   const { t } = useLang();
   const [items, setItems] = useState<Delivery[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [outcome, setOutcome] = useState('');
 
   const fetchLog = useCallback(async () => {
     setLoading(true);
@@ -29,28 +28,16 @@ export default function DeliveriesTab() {
 
   useEffect(() => { fetchLog(); }, [fetchLog]);
 
+  useEffect(() => {
+    if (refreshTrigger) {
+      fetchLog();
+    }
+  }, [refreshTrigger, fetchLog]);
+
   const cols = '1.8fr 1.2fr 2.4fr 1.2fr 0.8fr 0.8fr';
 
   return (
     <>
-      {/* Toolbar */}
-      <div className="flex justify-between items-center px-4 py-2 border-b border-border bg-white/[0.01] shrink-0">
-        <select
-          value={outcome}
-          onChange={e => setOutcome(e.target.value)}
-          className="bg-bg-primary border border-border rounded-md px-2 py-1 text-[12px] text-text-primary outline-none focus:border-accent transition-colors font-mono"
-        >
-          {OUTCOMES.map(o => <option key={o} value={o}>{o ? t(`ingress_mgmt.outcome_${o}`) : t('ingress_mgmt.outcome_all')}</option>)}
-        </select>
-        <button
-          onClick={fetchLog}
-          disabled={loading}
-          className="bg-accent-dim border border-accent/40 text-accent rounded-md px-2 py-1 text-xs font-medium hover:bg-[#1f6feb] hover:text-white transition-all disabled:opacity-50"
-        >
-          {t('ingress_mgmt.btn_refresh')}
-        </button>
-      </div>
-
       {error && <div className="p-4 text-error text-[13px]">{t('ingress_mgmt.error_prefix', { msg: error })}</div>}
 
       <div className="grid gap-4 px-5 py-3 border-b-2 border-border bg-bg-secondary font-bold text-[11px] text-accent uppercase tracking-wider sticky top-0 z-10" style={{ gridTemplateColumns: cols }}>

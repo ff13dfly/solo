@@ -8,7 +8,7 @@ import { formatDate } from '../../utils/format';
 import type { Source } from './types';
 import { NAME_RE, freshnessColor, ttlHuman } from './utils';
 
-export default function SourcesTab() {
+export default function SourcesTab({ createTrigger }: { createTrigger?: number }) {
   const { toast, confirm } = useUI();
   const { t } = useLang();
 
@@ -47,6 +47,12 @@ export default function SourcesTab() {
   }, [page, t]);
 
   useEffect(() => { fetchSources(); }, [fetchSources]);
+
+  useEffect(() => {
+    if (createTrigger) {
+      setShowCreate(true);
+    }
+  }, [createTrigger]);
 
   const handleCreate = async () => {
     if (!NAME_RE.test(form.name.trim())) return toast.error(t('ingress_mgmt.err_name_pattern'));
@@ -208,16 +214,6 @@ export default function SourcesTab() {
 
   return (
     <>
-      {/* Toolbar */}
-      <div className="flex justify-end px-4 py-2 border-b border-border bg-white/[0.01] shrink-0">
-        <button
-          onClick={() => setShowCreate(true)}
-          className="bg-accent-dim border border-accent/40 text-accent rounded-md px-2 py-1 text-xs font-medium hover:bg-[#1f6feb] hover:text-white transition-all"
-        >
-          {t('ingress_mgmt.btn_new_source')}
-        </button>
-      </div>
-
       {error && <div className="p-4 text-error text-[13px]">{t('ingress_mgmt.error_prefix', { msg: error })}</div>}
 
       <div className="grid gap-4 px-5 py-3 border-b-2 border-border bg-bg-secondary font-bold text-[11px] text-accent uppercase tracking-wider sticky top-0 z-10" style={{ gridTemplateColumns: cols }}>

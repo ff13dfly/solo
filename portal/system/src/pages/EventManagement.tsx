@@ -18,21 +18,17 @@ export default function EventManagement() {
   ];
 
   return (
-    <div className="border border-border bg-bg-primary flex flex-col h-full">
-      {/* Header */}
-      <div className="px-4 h-[60px] border-b border-border font-bold text-accent bg-white/[0.03] flex items-center shrink-0">
-        <span>{t('event_mgmt.header')}</span>
-      </div>
+    <div className="border border-border bg-bg-primary flex flex-row h-full">
 
-      {/* Tab Bar */}
-      <div className="flex border-b border-border shrink-0 bg-bg-secondary">
+      {/* Vertical Tab Bar on the Left */}
+      <div className="w-[180px] border-r border-border shrink-0 bg-bg-secondary flex flex-col py-3 gap-1">
         {TABS.map(t => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`px-5 h-10 text-[11px] font-mono uppercase tracking-wider transition-colors border-b-2
+            className={`px-4 h-10 flex items-center text-[11px] font-mono uppercase tracking-wider transition-colors border-l-2 text-left
               ${tab === t.id
-                ? 'border-accent text-accent bg-bg-primary'
+                ? 'border-accent text-accent bg-bg-primary font-bold'
                 : 'border-transparent text-text-secondary hover:text-text-primary hover:bg-white/[0.02]'
               }`}
           >

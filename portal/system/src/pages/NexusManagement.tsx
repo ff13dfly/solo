@@ -28,7 +28,7 @@ const defaultForm = {
   eventSubscriptions: '',
 };
 
-export default function NexusManagement() {
+export default function NexusManagement({ createTrigger }: { createTrigger?: number }) {
   const { toast } = useUI();
   const { t } = useLang();
 
@@ -268,6 +268,12 @@ export default function NexusManagement() {
   useEffect(() => { fetchSentinels(); }, [fetchSentinels]);
   useEffect(() => { fetchKnownStreams().then(setKnownStreams).catch(() => {}); }, []);
 
+  useEffect(() => {
+    if (createTrigger) {
+      openCreate();
+    }
+  }, [createTrigger]);
+
   const handleSubmit = async () => {
     if (!form.name.trim()) return toast.error(t('nexus_mgmt.err_name_required'));
     if (!form.authorityRole.trim()) return toast.error(t('nexus_mgmt.err_authority_role_required'));
@@ -346,22 +352,7 @@ export default function NexusManagement() {
   const totalPages = Math.ceil(total / pageSize);
 
   return (
-    <div className="border border-border bg-bg-primary flex flex-col h-full">
-      {/* Header */}
-      <div className="px-4 h-[60px] border-b border-border font-bold text-accent bg-white/[0.03] flex justify-between items-center">
-        <div className="flex items-center gap-3">
-          <span>{t('nexus_mgmt.header_title')}</span>
-        </div>
-        <div className="flex gap-3 items-center bg-white/[0.03] px-3 py-1 rounded-md border border-white/5">
-          <button
-            onClick={openCreate}
-            className="bg-accent-dim border border-accent/40 text-accent rounded-md px-2 py-1 text-xs font-medium hover:bg-[#1f6feb] hover:text-white transition-all whitespace-nowrap"
-          >
-            {t('nexus_mgmt.new_sentinel')}
-          </button>
-        </div>
-      </div>
-
+    <div className="flex flex-col h-full">
       {/* Content */}
       <div className="flex-1 overflow-hidden flex flex-col">
         {error && <div className="p-4 text-error text-[13px]">{t('nexus_mgmt.error_prefix')}: {error}</div>}
@@ -370,6 +361,9 @@ export default function NexusManagement() {
           className="flex-1 overflow-y-auto p-5"
           onClick={() => setSelectedId(null)}
         >
+          <div className="text-[11px] text-text-secondary mb-4 leading-relaxed">
+            {t('nexusHub.subtitle_flow') || 'Events flow on the bus → Sentinels subscribe & react (AI) → Control runs the plane'}
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
             {sentinels.map(sentinel => {
               const isSelected = selectedId === sentinel.id;
