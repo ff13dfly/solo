@@ -95,8 +95,8 @@ export default function NexusStreamCatalog() {
   const chip = (e: Edge, i: number) => (
     <span
       key={`${e.kind}-${e.name}-${i}`}
-      className={`inline-flex items-center gap-1 border px-1.5 py-0.5 text-[10px] font-mono
-        ${e.disabled ? 'border-border text-text-secondary line-through opacity-60' : 'border-accent/40 text-accent'}`}
+      className={`inline-flex items-center gap-1 border px-2 py-0.5 text-[10px] font-mono rounded
+        ${e.disabled ? 'border-border text-text-secondary line-through opacity-60 bg-white/[0.01]' : 'border-accent/30 text-accent bg-accent/5'}`}
       title={e.kind}
     >
       <span className="opacity-50">{e.kind === 'sentinel' ? '◆' : '⏱'}</span>{e.name}
@@ -104,7 +104,7 @@ export default function NexusStreamCatalog() {
   );
 
   return (
-    <div className="border border-border bg-bg-primary flex flex-col h-full">
+    <div className="border border-border bg-bg-primary flex flex-col h-full font-sans">
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-white/[0.01] shrink-0">
         <div>
@@ -116,46 +116,58 @@ export default function NexusStreamCatalog() {
         </div>
         <button
           onClick={load}
-          className="bg-accent-dim border border-accent/40 text-accent px-2 py-1 text-xs font-medium hover:bg-[#1f6feb] hover:text-white transition-all shrink-0"
+          className="bg-accent-dim border border-accent/40 text-accent px-2 py-1 text-xs font-medium hover:bg-[#1f6feb] hover:text-white transition-all shrink-0 rounded"
         >
           {t('nexus_catalog.refresh') || 'Refresh'}
         </button>
       </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0 overflow-auto p-4">
+      <div className="flex-1 min-h-0 overflow-auto p-5">
         {error && <div className="text-error text-xs mb-3">{error}</div>}
-        {loading && <div className="text-text-secondary text-xs">…</div>}
+        {loading && <div className="text-text-secondary text-xs font-mono">Loading streams...</div>}
         {!loading && rows.length === 0 && (
           <div className="text-text-secondary text-xs">{t('nexus_catalog.empty') || 'No streams or wiring found yet.'}</div>
         )}
 
-        <div className="flex flex-col gap-2">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {rows.map(r => (
-            <div key={r.key} className="border border-border bg-bg-secondary/30 p-3">
-              {/* stream key + live badge */}
-              <div className="flex items-center justify-between gap-3 mb-2">
-                <code className="text-xs text-accent font-mono break-all">{r.key}</code>
-                {r.live
-                  ? <span className="text-[10px] text-success border border-success/40 px-1.5 py-0.5 shrink-0 font-mono">
-                      {t('nexus_catalog.live') || 'live'} · {r.live.length}
-                      {r.live.lastAt ? ` · ${formatDate(r.live.lastAt)}` : ''}
-                    </span>
-                  : <span className="text-[10px] text-text-secondary border border-border px-1.5 py-0.5 shrink-0 font-mono">idle</span>}
-              </div>
-              {/* producers → consumers */}
-              <div className="grid grid-cols-[5rem_1fr] gap-x-3 gap-y-1.5 text-[11px]">
-                <div className="text-text-secondary uppercase tracking-wide pt-0.5">{t('nexus_catalog.producers') || 'Producers'}</div>
-                <div className="flex flex-wrap gap-1 items-center">
-                  {r.producers.length
-                    ? r.producers.map(chip)
-                    : <span className="text-text-secondary opacity-60 text-[10px]">{t('nexus_catalog.no_producer') || 'no nexus producer (may be fed externally)'}</span>}
+            <div key={r.key} className="border border-border bg-bg-secondary/20 p-4 rounded-lg flex flex-col justify-between hover:border-accent/40 transition-colors shadow-sm">
+              <div>
+                {/* stream key + live badge */}
+                <div className="flex items-start justify-between gap-3 mb-2.5">
+                  <code className="text-xs text-accent font-mono break-all font-bold">{r.key}</code>
+                  {r.live
+                    ? <span className="text-[10px] text-success border border-success/30 bg-success/5 px-1.5 py-0.5 shrink-0 font-mono rounded">
+                        {r.live.length} {t('nexus_catalog.live') || 'msgs'}
+                      </span>
+                    : <span className="text-[10px] text-text-secondary border border-border bg-white/[0.02] px-1.5 py-0.5 shrink-0 font-mono rounded">idle</span>}
                 </div>
-                <div className="text-text-secondary uppercase tracking-wide pt-0.5">{t('nexus_catalog.consumers') || 'Consumers'}</div>
-                <div className="flex flex-wrap gap-1 items-center">
-                  {r.consumers.length
-                    ? r.consumers.map(chip)
-                    : <span className="text-text-secondary opacity-60 text-[10px]">{t('nexus_catalog.no_consumer') || 'no consumer'}</span>}
+
+                {r.live?.lastAt && (
+                  <div className="text-[10px] text-text-secondary mb-3 font-mono">
+                    Last: {formatDate(r.live.lastAt)}
+                  </div>
+                )}
+
+                {/* producers / consumers list */}
+                <div className="flex flex-col gap-3 text-[11px] mt-2">
+                  <div>
+                    <div className="text-text-secondary uppercase tracking-wider text-[9px] font-bold mb-1.5">{t('nexus_catalog.producers') || 'Producers'}</div>
+                    <div className="flex flex-wrap gap-1 items-center">
+                      {r.producers.length
+                        ? r.producers.map(chip)
+                        : <span className="text-text-secondary opacity-60 text-[10px] italic">{t('nexus_catalog.no_producer') || 'External / Ingress'}</span>}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-text-secondary uppercase tracking-wider text-[9px] font-bold mb-1.5">{t('nexus_catalog.consumers') || 'Consumers'}</div>
+                    <div className="flex flex-wrap gap-1 items-center">
+                      {r.consumers.length
+                        ? r.consumers.map(chip)
+                        : <span className="text-text-secondary opacity-60 text-[10px] italic">{t('nexus_catalog.no_consumer') || 'no consumer'}</span>}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

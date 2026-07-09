@@ -243,6 +243,7 @@ export default function NexusManagement() {
   const [permitView, setPermitView] = useState<Sentinel | null>(null);
   const [deliveriesView, setDeliveriesView] = useState<Sentinel | null>(null);
   const [broadcasting, setBroadcasting] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
   const fetchSentinels = useCallback(async () => {
     setLoading(true);
@@ -362,174 +363,264 @@ export default function NexusManagement() {
       <div className="flex-1 overflow-hidden flex flex-col">
         {error && <div className="p-4 text-error text-[13px]">{t('nexus_mgmt.error_prefix')}: {error}</div>}
 
-        {/* Header Row */}
-        <div className="grid gap-4 px-5 py-3 border-b-2 border-border bg-bg-secondary font-bold text-[11px] text-accent uppercase tracking-wider sticky top-0 z-10 grid-cols-[2fr_2.5fr_1fr_2.5fr_1fr_1fr_2.5fr]">
-          <div>{t('nexus_mgmt.col_id')}</div>
-          <div>{t('nexus_mgmt.col_name_role')}</div>
-          <div>{t('nexus_mgmt.col_track')}</div>
-          <div>{t('nexus_mgmt.col_event_subscriptions')}</div>
-          <div>{t('nexus_mgmt.col_activity')}</div>
-          <div>{t('nexus_mgmt.col_status')}</div>
-          <div>{t('nexus_mgmt.col_actions')}</div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto">
-          {sentinels.map(sentinel => (
-            <div
-              key={sentinel.id}
-              className="grid gap-4 px-5 border-b border-border hover:bg-white/[0.02] items-center text-sm transition-colors grid-cols-[2fr_2.5fr_1fr_2.5fr_1fr_1fr_2.5fr] min-h-[52px] py-2"
-            >
-              <div className="font-mono text-[11px] text-accent truncate" title={sentinel.id}>
-                {sentinel.id}
-              </div>
-
-              <div className="flex flex-col gap-0.5 min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[12px] font-medium truncate" title={sentinel.name}>{sentinel.name}</span>
-                  {sentinel.context && (
+        <div className="flex-1 overflow-y-auto p-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+            {sentinels.map(sentinel => (
+              <div
+                key={sentinel.id}
+                className={`sys-entity-card min-h-[310px] ${
+                  sentinel.status === 'ACTIVE' ? 'status-active' : 'status-inactive'
+                }`}
+              >
+                {/* Header (Status Beacon + Name & ID + Dropdown Actions) */}
+                <div className="flex items-start justify-between gap-2 min-w-0">
+                  <div className="flex flex-col min-w-0">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="relative flex h-2 w-2 shrink-0">
+                        {sentinel.online ? (
+                          <>
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+                          </>
+                        ) : (
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-border"></span>
+                        )}
+                      </span>
+                      <span
+                        className="text-[12px] font-bold text-text-primary truncate"
+                        title={sentinel.name}
+                      >
+                        {sentinel.name}
+                      </span>
+                    </div>
                     <span
-                      className="shrink-0 text-[9px] px-1 py-0.5 border border-accent/40 text-accent bg-accent/10 rounded"
-                      title={t('nexus_mgmt.ctx_badge_tooltip')}
+                      className="font-mono text-[9px] text-text-secondary/70 truncate mt-0.5"
+                      title={sentinel.id}
                     >
-                      ⚙ ctx
+                      {sentinel.id}
                     </span>
-                  )}
+                  </div>
+
+                  {/* Actions Dropdown */}
+                  <div className="relative shrink-0">
+                    <button
+                      className="text-text-secondary hover:text-accent p-1 transition-colors rounded hover:bg-white/5 cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenMenuId(openMenuId === sentinel.id ? null : sentinel.id);
+                      }}
+                    >
+                      <svg className="w-4.5 h-4.5" fill="currentColor" viewBox="0 0 16 16">
+                        <path d="M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/>
+                      </svg>
+                    </button>
+
+                    {openMenuId === sentinel.id && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-20 cursor-default"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenMenuId(null);
+                          }}
+                        />
+                        <div
+                          className="absolute right-0 top-7 z-30 w-36 bg-bg-secondary border border-border rounded-md shadow-xl py-1 text-left"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            className="w-full text-left px-3 py-1.5 text-xs text-text-primary hover:bg-accent/15 hover:text-accent transition-colors flex items-center gap-1.5 cursor-pointer font-sans"
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              openEdit(sentinel);
+                            }}
+                          >
+                            <span>✏️</span> {t('nexus_mgmt.edit')}
+                          </button>
+                          <button
+                            className="w-full text-left px-3 py-1.5 text-xs text-text-primary hover:bg-accent/15 hover:text-accent transition-colors flex items-center gap-1.5 cursor-pointer font-sans"
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              setRawSentinel(sentinel);
+                            }}
+                          >
+                            <span>📄</span> {t('nexus_mgmt.raw')}
+                          </button>
+                          <button
+                            className="w-full text-left px-3 py-1.5 text-xs text-text-primary hover:bg-accent/15 hover:text-accent transition-colors flex items-center gap-1.5 cursor-pointer font-sans"
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              setPermitView(sentinel);
+                            }}
+                            title={t('nexus_mgmt.permit_btn_tooltip')}
+                          >
+                            <span>🔑</span> {t('nexus_mgmt.permit')}
+                          </button>
+                          <button
+                            className="w-full text-left px-3 py-1.5 text-xs text-text-primary hover:bg-accent/15 hover:text-accent transition-colors flex items-center gap-1.5 cursor-pointer font-sans"
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              setDeliveriesView(sentinel);
+                            }}
+                            title={t('nexus_mgmt.deliveries_btn_tooltip')}
+                          >
+                            <span>📊</span> {t('nexus_mgmt.deliveries')}
+                          </button>
+                          {needsBroadcast(sentinel.reachability) && (
+                            <button
+                              className="w-full text-left px-3 py-1.5 text-xs text-accent hover:bg-accent/15 hover:text-accent transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50 font-sans"
+                              onClick={() => {
+                                setOpenMenuId(null);
+                                handleBroadcast(sentinel);
+                              }}
+                              disabled={broadcasting === sentinel.id}
+                              title={t('nexus_mgmt.broadcast_btn_tooltip')}
+                            >
+                              <span>📡</span> {broadcasting === sentinel.id ? t('nexus_mgmt.broadcasting') : t('nexus_mgmt.broadcast')}
+                            </button>
+                          )}
+                          {sentinel.status === 'ACTIVE' && (
+                            <button
+                              className="w-full text-left px-3 py-1.5 text-xs text-error hover:bg-error/15 hover:text-error border-t border-border/40 mt-1 transition-colors flex items-center gap-1.5 cursor-pointer font-sans"
+                              onClick={() => {
+                                setOpenMenuId(null);
+                                handleDisable(sentinel);
+                              }}
+                            >
+                              <span>🚫</span> {t('nexus_mgmt.disable')}
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="text-[10px] text-text-secondary font-mono truncate flex items-center gap-1" title={sentinel.authorityRole}>
-                  <span className="truncate">{sentinel.authorityRole}</span>
-                  {(sentinel.identity?.mode === 'bot' || sentinel.authorityRole.startsWith('system.')) ? (
-                    <span
-                      data-test="identity-badge"
-                      className={`shrink-0 text-[9px] px-1 py-0.5 border rounded ${
-                        sentinel.identity?.hasToken === false || sentinel.identity?.expired
-                          ? 'border-error/40 text-error bg-error/10'
-                          : 'border-accent/40 text-accent bg-accent/10'
-                      }`}
-                      title={
-                        sentinel.identity?.expired
-                          ? t('nexus_mgmt.identity_tooltip_expired')
-                          : sentinel.identity?.hasToken === false
-                            ? t('nexus_mgmt.identity_tooltip_not_provisioned')
-                            : sentinel.identity?.hasToken
-                              ? t('nexus_mgmt.identity_tooltip_provisioned')
-                              : t('nexus_mgmt.identity_tooltip_unknown')
-                      }
-                    >
-                      {sentinel.identity?.expired ? t('nexus_mgmt.badge_bot_expired') : `${t('nexus_mgmt.badge_bot')}${sentinel.identity?.hasToken === true ? ' ●' : sentinel.identity?.hasToken === false ? ' ○' : ''}`}
+
+                <div className="border-t border-border/40 my-0.5"></div>
+
+                {/* Role & Identity Section */}
+                <div className="flex flex-col gap-1.5 min-w-0">
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-[8px] text-text-secondary font-bold tracking-wider uppercase font-sans">Authority Role</span>
+                    <span className="font-mono text-[10px] text-text-primary truncate mt-0.5" title={sentinel.authorityRole}>
+                      {sentinel.authorityRole}
                     </span>
-                  ) : (
-                    <span
-                      data-test="identity-badge"
-                      className="shrink-0 text-[9px] px-1 py-0.5 border border-border text-text-secondary bg-white/5 rounded"
-                      title={t('nexus_mgmt.identity_tooltip_shared')}
-                    >
-                      {t('nexus_mgmt.badge_shared')}
+                  </div>
+
+                  <div className="flex gap-1.5 flex-wrap items-center">
+                    {(sentinel.identity?.mode === 'bot' || sentinel.authorityRole.startsWith('system.')) ? (
+                      <span
+                        data-test="identity-badge"
+                        className={`shrink-0 text-[9px] px-1 py-0.5 border rounded font-mono ${
+                          sentinel.identity?.hasToken === false || sentinel.identity?.expired
+                            ? 'border-error/40 text-error bg-error/10'
+                            : 'border-accent/40 text-accent bg-accent/10'
+                        }`}
+                        title={
+                          sentinel.identity?.expired
+                            ? t('nexus_mgmt.identity_tooltip_expired')
+                            : sentinel.identity?.hasToken === false
+                              ? t('nexus_mgmt.identity_tooltip_not_provisioned')
+                              : sentinel.identity?.hasToken
+                                ? t('nexus_mgmt.identity_tooltip_provisioned')
+                                : t('nexus_mgmt.identity_tooltip_unknown')
+                        }
+                      >
+                        {sentinel.identity?.expired ? t('nexus_mgmt.badge_bot_expired') : `${t('nexus_mgmt.badge_bot')}${sentinel.identity?.hasToken === true ? ' ●' : sentinel.identity?.hasToken === false ? ' ○' : ''}`}
+                      </span>
+                    ) : (
+                      <span
+                        data-test="identity-badge"
+                        className="shrink-0 text-[9px] px-1 py-0.5 border border-border text-text-secondary bg-white/5 rounded font-mono"
+                        title={t('nexus_mgmt.identity_tooltip_shared')}
+                      >
+                        {t('nexus_mgmt.badge_shared')}
+                      </span>
+                    )}
+
+                    <span className={`text-[9px] px-1 py-0.5 border rounded font-bold font-mono ${
+                      sentinel.track === 'internal'
+                        ? 'border-success/40 text-success bg-success/5'
+                        : 'border-warning/40 text-warning bg-warning/5'
+                    }`}>
+                      {sentinel.track.toUpperCase()}
                     </span>
-                  )}
+
+                    {sentinel.context && (
+                      <span
+                        className="shrink-0 text-[9px] px-1 py-0.5 border border-accent/40 text-accent bg-accent/5 rounded font-mono"
+                        title={t('nexus_mgmt.ctx_badge_tooltip')}
+                      >
+                        ⚙ ctx
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <span className={`text-[10px] px-1.5 py-0.5 border rounded ${
-                  sentinel.track === 'internal'
-                    ? 'border-success/40 text-success bg-success/10'
-                    : 'border-warning/40 text-warning bg-warning/10'
-                }`}>
-                  {sentinel.track.toUpperCase()}
-                </span>
-              </div>
+                {/* Subscriptions Section */}
+                <div className="flex flex-col gap-1 min-w-0">
+                  <span className="text-[8px] text-text-secondary font-bold tracking-wider uppercase font-sans">Event Subscriptions</span>
+                  <div className="flex flex-wrap gap-1 max-h-[46px] overflow-y-auto pr-0.5">
+                    {sentinel.eventSubscriptions.length === 0 ? (
+                      <span className="text-[10px] text-text-secondary italic">—</span>
+                    ) : (
+                      sentinel.eventSubscriptions.map(ev => (
+                        <span
+                          key={ev}
+                          className="font-mono text-[9px] text-accent bg-accent-dim border border-accent/20 px-1 py-0.2 rounded truncate max-w-full"
+                          title={ev}
+                        >
+                          {ev}
+                        </span>
+                      ))
+                    )}
+                  </div>
+                </div>
 
-              <div className="flex flex-col gap-0.5">
-                {sentinel.eventSubscriptions.length === 0 ? (
-                  <span className="text-[11px] opacity-30">—</span>
-                ) : (
-                  sentinel.eventSubscriptions.slice(0, 2).map(ev => (
-                    <span key={ev} className="font-mono text-[10px] text-text-secondary truncate" title={ev}>{ev}</span>
-                  ))
-                )}
-                {sentinel.eventSubscriptions.length > 2 && (
-                  <span className="text-[10px] opacity-40">{t('nexus_mgmt.more_count', { n: sentinel.eventSubscriptions.length - 2 })}</span>
-                )}
-              </div>
-
-              <div className="flex flex-col gap-0.5" data-test="sentinel-activity">
-                <div className="flex items-center gap-1.5">
-                  <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${sentinel.online ? 'bg-success shadow-[0_0_6px_rgba(var(--color-success),0.8)]' : 'bg-border'}`} title={sentinel.online ? t('nexus_mgmt.online_heartbeat') : t('nexus_mgmt.offline')} />
+                {/* Activity & Metrics Section */}
+                <div className="flex flex-col gap-1 mt-auto">
+                  <span className="text-[8px] text-text-secondary font-bold tracking-wider uppercase font-sans">Activity Metrics</span>
                   {sentinel.activity ? (
-                    <span className="font-mono text-[10px] text-text-secondary whitespace-nowrap"
-                      title={t('nexus_mgmt.activity_tooltip', { fired: sentinel.activity.fired, skipped: sentinel.activity.skipped, failed: sentinel.activity.failed })}>
-                      ⚡{sentinel.activity.fired} ↷{sentinel.activity.skipped}
-                      {sentinel.activity.failed > 0 && <span className="text-error"> ✗{sentinel.activity.failed}</span>}
-                    </span>
+                    <div className="flex flex-col gap-1">
+                      <div className="grid grid-cols-3 gap-1 bg-white/[0.02] border border-border/40 rounded p-1 text-center font-mono text-[10px]">
+                        <div>
+                          <div className="text-[7px] text-text-secondary tracking-wide font-sans">FIRED</div>
+                          <div className="font-semibold text-text-primary" title={t('nexus_mgmt.activity_tooltip', { fired: sentinel.activity.fired, skipped: sentinel.activity.skipped, failed: sentinel.activity.failed })}>
+                            ⚡{sentinel.activity.fired}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[7px] text-text-secondary tracking-wide font-sans">SKIP</div>
+                          <div className="font-semibold text-text-primary">
+                            ↷{sentinel.activity.skipped}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[7px] text-text-secondary tracking-wide font-sans">FAIL</div>
+                          <div className={`font-semibold ${sentinel.activity.failed > 0 ? 'text-error font-bold' : 'text-text-secondary'}`}>
+                            ✗{sentinel.activity.failed}
+                          </div>
+                        </div>
+                      </div>
+                      {sentinel.activity.lastFiredAt ? (
+                        <span className="text-[8px] text-text-secondary/70 text-right mt-0.5">
+                          {t('nexus_mgmt.last_label')}: {formatDate(sentinel.activity.lastFiredAt)}
+                        </span>
+                      ) : (
+                        <span className="text-[8px] text-text-secondary/50 text-right mt-0.5">
+                          {t('nexus_mgmt.never_fired')}
+                        </span>
+                      )}
+                    </div>
                   ) : (
-                    <span className="text-[10px] opacity-30">—</span>
+                    <div className="text-[10px] text-text-secondary italic bg-white/[0.02] border border-border/40 rounded p-1.5 text-center">
+                      No activity data
+                    </div>
                   )}
                 </div>
-                {sentinel.activity?.lastFiredAt ? (
-                  <span className="text-[9px] text-text-secondary/60">{t('nexus_mgmt.last_label')}: {formatDate(sentinel.activity.lastFiredAt)}</span>
-                ) : sentinel.activity && (
-                  <span className="text-[9px] text-text-secondary/40">{t('nexus_mgmt.never_fired')}</span>
-                )}
               </div>
-
-              <div>
-                <span className={`text-[10px] px-2 py-0.5 rounded border ${
-                  sentinel.status === 'ACTIVE'
-                    ? 'text-success border-success/30 bg-success/10'
-                    : 'text-error border-error/30 bg-error/10'
-                }`}>
-                  {sentinel.status}
-                </span>
-              </div>
-
-              <div className="flex gap-2 items-center flex-wrap">
-                <button
-                  className="bg-accent-dim border border-accent/40 text-accent rounded-md px-3 py-1.5 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all"
-                  onClick={() => openEdit(sentinel)}
-                >
-                  {t('nexus_mgmt.edit')}
-                </button>
-                <button
-                  className="bg-accent-dim border border-accent/40 text-accent rounded-md px-3 py-1.5 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all"
-                  onClick={() => setRawSentinel(sentinel)}
-                >
-                  {t('nexus_mgmt.raw')}
-                </button>
-                <button
-                  className="bg-accent-dim border border-accent/40 text-accent rounded-md px-3 py-1.5 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all"
-                  onClick={() => setPermitView(sentinel)}
-                  title={t('nexus_mgmt.permit_btn_tooltip')}
-                >
-                  {t('nexus_mgmt.permit')}
-                </button>
-                <button
-                  className="bg-accent-dim border border-accent/40 text-accent rounded-md px-3 py-1.5 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all"
-                  onClick={() => setDeliveriesView(sentinel)}
-                  title={t('nexus_mgmt.deliveries_btn_tooltip')}
-                >
-                  {t('nexus_mgmt.deliveries')}
-                </button>
-                {needsBroadcast(sentinel.reachability) && (
-                  <button
-                    className="bg-[rgba(56,139,253,0.15)] border border-[rgba(56,139,253,0.4)] text-[#58a6ff] rounded-md px-3 py-1.5 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all disabled:opacity-50"
-                    onClick={() => handleBroadcast(sentinel)}
-                    disabled={broadcasting === sentinel.id}
-                    title={t('nexus_mgmt.broadcast_btn_tooltip')}
-                  >
-                    {broadcasting === sentinel.id ? t('nexus_mgmt.broadcasting') : t('nexus_mgmt.broadcast')}
-                  </button>
-                )}
-                {sentinel.status === 'ACTIVE' && (
-                  <button
-                    className="bg-error/10 border border-error/40 text-error rounded-md px-3 py-1.5 text-[11px] font-medium hover:bg-error hover:text-white transition-all"
-                    onClick={() => handleDisable(sentinel)}
-                  >
-                    {t('nexus_mgmt.disable')}
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
 
           {!loading && sentinels.length === 0 && (
             <div className="p-6 text-center opacity-50 text-[13px]">

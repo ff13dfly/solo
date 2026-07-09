@@ -209,6 +209,24 @@ const RISK_BOT_PERMIT = {
     },
 };
 
+const PASSPORT_GUEST_BOT_UID = 'system.passport.guest_bot';
+const PASSPORT_GUEST_BOT_PERMIT = {
+    allow_all: false,
+    services: {
+        fulfillment: ['fulfillment.profile.list', 'fulfillment.instance.get'],
+        system: ['system.category.list'],
+    },
+};
+
+const PASSPORT_USER_BOT_UID = 'system.passport.user_bot';
+const PASSPORT_USER_BOT_PERMIT = {
+    allow_all: false,
+    services: {
+        fulfillment: ['fulfillment.profile.list', 'fulfillment.instance.get', 'fulfillment.instance.create', 'fulfillment.instance.transition'],
+        system: ['system.category.list'],
+    },
+};
+
 const RISK_SENTINEL = {
     name: 'Deposit Risk Review (standard-order)',
     description: '订金到账时拉取订单全貌,经 agent.decide 评估收款风险(approve/hold),把结构化决策发回总线。§1.2 全配置:自有 bot 身份 + 最小权限;token 需在 BOT ACCOUNTS 注入后才生效。',
@@ -335,6 +353,30 @@ async function rpcWithRetry(method, params, tries = 10) {
         console.log(`  [inject-fulfillment]   bot ${RISK_BOT_UID} seeded (permit: instance.get + agent.decide) — token NOT injected:`);
         console.log('  [inject-fulfillment]   → system portal BOT ACCOUNTS will show the provisioning banner; INJECT to arm it.');
     }
+
+    // ④ Seed two passport-related bot accounts for demo and system understanding.
+    try {
+        await rpcWithRetry('user.bot.create', {
+            uid: PASSPORT_GUEST_BOT_UID,
+            permit: PASSPORT_GUEST_BOT_PERMIT,
+            desc: 'Passport 托管身份: 外部访客角色（只读访问）'
+        });
+    } catch (e) {
+        if (!/exist/i.test(e.message)) console.warn('Failed to seed passport guest bot:', e.message);
+    }
+    await rpc('user.bot.update', { uid: PASSPORT_GUEST_BOT_UID, permit: PASSPORT_GUEST_BOT_PERMIT });
+
+    try {
+        await rpcWithRetry('user.bot.create', {
+            uid: PASSPORT_USER_BOT_UID,
+            permit: PASSPORT_USER_BOT_PERMIT,
+            desc: 'Passport 托管身份: 外部注册用户角色（可读写履约）'
+        });
+    } catch (e) {
+        if (!/exist/i.test(e.message)) console.warn('Failed to seed passport user bot:', e.message);
+    }
+    await rpc('user.bot.update', { uid: PASSPORT_USER_BOT_UID, permit: PASSPORT_USER_BOT_PERMIT });
+    console.log('  [inject-fulfillment] ✓ seeded passport guest/user bots');
 
     console.log('  [inject-fulfillment] DONE');
 })().catch((e) => {

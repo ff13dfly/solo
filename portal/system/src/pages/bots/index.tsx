@@ -64,6 +64,13 @@ export default function BotManagement() {
     // RAW view
     const [rawBot, setRawBot] = useState<Bot | null>(null);
 
+    // Card Selection State
+    const [selectedId, setSelectedId] = useState<string | null>(null);
+
+    // Inline description editing state
+    const [editingId, setEditingId] = useState<string | null>(null);
+    const [editValue, setEditValue] = useState<string>('');
+
     useEffect(() => {
         callRpc<ServiceInfo[]>('system.service.list', {})
             .then(result => {
@@ -112,6 +119,30 @@ export default function BotManagement() {
 
 
 
+    const handleStartEdit = (e: React.MouseEvent, botId: string, currentDesc: string) => {
+        e.stopPropagation();
+        setEditingId(botId);
+        setEditValue(currentDesc || '');
+    };
+
+    const handleSaveEdit = async (botId: string) => {
+        const trimmed = editValue.trim();
+        setEditingId(null);
+
+        const currentBot = bots.find(b => b.id === botId);
+        if (!currentBot || currentBot.desc === trimmed) {
+            return;
+        }
+
+        try {
+            await callRpc('user.bot.update', { uid: botId, desc: trimmed });
+            updateBotInfo(botId, { desc: trimmed });
+            toast.success(t('bot_mgmt.descUpdated'));
+        } catch (e: any) {
+            toast.error(e.message || 'Failed to update description');
+        }
+    };
+
     // Derives the relay service name from a system.* UID, null otherwise.
     const serviceNameFromUid = (uid: string) =>
         uid.startsWith(BOT_UID_PREFIX) ? uid.slice(BOT_UID_PREFIX.length) || null : null;
@@ -124,6 +155,23 @@ export default function BotManagement() {
         return !!svc && RELAY_SERVICES.includes(svc);
     };
     const sentinelFor = (uid: string) => (sentinels ?? []).find(s => s.authorityRole === uid) || null;
+
+    const isBotBound = (uid: string) => {
+        return isRelayService(uid) || !!sentinelFor(uid);
+    };
+
+    const isRevokeDisabled = (bot: Bot) => {
+        const svc = serviceNameFromUid(bot.id);
+        if (svc && RELAY_SERVICES.includes(svc)) {
+            const st = relayStatus[svc];
+            return st !== undefined && st !== null && !st.hasToken;
+        }
+        const snt = sentinelFor(bot.id);
+        if (snt) {
+            return snt.identity?.hasToken === false;
+        }
+        return false;
+    };
 
     const handleInject = async (bot: Bot) => {
         const relay = isRelayService(bot.id);
@@ -312,89 +360,159 @@ export default function BotManagement() {
                     </div>
                 )}
 
-                {/* Header Row */}
-                <div className="grid gap-4 px-5 py-3 border-b-2 border-border bg-bg-secondary font-bold text-[11px] text-accent uppercase tracking-wider sticky top-0 z-10 grid-cols-[2fr_2.5fr_2.5fr_0.9fr_1.2fr_1.4fr]">
-                    <div>{t('bot_mgmt.colUid')}</div>
-                    <div>{t('bot_mgmt.colDescription')}</div>
-                    <div>{t('bot_mgmt.colActions')}</div>
-                    <div>{t('bot_mgmt.colStatus')}</div>
-                    <div>{t('bot_mgmt.colToken')}</div>
-                    <div>{t('bot_mgmt.colCreated')}</div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto">
-                    {bots.map(bot => (
-                        <div key={bot.id} className="grid gap-4 px-5 border-b border-border hover:bg-white/[0.02] items-center text-sm transition-colors grid-cols-[2fr_2.5fr_2.5fr_0.9fr_1.2fr_1.4fr] h-[52px]">
-                            <div className="font-mono text-[11px] text-accent truncate" title={bot.id}>
-                                {bot.id}
-                            </div>
-
-                            <div className="text-[12px] text-text-secondary truncate" title={bot.desc}>
-                                {bot.desc || <span className="opacity-40">—</span>}
-                            </div>
-
-                            <div className="flex gap-2 items-center">
-                                <button
-                                    className="bg-accent-dim border border-accent/40 text-accent rounded-md px-3 py-1.5 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all"
-                                    onClick={() => setRawBot(bot)}
+                <div className="flex-1 overflow-y-auto p-5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                        {bots.map(bot => {
+                            const isSelected = selectedId === bot.id;
+                            return (
+                                <div
+                                    key={bot.id}
+                                    onClick={() => setSelectedId(isSelected ? null : bot.id)}
+                                    className={`sys-entity-card cursor-pointer ${
+                                        isSelected
+                                            ? 'selected'
+                                            : bot.status === 'ACTIVE'
+                                            ? 'status-active'
+                                            : 'status-inactive'
+                                    }`}
+                                    data-test="bot-card"
                                 >
-                                    {t('bot_mgmt.raw')}
-                                </button>
-                                <button
-                                    className="bg-accent-dim border border-accent/40 text-accent rounded-md px-3 py-1.5 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all"
-                                    onClick={() => setPermitTarget(bot)}
-                                >
-                                    {t('bot_mgmt.permit')}
-                                </button>
-                                {(isRelayService(bot.id) || sentinelFor(bot.id)) ? (
-                                    <button
-                                        className="bg-[rgba(56,139,253,0.15)] border border-[rgba(56,139,253,0.4)] text-[#58a6ff] rounded-md px-3 py-1.5 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all disabled:opacity-50"
-                                        onClick={() => handleInject(bot)}
-                                        disabled={injecting === bot.id || issuing === bot.id}
-                                        title={isRelayService(bot.id)
-                                            ? t('bot_mgmt.injectRelayTitle')
-                                            : t('bot_mgmt.injectSentinelTitle', { name: sentinelFor(bot.id)?.name ?? '' })}
+                                    {/* Header (Status Beacon + Uid + Selection Indicator) */}
+                                    <div className="flex items-start justify-between gap-2 min-w-0">
+                                        <div className="flex flex-col min-w-0">
+                                            <div className="flex items-center gap-1.5 min-w-0">
+                                                <span className="relative flex h-2 w-2 shrink-0">
+                                                    {bot.status === 'ACTIVE' ? (
+                                                        <>
+                                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+                                                            <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+                                                        </>
+                                                    ) : (
+                                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-border"></span>
+                                                    )}
+                                                </span>
+                                                <span
+                                                    className="font-mono text-[12px] font-bold text-accent truncate"
+                                                    title={bot.id}
+                                                >
+                                                    {bot.id}
+                                                </span>
+                                            </div>
+                                            <span className="text-[10px] text-text-secondary/60 mt-0.5 font-mono">
+                                                {formatDate(bot.createdAt)}
+                                            </span>
+                                        </div>
+
+                                        {/* Selection Indicator */}
+                                        <div className="shrink-0">
+                                            {isSelected ? (
+                                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/20 text-accent font-medium uppercase tracking-wider">
+                                                    {t('bot_mgmt.activeSelection')}
+                                                </span>
+                                            ) : (
+                                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-text-secondary opacity-40 hover:opacity-100 transition-opacity" title={t('bot_mgmt.clickToManage')}>
+                                                    {t('bot_mgmt.manage')}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Body (Description + Token Cell) */}
+                                    <div className="flex-1 flex flex-col gap-2.5 mt-1">
+                                        {editingId === bot.id ? (
+                                            <textarea
+                                                value={editValue}
+                                                onChange={(e) => setEditValue(e.target.value)}
+                                                onBlur={() => handleSaveEdit(bot.id)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Escape') {
+                                                        setEditingId(null);
+                                                    }
+                                                }}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="w-full text-[12px] bg-bg-primary text-text-primary border border-accent rounded p-1 leading-normal font-mono focus:outline-none resize-none h-[42px]"
+                                                autoFocus
+                                            />
+                                        ) : (
+                                            <div
+                                                onDoubleClick={(e) => handleStartEdit(e, bot.id, bot.desc)}
+                                                className="text-[12px] text-text-secondary line-clamp-2 min-h-[32px] leading-relaxed cursor-text select-text"
+                                                title={t('bot_mgmt.doubleClickToEdit')}
+                                            >
+                                                {bot.desc || <span className="opacity-30 italic">No description</span>}
+                                            </div>
+                                        )}
+
+                                        <div className="flex items-center justify-between text-[11px] border border-white/5 rounded px-2.5 py-2 bg-white/[0.01]">
+                                            <span className="text-text-secondary/70 font-semibold uppercase tracking-wider text-[9px]">{t('bot_mgmt.colToken')}</span>
+                                            <div data-test="bot-token-state">{tokenCell(bot)}</div>
+                                        </div>
+                                    </div>
+
+                                    {/* Action Drawer (Expandable) */}
+                                    <div
+                                        onClick={(e) => e.stopPropagation()} // Prevent card deselect on button clicks!
+                                        className={`overflow-hidden transition-all duration-300 ${
+                                            isSelected
+                                                ? 'max-h-[140px] opacity-100 mt-2 border-t border-border/40 pt-3'
+                                                : 'max-h-0 opacity-0 pointer-events-none'
+                                        }`}
                                     >
-                                        {injecting === bot.id ? t('bot_mgmt.injecting') : t('bot_mgmt.inject')}
-                                    </button>
-                                ) : (
-                                    <button
-                                        className="bg-[rgba(56,139,253,0.15)] border border-[rgba(56,139,253,0.4)] text-[#58a6ff] rounded-md px-3 py-1.5 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all disabled:opacity-50"
-                                        onClick={() => handleIssueToken(bot)}
-                                        disabled={issuing === bot.id}
-                                    >
-                                        {issuing === bot.id ? t('bot_mgmt.issuing') : t('bot_mgmt.issueToken')}
-                                    </button>
-                                )}
-                                <button
-                                    className="bg-accent-dim border border-accent/40 text-accent rounded-md px-3 py-1.5 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all"
-                                    onClick={() => handleRevoke(bot)}
-                                    title={t('bot_mgmt.revokeTitle')}
-                                >
-                                    {t('bot_mgmt.revoke')}
-                                </button>
-                                <button
-                                    className="bg-error/10 border border-error/40 text-error rounded-md px-3 py-1.5 text-[11px] font-medium hover:bg-error hover:text-white transition-all"
-                                    onClick={() => handleDelete(bot)}
-                                >
-                                    {t('bot_mgmt.delete')}
-                                </button>
-                            </div>
-
-                            <div>
-                                <span className={`text-[10px] px-2 py-0.5 rounded border ${bot.status === 'ACTIVE'
-                                    ? 'text-success border-success/30 bg-success/10'
-                                    : 'text-error border-error/30 bg-error/10'
-                                    }`}>
-                                    {bot.status}
-                                </span>
-                            </div>
-
-                            <div data-test="bot-token-state">{tokenCell(bot)}</div>
-
-                            <div className="text-[11px] text-text-secondary">{formatDate(bot.createdAt)}</div>
-                        </div>
-                    ))}
+                                        <div className="flex flex-wrap gap-1.5 justify-end">
+                                            <button
+                                                className="bg-accent-dim border border-accent/40 text-accent rounded-md px-2.5 py-1 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all cursor-pointer"
+                                                onClick={() => setRawBot(bot)}
+                                            >
+                                                {t('bot_mgmt.raw')}
+                                            </button>
+                                            <button
+                                                className="bg-accent-dim border border-accent/40 text-accent rounded-md px-2.5 py-1 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all cursor-pointer"
+                                                onClick={() => setPermitTarget(bot)}
+                                            >
+                                                {t('bot_mgmt.permit')}
+                                            </button>
+                                            {(isRelayService(bot.id) || sentinelFor(bot.id)) ? (
+                                                <button
+                                                    className="bg-[rgba(56,139,253,0.15)] border border-[rgba(56,139,253,0.4)] text-[#58a6ff] rounded-md px-2.5 py-1 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all disabled:opacity-50 cursor-pointer"
+                                                    onClick={() => handleInject(bot)}
+                                                    disabled={injecting === bot.id || issuing === bot.id}
+                                                    title={isRelayService(bot.id)
+                                                        ? t('bot_mgmt.injectRelayTitle')
+                                                        : t('bot_mgmt.injectSentinelTitle', { name: sentinelFor(bot.id)?.name ?? '' })}
+                                                >
+                                                    {injecting === bot.id ? t('bot_mgmt.injecting') : t('bot_mgmt.inject')}
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    className="bg-[rgba(56,139,253,0.15)] border border-[rgba(56,139,253,0.4)] text-[#58a6ff] rounded-md px-2.5 py-1 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all disabled:opacity-50 cursor-pointer"
+                                                    onClick={() => handleIssueToken(bot)}
+                                                    disabled={issuing === bot.id}
+                                                >
+                                                    {issuing === bot.id ? t('bot_mgmt.issuing') : t('bot_mgmt.issueToken')}
+                                                </button>
+                                            )}
+                                            <button
+                                                className="bg-accent-dim border border-accent/40 text-accent rounded-md px-2.5 py-1 text-[11px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-accent-dim disabled:hover:text-accent cursor-pointer"
+                                                onClick={() => handleRevoke(bot)}
+                                                disabled={isRevokeDisabled(bot)}
+                                                title={isRevokeDisabled(bot) ? t('bot_mgmt.noActiveTokensToRevoke') : t('bot_mgmt.revokeTitle')}
+                                            >
+                                                {t('bot_mgmt.revoke')}
+                                            </button>
+                                            <button
+                                                className="bg-error/10 border border-error/40 text-error rounded-md px-2.5 py-1 text-[11px] font-medium hover:bg-error hover:text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-error/10 disabled:hover:text-error cursor-pointer"
+                                                onClick={() => handleDelete(bot)}
+                                                disabled={isBotBound(bot.id)}
+                                                title={isBotBound(bot.id) ? t('bot_mgmt.cannotDeleteBound') : undefined}
+                                            >
+                                                {t('bot_mgmt.delete')}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
 
                     {!loading && bots.length === 0 && (
                         <div className="p-6 text-center opacity-50 text-[13px]">
