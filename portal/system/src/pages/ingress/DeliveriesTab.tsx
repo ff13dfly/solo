@@ -3,20 +3,19 @@ import { callRpc } from '../../utils/rpc';
 import { useLang } from '../../providers/LanguageProvider';
 import { formatDate } from '../../utils/format';
 import type { Delivery } from './types';
-import { OUTCOMES, outcomeBadge } from './utils';
+import { outcomeBadge } from './utils';
 
-export default function DeliveriesTab({ outcome, refreshTrigger }: { outcome: string; refreshTrigger?: number }) {
+export default function DeliveriesTab({ outcome, days, refreshTrigger }: { outcome: string; days: number; refreshTrigger?: number }) {
   const { t } = useLang();
   const [items, setItems] = useState<Delivery[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const fetchLog = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const result = await callRpc<{ items: Delivery[]; total: number }>('ingress.log.recent', {
-        limit: 200, days: 7, ...(outcome ? { outcome } : {}),
+        limit: 200, days, ...(outcome ? { outcome } : {}),
       });
       setItems(result.items || []);
     } catch (err: any) {
@@ -24,7 +23,7 @@ export default function DeliveriesTab({ outcome, refreshTrigger }: { outcome: st
     } finally {
       setLoading(false);
     }
-  }, [outcome, t]);
+  }, [outcome, days, t]);
 
   useEffect(() => { fetchLog(); }, [fetchLog]);
 
@@ -65,14 +64,14 @@ export default function DeliveriesTab({ outcome, refreshTrigger }: { outcome: st
 
         {!loading && items.length === 0 && (
           <div className="p-6 text-center opacity-50 text-[13px] font-sans">
-            {outcome ? t('ingress_mgmt.empty_deliveries_filtered', { outcome }) : t('ingress_mgmt.empty_deliveries')}
+            {outcome ? t('ingress_mgmt.empty_deliveries_filtered', { outcome, days }) : t('ingress_mgmt.empty_deliveries', { days })}
           </div>
         )}
       </div>
 
       <div className="px-4 py-2 border-t border-border bg-bg-secondary flex items-center shrink-0">
         <span className="text-xs text-text-secondary font-sans">
-          {outcome ? t('ingress_mgmt.footer_showing_filtered', { n: items.length, outcome }) : t('ingress_mgmt.footer_showing', { n: items.length })} · logs/ingress/{'{year}'}/{'{day}'}.jsonl
+          {outcome ? t('ingress_mgmt.footer_showing_filtered', { n: items.length, outcome, days }) : t('ingress_mgmt.footer_showing', { n: items.length, days })} · logs/ingress/{'{year}'}/{'{day}'}.jsonl
         </span>
       </div>
     </>

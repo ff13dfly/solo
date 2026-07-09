@@ -263,7 +263,7 @@ app.post('/jsonrpc', authMiddleware)   // 两类方法:
 - 新建模态：name + dedupTtl → 创建后**一次性显示 apiKey**（复制，关闭不再可见）。
 
 **Tab ② DELIVERIES（查看 log）** —— 投递审计：
-- 数据源：`ingress.log.recent`（limit 200，最近 7 天，可按 outcome 过滤 + REFRESH）。
+- 数据源：`ingress.log.recent`（limit 200，可选最近 1/3/7/14/31 天，可按 outcome 过滤 + REFRESH）。
 - 列：TIME / SOURCE / REQUEST ID / OUTCOME(色标) / STATUS / BYTES。
 - outcome 色：accepted=绿、duplicate=黄、unauthorized/invalid=红、disabled=灰。只读（日志在 `logs/ingress/{年}/{日}.jsonl`）。
 

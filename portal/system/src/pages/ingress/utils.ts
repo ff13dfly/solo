@@ -2,6 +2,8 @@ import type { Delivery } from './types';
 
 export const NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 export const OUTCOMES = ['', 'accepted', 'duplicate', 'unauthorized', 'disabled', 'invalid'] as const;
+// Backend (api/core/ingress/logic/audit.js `recent()`) clamps `days` to [1, 31] — daily JSONL files, one per day.
+export const DAY_OPTIONS = [1, 3, 7, 14, 31] as const;
 
 export function freshnessColor(ts: number | null): string {
   if (!ts) return 'bg-text-secondary/30';

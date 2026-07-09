@@ -2,13 +2,14 @@ import { useState } from 'react';
 import { useLang } from '../providers/LanguageProvider';
 import SourcesTab from './ingress/SourcesTab';
 import DeliveriesTab from './ingress/DeliveriesTab';
-import { OUTCOMES } from './ingress/utils';
+import { DAY_OPTIONS, OUTCOMES } from './ingress/utils';
 import type { Tab } from './ingress/types';
 
 export default function IngressManagement() {
   const { t } = useLang();
   const [tab, setTab] = useState<Tab>('sources');
   const [outcome, setOutcome] = useState('');
+  const [days, setDays] = useState<number>(7);
   const [sourcesCreateTrigger, setSourcesCreateTrigger] = useState(0);
   const [deliveriesRefreshCount, setDeliveriesRefreshCount] = useState(0);
 
@@ -58,6 +59,15 @@ export default function IngressManagement() {
                   </option>
                 ))}
               </select>
+              <select
+                value={days}
+                onChange={e => setDays(Number(e.target.value))}
+                className="bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[12px] text-text-primary outline-none focus:border-accent transition-colors font-mono"
+              >
+                {DAY_OPTIONS.map(d => (
+                  <option key={d} value={d}>{t('ingress_mgmt.day_option', { n: d })}</option>
+                ))}
+              </select>
               <button
                 onClick={() => setDeliveriesRefreshCount(c => c + 1)}
                 className="bg-accent-dim border border-accent/40 text-accent rounded-md px-3 py-1.5 text-xs font-medium hover:bg-[#1f6feb] hover:text-white transition-all whitespace-nowrap"
@@ -72,7 +82,7 @@ export default function IngressManagement() {
       {/* Content */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">
         {tab === 'sources'    && <SourcesTab createTrigger={sourcesCreateTrigger} />}
-        {tab === 'deliveries' && <DeliveriesTab outcome={outcome} refreshTrigger={deliveriesRefreshCount} />}
+        {tab === 'deliveries' && <DeliveriesTab outcome={outcome} days={days} refreshTrigger={deliveriesRefreshCount} />}
       </div>
     </div>
   );
