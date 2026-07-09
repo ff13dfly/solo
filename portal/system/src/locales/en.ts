@@ -725,6 +725,13 @@ export default {
     "err_load_log": "Failed to load log",
   },
   nexus_mgmt: {
+    "tab_basic": "Basic Info",
+    "tab_context": "Context & Prompt",
+    "tab_automation": "AI & Action",
+    "ctx_assembly_disabled_title": "Context Assembly is Disabled",
+    "ctx_assembly_disabled_hint": "Enable Context Assembly to inject custom JSON variables, execute trigger filters, and define system prompt templates.",
+    "ctx_assembly_enable_btn": "Enable Context Assembly",
+    "automation_disabled_warning": "Context Assembly is currently disabled. Enable it under 'Context & Prompt' tab to activate AI and Action workflows.",
     "activity_tooltip": "fired {fired} · guard-skipped {skipped} · failed {failed}",
     "add_fetcher": "+ ADD FETCHER",
     "autorun_help_1": "Inverted gate: the model only picks a listed choice / fills schema values — it never names the action. Requires",

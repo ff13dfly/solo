@@ -148,7 +148,14 @@ function ProfileCard({ profile, onEdit, onStatesUpdated, watchers }: { profile: 
               {watchers.map(w => (
                 <div key={w.id} data-test="watcher-row" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px' }}>
                   <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: w.status === 'ACTIVE' ? '#10b981' : '#94a3b8', flexShrink: 0, display: 'inline-block' }} title={w.status} />
-                  <span style={{ color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={w.id}>{w.name}</span>
+                  <span style={{ color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }} title={w.id}>
+                    {w.name}
+                    {w.targetState && (
+                      <span style={{ marginLeft: '6px', fontSize: '9px', color: '#059669', background: '#ecfdf5', border: '1px solid #a7f3d0', padding: '0px 4px', borderRadius: '3px', lineHeight: '1.2' }}>
+                        → {w.targetState}
+                      </span>
+                    )}
+                  </span>
                   <span style={{ fontSize: '9px', color: w.pinned ? '#3b82f6' : '#94a3b8', background: w.pinned ? '#eff6ff' : '#f8fafc', border: `1px solid ${w.pinned ? '#bfdbfe' : 'var(--border-color)'}`, padding: '1px 6px', borderRadius: '4px', flexShrink: 0 }}>
                     {w.pinned ? t('fulfillment.profile.watcherPinned') : t('fulfillment.profile.watcherStream')}
                   </span>

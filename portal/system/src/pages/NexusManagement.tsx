@@ -85,6 +85,7 @@ export default function NexusManagement() {
     clearCtxAutorun();
     clearCtxEmit();
     setCtxPassthrough({});
+    setFormActiveTab('basic');
   };
 
   const openCreate = () => { resetForm(); setShowForm(true); };
@@ -244,6 +245,8 @@ export default function NexusManagement() {
   const [deliveriesView, setDeliveriesView] = useState<Sentinel | null>(null);
   const [broadcasting, setBroadcasting] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [formActiveTab, setFormActiveTab] = useState<'basic' | 'context' | 'automation'>('basic');
 
   const fetchSentinels = useCallback(async () => {
     setLoading(true);
@@ -365,13 +368,20 @@ export default function NexusManagement() {
 
         <div className="flex-1 overflow-y-auto p-5">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-            {sentinels.map(sentinel => (
-              <div
-                key={sentinel.id}
-                className={`sys-entity-card min-h-[310px] ${
-                  sentinel.status === 'ACTIVE' ? 'status-active' : 'status-inactive'
-                }`}
-              >
+            {sentinels.map(sentinel => {
+              const isSelected = selectedId === sentinel.id;
+              return (
+                <div
+                  key={sentinel.id}
+                  onClick={() => setSelectedId(isSelected ? null : sentinel.id)}
+                  className={`sys-entity-card min-h-[310px] cursor-pointer ${
+                    isSelected
+                      ? 'selected'
+                      : sentinel.status === 'ACTIVE'
+                      ? 'status-active'
+                      : 'status-inactive'
+                  }`}
+                >
                 {/* Header (Status Beacon + Name & ID + Dropdown Actions) */}
                 <div className="flex items-start justify-between gap-2 min-w-0">
                   <div className="flex flex-col min-w-0">
@@ -401,19 +411,31 @@ export default function NexusManagement() {
                     </span>
                   </div>
 
-                  {/* Actions Dropdown */}
-                  <div className="relative shrink-0">
-                    <button
-                      className="text-text-secondary hover:text-accent p-1 transition-colors rounded hover:bg-white/5 cursor-pointer"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpenMenuId(openMenuId === sentinel.id ? null : sentinel.id);
-                      }}
-                    >
-                      <svg className="w-4.5 h-4.5" fill="currentColor" viewBox="0 0 16 16">
-                        <path d="M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/>
-                      </svg>
-                    </button>
+                  {/* Selection Indicator & Actions Dropdown */}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {isSelected ? (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/20 text-accent font-medium uppercase tracking-wider font-sans leading-none scale-[0.85] origin-right select-none">
+                        {t('bot_mgmt.activeSelection') || 'Selected'}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-text-secondary opacity-40 hover:opacity-100 transition-opacity font-medium font-sans leading-none scale-[0.85] origin-right select-none" title={t('bot_mgmt.clickToManage') || 'Click to manage'}>
+                        {t('bot_mgmt.manage') || 'Manage'}
+                      </span>
+                    )}
+
+                    {/* Actions Dropdown */}
+                    <div className="relative shrink-0">
+                      <button
+                        className="text-text-secondary hover:text-accent p-1 transition-colors rounded hover:bg-white/5 cursor-pointer"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenuId(openMenuId === sentinel.id ? null : sentinel.id);
+                        }}
+                      >
+                        <svg className="w-4.5 h-4.5" fill="currentColor" viewBox="0 0 16 16">
+                          <path d="M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/>
+                        </svg>
+                      </button>
 
                     {openMenuId === sentinel.id && (
                       <>
@@ -495,6 +517,7 @@ export default function NexusManagement() {
                     )}
                   </div>
                 </div>
+              </div>
 
                 <div className="border-t border-border/40 my-0.5"></div>
 
@@ -618,8 +641,9 @@ export default function NexusManagement() {
                     </div>
                   )}
                 </div>
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
 
           {!loading && sentinels.length === 0 && (
@@ -666,348 +690,437 @@ export default function NexusManagement() {
           </>
         }
       >
-        <div className="flex flex-col gap-4">
-          <div>
-            <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_name')}</label>
-            <input
-              data-test="sentinel-name"
-              value={form.name}
-              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              placeholder={t('nexus_mgmt.ph_name')}
-              className="w-full bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
-            />
-          </div>
+        {/* Form Tabs Header */}
+        <div className="flex border-b border-border mb-4">
+          <button
+            type="button"
+            onClick={() => setFormActiveTab('basic')}
+            className={`flex-1 py-2 text-center text-xs font-bold tracking-wider uppercase transition-all border-b-2 cursor-pointer outline-none ${
+              formActiveTab === 'basic'
+                ? 'border-accent text-accent'
+                : 'border-transparent text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            {t('nexus_mgmt.tab_basic') || 'Basic Info'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setFormActiveTab('context')}
+            className={`flex-1 py-2 text-center text-xs font-bold tracking-wider uppercase transition-all border-b-2 cursor-pointer outline-none ${
+              formActiveTab === 'context'
+                ? 'border-accent text-accent'
+                : 'border-transparent text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            {t('nexus_mgmt.tab_context') || 'Context & Prompt'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setFormActiveTab('automation')}
+            className={`flex-1 py-2 text-center text-xs font-bold tracking-wider uppercase transition-all border-b-2 cursor-pointer outline-none ${
+              formActiveTab === 'automation'
+                ? 'border-accent text-accent'
+                : 'border-transparent text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            {t('nexus_mgmt.tab_automation') || 'AI & Action'}
+          </button>
+        </div>
 
-          <div>
-            <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_authority_role')}</label>
-            <input
-              data-test="sentinel-role"
-              value={form.authorityRole}
-              onChange={e => setForm(f => ({ ...f, authorityRole: e.target.value }))}
-              placeholder={t('nexus_mgmt.ph_authority_role')}
-              className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
-            />
-            <div className="mt-1 text-[10px] text-text-secondary">{t('nexus_mgmt.hint_authority_role')}</div>
-          </div>
+        <div className="flex flex-col gap-4 h-[480px] overflow-y-auto pr-1">
+          {formActiveTab === 'basic' && (
+            <>
+              <div>
+                <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_name')}</label>
+                <input
+                  data-test="sentinel-name"
+                  value={form.name}
+                  onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder={t('nexus_mgmt.ph_name')}
+                  className="w-full bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
+                />
+              </div>
 
-          <div>
-            <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_description')}</label>
-            <input
-              value={form.description}
-              onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-              placeholder={t('nexus_mgmt.ph_description')}
-              className="w-full bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
-            />
-          </div>
+              <div>
+                <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_authority_role')}</label>
+                <input
+                  data-test="sentinel-role"
+                  value={form.authorityRole}
+                  onChange={e => setForm(f => ({ ...f, authorityRole: e.target.value }))}
+                  placeholder={t('nexus_mgmt.ph_authority_role')}
+                  className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
+                />
+                <div className="mt-1 text-[10px] text-text-secondary">{t('nexus_mgmt.hint_authority_role')}</div>
+              </div>
 
-          <div className="flex gap-4">
-            <div className="flex-1">
-              <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_track')}</label>
-              <select
-                value={form.track}
-                onChange={e => setForm(f => ({ ...f, track: e.target.value as typeof form.track }))}
-                className="w-full bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
-              >
-                {TRACK_OPTIONS.map(tk => (
-                  <option key={tk} value={tk}>{tk}</option>
-                ))}
-              </select>
-            </div>
+              <div>
+                <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_description')}</label>
+                <input
+                  value={form.description}
+                  onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+                  placeholder={t('nexus_mgmt.ph_description')}
+                  className="w-full bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
+                />
+              </div>
 
-            <div className="flex-1">
-              <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_reachability')}</label>
-              <select
-                value={form.reachability}
-                onChange={e => setForm(f => ({ ...f, reachability: e.target.value, webhookUrl: '' }))}
-                className="w-full bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
-              >
-                {REACHABILITY_OPTIONS.map(r => (
-                  <option key={r} value={r}>{r || '—'}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {form.reachability === 'webhook' && (
-            <div>
-              <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_webhook_url')}</label>
-              <input
-                value={form.webhookUrl}
-                onChange={e => setForm(f => ({ ...f, webhookUrl: e.target.value }))}
-                placeholder="https://your-sentinel.example.com/events"
-                className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
-              />
-              <div className="mt-1 text-[10px] text-text-secondary">{t('nexus_mgmt.hint_webhook_url')}</div>
-            </div>
-          )}
-
-          <div>
-            <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_event_subscriptions')}</label>
-            <textarea
-              data-test="sentinel-subscriptions"
-              value={form.eventSubscriptions}
-              onChange={e => setForm(f => ({ ...f, eventSubscriptions: e.target.value }))}
-              placeholder={'EVENT:WORKFLOW:STATUS:PENDING_REVIEW\nEVENT:ERP:ORDER_PLACED'}
-              rows={3}
-              className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors resize-none"
-            />
-            <div className="mt-1 text-[10px] text-text-secondary">{t('nexus_mgmt.hint_event_subscriptions')}</div>
-            {(() => {
-              const current = new Set(form.eventSubscriptions.split('\n').map(s => s.trim()).filter(Boolean));
-              const suggestions = knownStreams.filter(s => !current.has(s));
-              if (!suggestions.length) return null;
-              return (
-                <div className="mt-2">
-                  <div className="text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexusHub.pick_streams') || 'Known streams · click to add'}</div>
-                  <div className="flex flex-wrap gap-1">
-                    {suggestions.map(s => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => setForm(f => ({ ...f, eventSubscriptions: (f.eventSubscriptions.trim() ? f.eventSubscriptions.trim() + '\n' : '') + s }))}
-                        className="inline-flex items-center gap-1 border border-accent/40 text-accent px-1.5 py-0.5 text-[10px] font-mono hover:bg-accent-dim transition-all"
-                      >
-                        <span className="opacity-50">+</span>{s}
-                      </button>
+              <div className="flex gap-4">
+                <div className="flex-1">
+                  <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_track')}</label>
+                  <select
+                    value={form.track}
+                    onChange={e => setForm(f => ({ ...f, track: e.target.value as typeof form.track }))}
+                    className="w-full bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
+                  >
+                    {TRACK_OPTIONS.map(tk => (
+                      <option key={tk} value={tk}>{tk}</option>
                     ))}
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-
-          {/* ── Context Assembly (context.md) ───────────────────────────────── */}
-          <div className="border border-border rounded-md bg-white/[0.02]">
-            <label className="flex items-center gap-2 px-3 py-2.5 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                data-test="ctx-enable"
-                checked={ctxEnabled}
-                onChange={e => setCtxEnabled(e.target.checked)}
-                className="accent-accent w-3.5 h-3.5"
-              />
-              <span className="text-[11px] uppercase tracking-wider text-accent font-medium">{t('nexus_mgmt.ctx_assembly_title')}</span>
-              <span className="text-[10px] text-text-secondary normal-case tracking-normal">
-                {t('nexus_mgmt.ctx_assembly_subtitle')}
-              </span>
-            </label>
-
-            {ctxEnabled && (
-              <div className="flex flex-col gap-4 px-3 pb-4 pt-1 border-t border-border">
-                {/* Unmanaged context keys (autorun / emit — editors are a v2 item) */}
-                {Object.keys(ctxPassthrough).length > 0 && (
-                  <div data-test="ctx-passthrough-note" className="text-[11px] text-text-secondary border border-warning/30 bg-warning/5 rounded-md px-3 py-2 leading-relaxed">
-                    {t('nexus_mgmt.ctx_passthrough_prefix')}
-                    <code className="text-warning font-mono mx-1">{Object.keys(ctxPassthrough).join(', ')}</code>
-                    {t('nexus_mgmt.ctx_passthrough_suffix')}
-                  </div>
-                )}
-
-                {/* Trigger guard */}
-                <div>
-                  <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_trigger_guard')} <span className="normal-case tracking-normal opacity-60">{t('nexus_mgmt.hint_jsonlogic_optional')}</span></label>
-                  <textarea
-                    value={ctxGuard}
-                    onChange={e => setCtxGuard(e.target.value)}
-                    placeholder={'{ "==": [ { "var": "event.status" }, "PENDING_REVIEW" ] }'}
-                    rows={2}
-                    className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors resize-y"
-                  />
-                  <div className="mt-1 text-[10px] text-text-secondary">{t('nexus_mgmt.hint_trigger_guard')} <code className="text-accent">{'{{event.*}}'}</code>.</div>
+                  </select>
                 </div>
 
-                {/* Data fetchers */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-[11px] uppercase tracking-wider text-text-secondary">{t('nexus_mgmt.label_data_fetchers')}</label>
-                    <button
-                      type="button"
-                      onClick={addFetcher}
-                      className="bg-accent-dim border border-accent/40 text-accent rounded px-2 py-0.5 text-[10px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all"
-                    >
-                      {t('nexus_mgmt.add_fetcher')}
-                    </button>
-                  </div>
-
-                  {ctxFetchers.length === 0 && (
-                    <div className="text-[10px] text-text-secondary opacity-60 border border-dashed border-border rounded-md px-3 py-3 text-center">
-                      {t('nexus_mgmt.no_fetchers', { suffixes: READ_SUFFIXES.join('/') })}
-                    </div>
-                  )}
-
-                  <div className="flex flex-col gap-3">
-                    {ctxFetchers.map((f, i) => (
-                      <div key={i} className="border border-border rounded-md p-3 bg-bg-primary/40 flex flex-col gap-2.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] uppercase tracking-wider text-text-secondary">{t('nexus_mgmt.fetcher_n', { n: i + 1 })}</span>
-                          <button
-                            type="button"
-                            onClick={() => removeFetcher(i)}
-                            className="text-error/70 hover:text-error text-[11px] leading-none"
-                            title={t('nexus_mgmt.remove_fetcher_tooltip')}
-                          >
-                            {t('nexus_mgmt.remove')}
-                          </button>
-                        </div>
-
-                        <div className="flex gap-2">
-                          <input
-                            value={f.key}
-                            onChange={e => updateFetcher(i, { key: e.target.value })}
-                            placeholder={t('nexus_mgmt.ph_fetcher_key')}
-                            className="flex-1 font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[12px] text-text-primary outline-none focus:border-accent transition-colors"
-                          />
-                          <input
-                            value={f.method}
-                            onChange={e => updateFetcher(i, { method: e.target.value })}
-                            placeholder={t('nexus_mgmt.ph_fetcher_method')}
-                            className="flex-[2] font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[12px] text-text-primary outline-none focus:border-accent transition-colors"
-                          />
-                        </div>
-
-                        <input
-                          value={f.params}
-                          onChange={e => updateFetcher(i, { params: e.target.value })}
-                          placeholder={'params (JSON) — e.g. { "id": "{{event.workflow_id}}" }'}
-                          className="w-full font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[12px] text-text-primary outline-none focus:border-accent transition-colors"
-                        />
-
-                        <div className="flex gap-2">
-                          <input
-                            value={f.result_path}
-                            onChange={e => updateFetcher(i, { result_path: e.target.value })}
-                            placeholder={t('nexus_mgmt.ph_fetcher_result_path')}
-                            className="flex-1 font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent transition-colors"
-                          />
-                          <input
-                            value={f.depends_on}
-                            onChange={e => updateFetcher(i, { depends_on: e.target.value })}
-                            placeholder={t('nexus_mgmt.ph_fetcher_depends_on')}
-                            className="flex-1 font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent transition-colors"
-                          />
-                          <select
-                            value={f.on_error}
-                            onChange={e => updateFetcher(i, { on_error: e.target.value as FetcherRow['on_error'] })}
-                            className="bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent transition-colors"
-                            title={t('nexus_mgmt.on_error_policy_tooltip')}
-                          >
-                            {ON_ERROR_OPTIONS.map(o => <option key={o} value={o}>on_error: {o}</option>)}
-                          </select>
-                        </div>
-
-                        {f.on_error === 'fallback' && (
-                          <input
-                            value={f.fallback}
-                            onChange={e => updateFetcher(i, { fallback: e.target.value })}
-                            placeholder={'fallback (JSON) — e.g. { "name": "unknown" }'}
-                            className="w-full font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent transition-colors"
-                          />
-                        )}
-
-                        <input
-                          value={f.guard}
-                          onChange={e => updateFetcher(i, { guard: e.target.value })}
-                          placeholder={t('nexus_mgmt.ph_fetcher_guard')}
-                          className="w-full font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent transition-colors"
-                        />
-                      </div>
+                <div className="flex-1">
+                  <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_reachability')}</label>
+                  <select
+                    value={form.reachability}
+                    onChange={e => setForm(f => ({ ...f, reachability: e.target.value, webhookUrl: '' }))}
+                    className="w-full bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
+                  >
+                    {REACHABILITY_OPTIONS.map(r => (
+                      <option key={r} value={r}>{r || '—'}</option>
                     ))}
-                  </div>
-                </div>
-
-                {/* System prompt template */}
-                <div>
-                  <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_system_prompt')}</label>
-                  <textarea
-                    value={ctxPrompt}
-                    onChange={e => setCtxPrompt(e.target.value)}
-                    placeholder={'You are a security auditor.\n\nWorkflow under review:\n{{fetch.workflow}}\n\nSubmitter: {{fetch.submitter.name}}'}
-                    rows={4}
-                    className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors resize-y"
-                  />
-                  <div className="mt-1 text-[10px] text-text-secondary">
-                    {t('nexus_mgmt.variables_label')} <code className="text-accent">{'{{event.*}}'}</code> <code className="text-accent">{'{{fetch.<key>.*}}'}</code> <code className="text-accent">{'{{sentinel.*}}'}</code>. {t('nexus_mgmt.rendered_before_delivery')}
-                  </div>
-                </div>
-
-                {/* Autorun — AI decision via agent.decide */}
-                <div className="border-t border-border pt-3" data-test="ctx-autorun">
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="checkbox" checked={ctxAutorunEnabled} onChange={e => setCtxAutorunEnabled(e.target.checked)} className="w-3.5 h-3.5 cursor-pointer accent-[var(--color-accent)]" />
-                    <span className="text-[11px] uppercase tracking-wider text-text-secondary font-semibold">{t('nexus_mgmt.label_autorun')}</span>
-                    <span className="text-[10px] text-text-secondary opacity-60 normal-case tracking-normal">{t('nexus_mgmt.autorun_subtitle')}</span>
-                  </label>
-                  {ctxAutorunEnabled && (
-                    <div className="mt-3 flex flex-col gap-3 pl-5">
-                      <div className="flex gap-3">
-                        <div className="flex-[2]">
-                          <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_choices')} <span className="normal-case tracking-normal opacity-60">{t('nexus_mgmt.hint_choices')}</span></label>
-                          <input value={ctxAutorunChoices} onChange={e => setCtxAutorunChoices(e.target.value)} placeholder={t('nexus_mgmt.ph_choices')}
-                            className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors" />
-                        </div>
-                        <div className="flex-1">
-                          <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_confidence')}</label>
-                          <input value={ctxAutorunThreshold} onChange={e => setCtxAutorunThreshold(e.target.value)} placeholder="0.7"
-                            className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors" />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_output_schema')} <span className="normal-case tracking-normal opacity-60">{t('nexus_mgmt.hint_output_schema')}</span></label>
-                        <textarea value={ctxAutorunSchema} onChange={e => setCtxAutorunSchema(e.target.value)} placeholder={'{ "severity": "number 1-5" }'} rows={2}
-                          className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors resize-y" />
-                      </div>
-                      <div className="text-[10px] text-text-secondary">
-                        {t('nexus_mgmt.autorun_help_1')} <code className="text-accent">agent.decide</code> {t('nexus_mgmt.autorun_help_2')} <code className="text-accent">{'{{output.decision}}'}</code> / <code className="text-accent">{'{{output.confidence}}'}</code> / <code className="text-accent">{'{{output.escalate}}'}</code>.
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Emit — declarative action: publish a decision event */}
-                <div className="border-t border-border pt-3" data-test="ctx-emit">
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="checkbox" checked={ctxEmitEnabled} onChange={e => setCtxEmitEnabled(e.target.checked)} className="w-3.5 h-3.5 cursor-pointer accent-[var(--color-accent)]" />
-                    <span className="text-[11px] uppercase tracking-wider text-text-secondary font-semibold">{t('nexus_mgmt.label_emit_event')}</span>
-                    <span className="text-[10px] text-text-secondary opacity-60 normal-case tracking-normal">{t('nexus_mgmt.emit_subtitle')}</span>
-                  </label>
-                  {ctxEmitEnabled && (
-                    <div className="mt-3 flex flex-col gap-3 pl-5">
-                      <div className="flex gap-3">
-                        <div className="flex-[2]">
-                          <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_stream')}</label>
-                          <input value={ctxEmitStream} onChange={e => setCtxEmitStream(e.target.value)} placeholder="EVENT:SENTINEL:RISK-REVIEW"
-                            className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors" />
-                        </div>
-                        <div className="flex-[1.5]">
-                          <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_type')}</label>
-                          <input value={ctxEmitType} onChange={e => setCtxEmitType(e.target.value)} placeholder="sentinel.risk.assessed"
-                            className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors" />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_emit_when')} <span className="normal-case tracking-normal opacity-60">{t('nexus_mgmt.hint_jsonlogic_optional')}</span></label>
-                        <textarea value={ctxEmitWhen} onChange={e => setCtxEmitWhen(e.target.value)} placeholder={'{ "==": [ { "var": "output.decision" }, "approve" ] }'} rows={2}
-                          className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors resize-y" />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_payload_template')} <span className="normal-case tracking-normal opacity-60">{t('nexus_mgmt.hint_json_optional')}</span></label>
-                        <textarea value={ctxEmitPayload} onChange={e => setCtxEmitPayload(e.target.value)} placeholder={'{ "decision": "{{output.decision}}", "sourceId": "{{event.payload.sourceId}}" }'} rows={3}
-                          className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors resize-y" />
-                      </div>
-                      <div className="text-[10px] text-text-secondary">
-                        {t('nexus_mgmt.emit_help_1')} <code className="text-accent">{'{{event.*}}'}</code> <code className="text-accent">{'{{fetch.*}}'}</code> <code className="text-accent">{'{{output.*}}'}</code>. {t('nexus_mgmt.emit_help_2')} <code className="text-accent">actor: sentinel:{'{id}'}</code> {t('nexus_mgmt.emit_help_3')}
-                      </div>
-                    </div>
-                  )}
+                  </select>
                 </div>
               </div>
-            )}
-          </div>
 
-          {needsBroadcast(form.reachability) && (
-            <div className="text-[11px] text-text-secondary border border-border rounded-md p-3 bg-white/[0.02] leading-relaxed">
-              {t('nexus_mgmt.broadcast_hint_prefix')} <strong>{t('nexus_mgmt.broadcast')}</strong> {t('nexus_mgmt.broadcast_hint_suffix')}
-            </div>
+              {form.reachability === 'webhook' && (
+                <div>
+                  <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_webhook_url')}</label>
+                  <input
+                    value={form.webhookUrl}
+                    onChange={e => setForm(f => ({ ...f, webhookUrl: e.target.value }))}
+                    placeholder="https://your-sentinel.example.com/events"
+                    className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[13px] text-text-primary outline-none focus:border-accent transition-colors"
+                  />
+                  <div className="mt-1 text-[10px] text-text-secondary">{t('nexus_mgmt.hint_webhook_url')}</div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_event_subscriptions')}</label>
+                <textarea
+                  data-test="sentinel-subscriptions"
+                  value={form.eventSubscriptions}
+                  onChange={e => setForm(f => ({ ...f, eventSubscriptions: e.target.value }))}
+                  placeholder={'EVENT:WORKFLOW:STATUS:PENDING_REVIEW\nEVENT:ERP:ORDER_PLACED'}
+                  rows={3}
+                  className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors resize-none"
+                />
+                <div className="mt-1 text-[10px] text-text-secondary">{t('nexus_mgmt.hint_event_subscriptions')}</div>
+                {(() => {
+                  const current = new Set(form.eventSubscriptions.split('\n').map(s => s.trim()).filter(Boolean));
+                  const suggestions = knownStreams.filter(s => !current.has(s));
+                  if (!suggestions.length) return null;
+                  return (
+                    <div className="mt-2">
+                      <div className="text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexusHub.pick_streams') || 'Known streams · click to add'}</div>
+                      <div className="flex flex-wrap gap-1">
+                        {suggestions.map(s => (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => setForm(f => ({ ...f, eventSubscriptions: (f.eventSubscriptions.trim() ? f.eventSubscriptions.trim() + '\n' : '') + s }))}
+                            className="inline-flex items-center gap-1 border border-accent/40 text-accent px-1.5 py-0.5 text-[10px] font-mono hover:bg-accent-dim transition-all"
+                          >
+                            <span className="opacity-50">+</span>{s}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {needsBroadcast(form.reachability) && (
+                <div className="text-[11px] text-text-secondary border border-border rounded-md p-3 bg-white/[0.02] leading-relaxed">
+                  {t('nexus_mgmt.broadcast_hint_prefix')} <strong>{t('nexus_mgmt.broadcast')}</strong> {t('nexus_mgmt.broadcast_hint_suffix')}
+                </div>
+              )}
+            </>
+          )}
+
+          {formActiveTab === 'context' && (
+            <>
+              {/* Context Assembly Toggle & Info */}
+              <div className="border border-border rounded-md bg-white/[0.02]">
+                <label className="flex items-center gap-2 px-3 py-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    data-test="ctx-enable"
+                    checked={ctxEnabled}
+                    onChange={e => setCtxEnabled(e.target.checked)}
+                    className="accent-accent w-3.5 h-3.5"
+                  />
+                  <span className="text-[11px] uppercase tracking-wider text-accent font-medium">{t('nexus_mgmt.ctx_assembly_title')}</span>
+                  <span className="text-[10px] text-text-secondary normal-case tracking-normal">
+                    {t('nexus_mgmt.ctx_assembly_subtitle')}
+                  </span>
+                </label>
+
+                {ctxEnabled && (
+                  <div className="flex flex-col gap-4 px-3 pb-4 pt-1 border-t border-border">
+                    {/* Unmanaged context keys */}
+                    {Object.keys(ctxPassthrough).length > 0 && (
+                      <div data-test="ctx-passthrough-note" className="text-[11px] text-text-secondary border border-warning/30 bg-warning/5 rounded-md px-3 py-2.5 leading-relaxed">
+                        {t('nexus_mgmt.ctx_passthrough_prefix')}
+                        <code className="text-warning font-mono mx-1">{Object.keys(ctxPassthrough).join(', ')}</code>
+                        {t('nexus_mgmt.ctx_passthrough_suffix')}
+                      </div>
+                    )}
+
+                    {/* Trigger guard */}
+                    <div>
+                      <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_trigger_guard')} <span className="normal-case tracking-normal opacity-60">{t('nexus_mgmt.hint_jsonlogic_optional')}</span></label>
+                      <textarea
+                        value={ctxGuard}
+                        onChange={e => setCtxGuard(e.target.value)}
+                        placeholder={'{ "==": [ { "var": "event.status" }, "PENDING_REVIEW" ] }'}
+                        rows={2}
+                        className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors resize-y"
+                      />
+                      <div className="mt-1 text-[10px] text-text-secondary">{t('nexus_mgmt.hint_trigger_guard')} <code className="text-accent">{'{{event.*}}'}</code>.</div>
+                    </div>
+
+                    {/* Data fetchers */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-[11px] uppercase tracking-wider text-text-secondary">{t('nexus_mgmt.label_data_fetchers')}</label>
+                        <button
+                          type="button"
+                          onClick={addFetcher}
+                          className="bg-accent-dim border border-accent/40 text-accent rounded px-2 py-0.5 text-[10px] font-medium hover:bg-[#1f6feb] hover:text-white transition-all"
+                        >
+                          {t('nexus_mgmt.add_fetcher')}
+                        </button>
+                      </div>
+
+                      {ctxFetchers.length === 0 && (
+                        <div className="text-[10px] text-text-secondary opacity-60 border border-dashed border-border rounded-md px-3 py-3 text-center">
+                          {t('nexus_mgmt.no_fetchers', { suffixes: READ_SUFFIXES.join('/') })}
+                        </div>
+                      )}
+
+                      <div className="flex flex-col gap-3">
+                        {ctxFetchers.map((f, i) => (
+                          <div key={i} className="border border-border rounded-md p-3 bg-bg-primary/40 flex flex-col gap-2.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] uppercase tracking-wider text-text-secondary">{t('nexus_mgmt.fetcher_n', { n: i + 1 })}</span>
+                              <button
+                                type="button"
+                                onClick={() => removeFetcher(i)}
+                                className="text-error/70 hover:text-error text-[11px] leading-none"
+                                title={t('nexus_mgmt.remove_fetcher_tooltip')}
+                              >
+                                {t('nexus_mgmt.remove')}
+                              </button>
+                            </div>
+
+                            <div className="flex gap-2">
+                              <input
+                                value={f.key}
+                                onChange={e => updateFetcher(i, { key: e.target.value })}
+                                placeholder={t('nexus_mgmt.ph_fetcher_key')}
+                                className="flex-1 font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[12px] text-text-primary outline-none focus:border-accent transition-colors"
+                              />
+                              <input
+                                value={f.method}
+                                onChange={e => updateFetcher(i, { method: e.target.value })}
+                                placeholder={t('nexus_mgmt.ph_fetcher_method')}
+                                className="flex-[2] font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[12px] text-text-primary outline-none focus:border-accent transition-colors"
+                              />
+                            </div>
+
+                            <input
+                              value={f.params}
+                              onChange={e => updateFetcher(i, { params: e.target.value })}
+                              placeholder={'params (JSON) — e.g. { "id": "{{event.workflow_id}}" }'}
+                              className="w-full font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[12px] text-text-primary outline-none focus:border-accent transition-colors"
+                            />
+
+                            <div className="flex gap-2">
+                              <input
+                                value={f.result_path}
+                                onChange={e => updateFetcher(i, { result_path: e.target.value })}
+                                placeholder={t('nexus_mgmt.ph_fetcher_result_path')}
+                                className="flex-1 font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent transition-colors"
+                              />
+                              <input
+                                value={f.depends_on}
+                                onChange={e => updateFetcher(i, { depends_on: e.target.value })}
+                                placeholder={t('nexus_mgmt.ph_fetcher_depends_on')}
+                                className="flex-1 font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent transition-colors"
+                              />
+                              <select
+                                value={f.on_error}
+                                onChange={e => updateFetcher(i, { on_error: e.target.value as FetcherRow['on_error'] })}
+                                className="bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent transition-colors"
+                                title={t('nexus_mgmt.on_error_policy_tooltip')}
+                              >
+                                {ON_ERROR_OPTIONS.map(o => <option key={o} value={o}>on_error: {o}</option>)}
+                              </select>
+                            </div>
+
+                            {f.on_error === 'fallback' && (
+                              <input
+                                value={f.fallback}
+                                onChange={e => updateFetcher(i, { fallback: e.target.value })}
+                                placeholder={'fallback (JSON) — e.g. { "name": "unknown" }'}
+                                className="w-full font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent transition-colors"
+                              />
+                            )}
+
+                            <input
+                              value={f.guard}
+                              onChange={e => updateFetcher(i, { guard: e.target.value })}
+                              placeholder={t('nexus_mgmt.ph_fetcher_guard')}
+                              className="w-full font-mono bg-bg-primary border border-border rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent transition-colors"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* System prompt template */}
+                    <div>
+                      <label className="block text-[11px] uppercase tracking-wider text-text-secondary mb-2">{t('nexus_mgmt.label_system_prompt')}</label>
+                      <textarea
+                        value={ctxPrompt}
+                        onChange={e => setCtxPrompt(e.target.value)}
+                        placeholder={'You are a security auditor.\n\nWorkflow under review:\n{{fetch.workflow}}\n\nSubmitter: {{fetch.submitter.name}}'}
+                        rows={4}
+                        className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors resize-y"
+                      />
+                      <div className="mt-1 text-[10px] text-text-secondary">
+                        {t('nexus_mgmt.variables_label')} <code className="text-accent">{'{{event.*}}'}</code> <code className="text-accent">{'{{fetch.<key>.*}}'}</code> <code className="text-accent">{'{{sentinel.*}}'}</code>. {t('nexus_mgmt.rendered_before_delivery')}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {!ctxEnabled && (
+                <div className="flex flex-col items-center justify-center p-8 border border-dashed border-border rounded-md bg-white/[0.01] text-center my-4">
+                  <span className="text-2xl mb-2">👁️‍🗨️</span>
+                  <div className="text-[12px] font-medium text-text-primary mb-1">
+                    {t('nexus_mgmt.ctx_assembly_disabled_title') || 'Context Assembly is Disabled'}
+                  </div>
+                  <div className="text-[11px] text-text-secondary max-w-sm mb-4 leading-relaxed">
+                    {t('nexus_mgmt.ctx_assembly_disabled_hint') || 'Enable Context Assembly to inject custom JSON variables, execute trigger filters, and define system prompt templates.'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCtxEnabled(true)}
+                    className="bg-accent text-white hover:bg-accent-hover px-3 py-1.5 rounded text-xs font-semibold cursor-pointer transition-all border-none"
+                  >
+                    {t('nexus_mgmt.ctx_assembly_enable_btn') || 'Enable Context Assembly'}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {formActiveTab === 'automation' && (
+            <>
+              {!ctxEnabled && (
+                <div className="text-[11px] border border-warning/30 bg-warning/5 rounded-md px-3 py-2.5 text-warning leading-relaxed flex items-start gap-2 mb-2">
+                  <span className="text-sm leading-none mt-0.5">⚠️</span>
+                  <div>
+                    {t('nexus_mgmt.automation_disabled_warning') || "Context Assembly is currently disabled. Enable it under 'Context & Prompt' tab to activate AI and Action workflows."}
+                  </div>
+                </div>
+              )}
+
+              {/* Autorun — AI decision via agent.decide */}
+              <div className={`border border-border rounded-md bg-white/[0.02] p-3 ${!ctxEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={ctxAutorunEnabled}
+                    onChange={e => setCtxAutorunEnabled(e.target.checked)}
+                    className="w-3.5 h-3.5 cursor-pointer accent-[var(--color-accent)]"
+                    disabled={!ctxEnabled}
+                  />
+                  <span className="text-[11px] uppercase tracking-wider text-text-secondary font-semibold">{t('nexus_mgmt.label_autorun')}</span>
+                  <span className="text-[10px] text-text-secondary opacity-60 normal-case tracking-normal">{t('nexus_mgmt.autorun_subtitle')}</span>
+                </label>
+                {ctxAutorunEnabled && ctxEnabled && (
+                  <div className="mt-3 flex flex-col gap-3 pl-5">
+                    <div className="flex gap-3">
+                      <div className="flex-[2]">
+                        <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_choices')} <span className="normal-case tracking-normal opacity-60">{t('nexus_mgmt.hint_choices')}</span></label>
+                        <input value={ctxAutorunChoices} onChange={e => setCtxAutorunChoices(e.target.value)} placeholder={t('nexus_mgmt.ph_choices')}
+                          className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors" />
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_confidence')}</label>
+                        <input value={ctxAutorunThreshold} onChange={e => setCtxAutorunThreshold(e.target.value)} placeholder="0.7"
+                          className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_output_schema')} <span className="normal-case tracking-normal opacity-60">{t('nexus_mgmt.hint_output_schema')}</span></label>
+                      <textarea value={ctxAutorunSchema} onChange={e => setCtxAutorunSchema(e.target.value)} placeholder={'{ "severity": "number 1-5" }'} rows={2}
+                        className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors resize-y" />
+                    </div>
+                    <div className="text-[10px] text-text-secondary">
+                      {t('nexus_mgmt.autorun_help_1')} <code className="text-accent">agent.decide</code> {t('nexus_mgmt.autorun_help_2')} <code className="text-accent">{'{{output.decision}}'}</code> / <code className="text-accent">{'{{output.confidence}}'}</code> / <code className="text-accent">{'{{output.escalate}}'}</code>.
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Emit — declarative action: publish a decision event */}
+              <div className={`border border-border rounded-md bg-white/[0.02] p-3 mt-4 ${!ctxEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={ctxEmitEnabled}
+                    onChange={e => setCtxEmitEnabled(e.target.checked)}
+                    className="w-3.5 h-3.5 cursor-pointer accent-[var(--color-accent)]"
+                    disabled={!ctxEnabled}
+                  />
+                  <span className="text-[11px] uppercase tracking-wider text-text-secondary font-semibold">{t('nexus_mgmt.label_emit_event')}</span>
+                  <span className="text-[10px] text-text-secondary opacity-60 normal-case tracking-normal">{t('nexus_mgmt.emit_subtitle')}</span>
+                </label>
+                {ctxEmitEnabled && ctxEnabled && (
+                  <div className="mt-3 flex flex-col gap-3 pl-5">
+                    <div className="flex gap-3">
+                      <div className="flex-[2]">
+                        <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_stream')}</label>
+                        <input value={ctxEmitStream} onChange={e => setCtxEmitStream(e.target.value)} placeholder="EVENT:SENTINEL:RISK-REVIEW"
+                          className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors" />
+                      </div>
+                      <div className="flex-[1.5]">
+                        <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_type')}</label>
+                        <input value={ctxEmitType} onChange={e => setCtxEmitType(e.target.value)} placeholder="sentinel.risk.assessed"
+                          className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_emit_when')} <span className="normal-case tracking-normal opacity-60">{t('nexus_mgmt.hint_jsonlogic_optional')}</span></label>
+                      <textarea value={ctxEmitWhen} onChange={e => setCtxEmitWhen(e.target.value)} placeholder={'{ "==": [ { "var": "output.decision" }, "approve" ] }'} rows={2}
+                        className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors resize-y" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1">{t('nexus_mgmt.label_payload_template')} <span className="normal-case tracking-normal opacity-60">{t('nexus_mgmt.hint_json_optional')}</span></label>
+                      <textarea value={ctxEmitPayload} onChange={e => setCtxEmitPayload(e.target.value)} placeholder={'{ "decision": "{{output.decision}}", "sourceId": "{{event.payload.sourceId}}" }'} rows={3}
+                        className="w-full font-mono bg-bg-primary border border-border rounded-md px-3 py-2 text-[12px] text-text-primary outline-none focus:border-accent transition-colors resize-y" />
+                    </div>
+                    <div className="text-[10px] text-text-secondary">
+                      {t('nexus_mgmt.emit_help_1')} <code className="text-accent">{'{{event.*}}'}</code> <code className="text-accent">{'{{fetch.*}}'}</code> <code className="text-accent">{'{{output.*}}'}</code>. {t('nexus_mgmt.emit_help_2')} <code className="text-accent">actor: sentinel:{'{id}'}</code> {t('nexus_mgmt.emit_help_3')}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </div>
       </Modal>

@@ -4,7 +4,13 @@
 // Surface that linkage here so the profile view answers "who reacts to my transitions?"
 // without hopping to the system portal.
 
-export interface WatcherSentinel { id: string; name: string; status?: string; pinned: boolean }
+export interface WatcherSentinel {
+  id: string;
+  name: string;
+  status?: string;
+  pinned: boolean;
+  targetState?: string | null;
+}
 
 // Conservative JsonLogic walk: find { '==': [ {var:'event.payload.profileId'}, '<id>' ] }
 // anywhere in the guard (either operand order). Anything fancier than an equality pin
@@ -28,12 +34,47 @@ function extractProfilePin(node: unknown): string | null {
   return null;
 }
 
+function extractToState(node: unknown): string | null {
+  if (!node || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const found = extractToState(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  for (const [op, args] of Object.entries(node as Record<string, unknown>)) {
+    if (op === '==' && Array.isArray(args) && args.length === 2) {
+      const [a, b] = args as any[];
+      const isStateVar = (x: any) => x && typeof x === 'object' && x.var === 'event.payload.toState';
+      if (isStateVar(a) && typeof b === 'string') return b;
+      if (isStateVar(b) && typeof a === 'string') return a;
+    }
+    const found = extractToState(args);
+    if (found) return found;
+  }
+  return null;
+}
+
+export function extractTargetState(sentinel: any): string | null {
+  if (!sentinel) return null;
+  const inGuard = extractToState(sentinel.context?.guard);
+  if (inGuard) return inGuard;
+  return extractToState(sentinel.context?.emit?.emit_when);
+}
+
 export function watchersFor(profileId: string, sentinels: any[]): WatcherSentinel[] {
   return sentinels
     .filter(s => (s.eventSubscriptions || []).some((k: unknown) => String(k).startsWith('EVENT:FULFILLMENT')))
     .map(s => ({ s, pin: extractProfilePin(s.context?.guard) }))
     .filter(({ pin }) => pin === null || pin === profileId)
-    .map(({ s, pin }) => ({ id: s.id, name: s.name, status: s.status, pinned: pin === profileId }));
+    .map(({ s, pin }) => ({
+      id: s.id,
+      name: s.name,
+      status: s.status,
+      pinned: pin === profileId,
+      targetState: extractTargetState(s)
+    }));
 }
 
 export function formatDate(ts?: number) {

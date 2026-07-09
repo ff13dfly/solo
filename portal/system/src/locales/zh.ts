@@ -725,6 +725,13 @@ export default {
     "err_load_log": "加载日志失败",
   },
   nexus_mgmt: {
+    "tab_basic": "基础配置",
+    "tab_context": "上下文及提示词",
+    "tab_automation": "AI与动作",
+    "ctx_assembly_disabled_title": "上下文装配已禁用",
+    "ctx_assembly_disabled_hint": "启用上下文装配以注入自定义 JSON 变量、执行触发器过滤器并定义系统提示词模板。",
+    "ctx_assembly_enable_btn": "启用上下文装配",
+    "automation_disabled_warning": "当前已禁用上下文装配。请在“上下文及提示词”标签页中启用它以激活 AI 和动作工作流。",
     "activity_tooltip": "已触发 {fired} · guard 跳过 {skipped} · 失败 {failed}",
     "add_fetcher": "+ 添加取数器",
     "autorun_help_1": "反向闸门：模型只能在列出的选项中挑选 / 填充 schema 值——它从不直接指定动作。需要 bot permit 中具备",

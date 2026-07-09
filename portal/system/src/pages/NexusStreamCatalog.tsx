@@ -44,6 +44,7 @@ export default function NexusStreamCatalog() {
   const [rows, setRows] = useState<StreamRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -131,47 +132,67 @@ export default function NexusStreamCatalog() {
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {rows.map(r => (
-            <div key={r.key} className="border border-border bg-bg-secondary/20 p-4 rounded-lg flex flex-col justify-between hover:border-accent/40 transition-colors shadow-sm">
-              <div>
-                {/* stream key + live badge */}
-                <div className="flex items-start justify-between gap-3 mb-2.5">
-                  <code className="text-xs text-accent font-mono break-all font-bold">{r.key}</code>
-                  {r.live
-                    ? <span className="text-[10px] text-success border border-success/30 bg-success/5 px-1.5 py-0.5 shrink-0 font-mono rounded">
-                        {r.live.length} {t('nexus_catalog.live') || 'msgs'}
-                      </span>
-                    : <span className="text-[10px] text-text-secondary border border-border bg-white/[0.02] px-1.5 py-0.5 shrink-0 font-mono rounded">idle</span>}
-                </div>
-
-                {r.live?.lastAt && (
-                  <div className="text-[10px] text-text-secondary mb-3 font-mono">
-                    Last: {formatDate(r.live.lastAt)}
-                  </div>
-                )}
-
-                {/* producers / consumers list */}
-                <div className="flex flex-col gap-3 text-[11px] mt-2">
-                  <div>
-                    <div className="text-text-secondary uppercase tracking-wider text-[9px] font-bold mb-1.5">{t('nexus_catalog.producers') || 'Producers'}</div>
-                    <div className="flex flex-wrap gap-1 items-center">
-                      {r.producers.length
-                        ? r.producers.map(chip)
-                        : <span className="text-text-secondary opacity-60 text-[10px] italic">{t('nexus_catalog.no_producer') || 'External / Ingress'}</span>}
+          {rows.map(r => {
+            const isSelected = selectedId === r.key;
+            return (
+              <div
+                key={r.key}
+                onClick={() => setSelectedId(isSelected ? null : r.key)}
+                className={`sys-entity-card cursor-pointer justify-between ${
+                  isSelected ? 'selected' : ''
+                }`}
+              >
+                <div>
+                  {/* stream key + live badge */}
+                  <div className="flex items-start justify-between gap-3 mb-2.5">
+                    <code className="text-xs text-accent font-mono break-all font-bold">{r.key}</code>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {isSelected ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/20 text-accent font-medium uppercase tracking-wider font-sans leading-none scale-[0.85] origin-right select-none">
+                          {t('bot_mgmt.activeSelection') || 'Selected'}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-text-secondary opacity-40 hover:opacity-100 transition-opacity font-medium font-sans leading-none scale-[0.85] origin-right select-none" title={t('bot_mgmt.clickToManage') || 'Click to manage'}>
+                          {t('bot_mgmt.manage') || 'Manage'}
+                        </span>
+                      )}
+                      {r.live
+                        ? <span className="text-[10px] text-success border border-success/30 bg-success/5 px-1.5 py-0.5 shrink-0 font-mono rounded">
+                            {r.live.length} {t('nexus_catalog.live') || 'msgs'}
+                          </span>
+                        : <span className="text-[10px] text-text-secondary border border-border bg-white/[0.02] px-1.5 py-0.5 shrink-0 font-mono rounded">idle</span>}
                     </div>
                   </div>
-                  <div>
-                    <div className="text-text-secondary uppercase tracking-wider text-[9px] font-bold mb-1.5">{t('nexus_catalog.consumers') || 'Consumers'}</div>
-                    <div className="flex flex-wrap gap-1 items-center">
-                      {r.consumers.length
-                        ? r.consumers.map(chip)
-                        : <span className="text-text-secondary opacity-60 text-[10px] italic">{t('nexus_catalog.no_consumer') || 'no consumer'}</span>}
+
+                  {r.live?.lastAt && (
+                    <div className="text-[10px] text-text-secondary mb-3 font-mono">
+                      Last: {formatDate(r.live.lastAt)}
+                    </div>
+                  )}
+
+                  {/* producers / consumers list */}
+                  <div className="flex flex-col gap-3 text-[11px] mt-2">
+                    <div>
+                      <div className="text-text-secondary uppercase tracking-wider text-[9px] font-bold mb-1.5">{t('nexus_catalog.producers') || 'Producers'}</div>
+                      <div className="flex flex-wrap gap-1 items-center">
+                        {r.producers.length
+                          ? r.producers.map(chip)
+                          : <span className="text-text-secondary opacity-60 text-[10px] italic">{t('nexus_catalog.no_producer') || 'External / Ingress'}</span>}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-text-secondary uppercase tracking-wider text-[9px] font-bold mb-1.5">{t('nexus_catalog.consumers') || 'Consumers'}</div>
+                      <div className="flex flex-wrap gap-1 items-center">
+                        {r.consumers.length
+                          ? r.consumers.map(chip)
+                          : <span className="text-text-secondary opacity-60 text-[10px] italic">{t('nexus_catalog.no_consumer') || 'no consumer'}</span>}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
