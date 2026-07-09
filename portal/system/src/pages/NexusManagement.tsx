@@ -366,14 +366,20 @@ export default function NexusManagement() {
       <div className="flex-1 overflow-hidden flex flex-col">
         {error && <div className="p-4 text-error text-[13px]">{t('nexus_mgmt.error_prefix')}: {error}</div>}
 
-        <div className="flex-1 overflow-y-auto p-5">
+        <div
+          className="flex-1 overflow-y-auto p-5"
+          onClick={() => setSelectedId(null)}
+        >
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
             {sentinels.map(sentinel => {
               const isSelected = selectedId === sentinel.id;
               return (
                 <div
                   key={sentinel.id}
-                  onClick={() => setSelectedId(isSelected ? null : sentinel.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedId(isSelected ? null : sentinel.id);
+                  }}
                   className={`sys-entity-card min-h-[310px] cursor-pointer ${
                     isSelected
                       ? 'selected'
@@ -429,6 +435,7 @@ export default function NexusManagement() {
                         className="text-text-secondary hover:text-accent p-1 transition-colors rounded hover:bg-white/5 cursor-pointer"
                         onClick={(e) => {
                           e.stopPropagation();
+                          setSelectedId(sentinel.id);
                           setOpenMenuId(openMenuId === sentinel.id ? null : sentinel.id);
                         }}
                       >

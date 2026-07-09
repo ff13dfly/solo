@@ -5,12 +5,14 @@ import { ConditionEditor } from './ConditionEditor';
 import { ActionEditor } from './ActionEditor';
 import { useLang } from '../../../../providers/LanguageProvider';
 import { Button } from '../../../../components/ui';
+import { extractProfilePin, extractTargetState } from '../profile-list/utils';
 
 type TransitionTab = 'trigger' | 'condition' | 'actions';
 
-export function TransitionEditor({ transition, onChange, metaFields, states, stateMeta }: {
+export function TransitionEditor({ transition, onChange, metaFields, states, stateMeta, sentinels, profileId }: {
   transition: Transition; onChange: (t: Transition) => void;
   metaFields: MetaField[]; states: string[]; stateMeta?: Record<string, StateMeta>;
+  sentinels: any[]; profileId: string;
 }) {
   const { t } = useLang();
   const tr = t; // alias: the tab .map() below shadows `t` with the tab string
@@ -24,6 +26,17 @@ export function TransitionEditor({ transition, onChange, metaFields, states, sta
   const addAction = () => onChange({ ...transition, actions: [...actions, { type: 'workflow', workflowId: '', input: { instanceId: { var: 'instance.id' }, sourceId: { var: 'instance.sourceId' } }, on_complete: { event: '', meta_patch: {} } }] });
   const updAction = (i: number, a: Action) => onChange({ ...transition, actions: actions.map((x, idx) => idx === i ? a : x) });
   const delAction = (i: number) => onChange({ ...transition, actions: actions.filter((_, idx) => idx !== i) });
+
+  const matchingSentinels = (sentinels || [])
+    .filter(s => {
+      const watchesFulfillment = (s.eventSubscriptions || []).some((k: unknown) => String(k).startsWith('EVENT:FULFILLMENT'));
+      if (!watchesFulfillment) return false;
+      const pin = extractProfilePin(s.context?.guard);
+      const isPinnedToProfile = pin === null || pin === profileId;
+      if (!isPinnedToProfile) return false;
+      const targetState = extractTargetState(s);
+      return targetState === transition.to;
+    });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -55,6 +68,28 @@ export function TransitionEditor({ transition, onChange, metaFields, states, sta
                 {stateList.map(s => <option key={s} value={s}>{stateLabel(s)}</option>)}
               </select>
             </Row>
+
+            {matchingSentinels.length > 0 && (
+              <>
+                <hr style={{ border: 'none', borderTop: '1px solid var(--border-color)', margin: '12px 0 6px 0' }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', letterSpacing: '0.08em', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    🤖 {t('fulfillment.transitionEditor.activeSentinels') || 'Active Sentinels on this transition'} ({matchingSentinels.length})
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    {matchingSentinels.map(w => (
+                      <div key={w.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: w.status === 'ACTIVE' ? '#10b981' : '#94a3b8', flexShrink: 0 }} />
+                        <span style={{ color: 'var(--text-primary)', fontWeight: 500 }} title={w.id}>{w.name}</span>
+                        <span style={{ fontSize: '9px', color: '#94a3b8', background: '#f8fafc', border: '1px solid var(--border-color)', padding: '0.5px 5px', borderRadius: '3px', fontFamily: 'var(--font-mono)' }}>
+                          {w.id}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
 

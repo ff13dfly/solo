@@ -391,6 +391,7 @@ const en = {
     transitionEditor: {
       eventPlaceholder: 'e.g. payment_received',
       noDownstreamActions: 'No downstream actions',
+      activeSentinels: 'Active Sentinels on this transition',
     },
     condition: {
       jsonError: 'Invalid JSON format',

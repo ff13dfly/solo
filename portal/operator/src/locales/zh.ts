@@ -391,6 +391,7 @@ const zh = {
     transitionEditor: {
       eventPlaceholder: '如：payment_received',
       noDownstreamActions: '无下游动作',
+      activeSentinels: '此转换上已启用的哨兵',
     },
     condition: {
       jsonError: 'JSON 格式错误',

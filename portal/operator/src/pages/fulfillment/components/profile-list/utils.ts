@@ -15,7 +15,7 @@ export interface WatcherSentinel {
 // Conservative JsonLogic walk: find { '==': [ {var:'event.payload.profileId'}, '<id>' ] }
 // anywhere in the guard (either operand order). Anything fancier than an equality pin
 // is treated as stream-wide (shown, not hidden — over-reporting beats invisibility).
-function extractProfilePin(node: unknown): string | null {
+export function extractProfilePin(node: unknown): string | null {
   if (!node || typeof node !== 'object') return null;
   if (Array.isArray(node)) {
     for (const item of node) { const f = extractProfilePin(item); if (f) return f; }

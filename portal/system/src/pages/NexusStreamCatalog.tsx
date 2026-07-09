@@ -124,7 +124,10 @@ export default function NexusStreamCatalog() {
       </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0 overflow-auto p-5">
+      <div
+        className="flex-1 min-h-0 overflow-auto p-5"
+        onClick={() => setSelectedId(null)}
+      >
         {error && <div className="text-error text-xs mb-3">{error}</div>}
         {loading && <div className="text-text-secondary text-xs font-mono">Loading streams...</div>}
         {!loading && rows.length === 0 && (
@@ -137,7 +140,10 @@ export default function NexusStreamCatalog() {
             return (
               <div
                 key={r.key}
-                onClick={() => setSelectedId(isSelected ? null : r.key)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedId(isSelected ? null : r.key);
+                }}
                 className={`sys-entity-card cursor-pointer justify-between ${
                   isSelected ? 'selected' : ''
                 }`}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { callRpc } from '../../../../utils/rpc';
 import { useUI } from '../../../../providers/UIProvider';
 import { useLang } from '../../../../providers/LanguageProvider';
@@ -28,6 +28,13 @@ export function ProfileEditModal({ profile, onClose, onSaved }: Props) {
   const { toast } = useUI();
   const { t } = useLang();
   const [saving, setSaving] = useState(false);
+  const [sentinels, setSentinels] = useState<any[]>([]);
+
+  useEffect(() => {
+    callRpc<{ items: any[] }>('nexus.sentinel.list', { page: 1, pageSize: 100 })
+      .then(r => setSentinels(r?.items ?? []))
+      .catch(() => {});
+  }, []);
 
   const states = profile?.states ?? [...SYSTEM_STATES];
   const stateMeta = profile?.state_meta ?? {};
@@ -139,7 +146,7 @@ export function ProfileEditModal({ profile, onClose, onSaved }: Props) {
           {/* Right panel */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             {selected >= 0 && transitions[selected] ? (
-              <TransitionEditor key={selected} transition={transitions[selected]} onChange={t => updTransition(selected, t)} metaFields={metaFields} states={states} stateMeta={stateMeta} />
+              <TransitionEditor key={selected} transition={transitions[selected]} onChange={t => updTransition(selected, t)} metaFields={metaFields} states={states} stateMeta={stateMeta} sentinels={sentinels} profileId={profile?.id ?? ''} />
             ) : (
               <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>{t('fulfillment.transition.emptyHint')}</div>
             )}
