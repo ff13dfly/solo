@@ -368,8 +368,8 @@ export default function NexusManagement() {
             {sentinels.map(sentinel => (
               <div
                 key={sentinel.id}
-                className={`border border-border bg-bg-secondary/15 rounded-lg flex flex-col justify-between transition-all duration-300 relative min-h-[310px] p-4 gap-3.5 hover:border-accent/40 hover:shadow-[0_0_12px_rgba(88,166,255,0.1)] ${
-                  sentinel.status === 'ACTIVE' ? 'border-t-4 border-t-success/70 shadow-[inset_0_2px_4px_rgba(46,160,67,0.05)]' : 'border-t-4 border-t-border'
+                className={`sys-entity-card min-h-[310px] ${
+                  sentinel.status === 'ACTIVE' ? 'status-active' : 'status-inactive'
                 }`}
               >
                 {/* Header (Status Beacon + Name & ID + Dropdown Actions) */}

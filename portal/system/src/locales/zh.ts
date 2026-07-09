@@ -441,6 +441,11 @@ export default {
   bot_mgmt: {
     "ackCopied": "我已复制该 token 并存入消费方服务。",
     "allServicesHaveBot": "所有已注册服务都已拥有 bot 账号。",
+    "cannotDeleteBound": "无法删除：该 bot 账号目前已绑定到系统服务或 Sentinel。请先取消绑定或删除关联资源。",
+    "noActiveTokensToRevoke": "无活跃的 token 可吊销",
+    "clickToManage": "点击卡片管理并执行操作",
+    "manage": "管理",
+    "activeSelection": "已选中",
     "botAccounts": "BOT 账号",
     "botCreated": "Bot「{uid}」已创建",
     "botCreatedSetPermit": "Bot「{uid}」已创建 — 先设置其 PERMIT，再 INJECT 一个 token",

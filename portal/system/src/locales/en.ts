@@ -441,6 +441,11 @@ export default {
   bot_mgmt: {
     "ackCopied": "I have copied the token and stored it in the consuming service.",
     "allServicesHaveBot": "All registered services already have a bot account.",
+    "cannotDeleteBound": "Cannot delete: This bot account is currently bound to a system service or Sentinel. Please remove the binding first.",
+    "noActiveTokensToRevoke": "No active tokens to revoke",
+    "clickToManage": "Click card to manage and execute actions",
+    "manage": "Manage",
+    "activeSelection": "Selected",
     "botAccounts": "BOT ACCOUNTS",
     "botCreated": "Bot \"{uid}\" created",
     "botCreatedSetPermit": "Bot \"{uid}\" created — set its PERMIT, then INJECT a token",
