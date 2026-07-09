@@ -43,6 +43,8 @@ const zh = {
     remove: '移除',
     add: '添加',
     all: '全部',
+    enable: '启用',
+    disable: '禁用',
     searching: '搜索中...',
     generating: '生成中...',
     clear: '清除',
@@ -392,6 +394,8 @@ const zh = {
       eventPlaceholder: '如：payment_received',
       noDownstreamActions: '无下游动作',
       activeSentinels: '此转换上已启用的哨兵',
+      promptSentinelName: '请输入新哨兵的名称：',
+      noSentinels: '此状态转换下暂未配置哨兵。',
     },
     condition: {
       jsonError: 'JSON 格式错误',

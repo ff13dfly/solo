@@ -43,6 +43,8 @@ const en = {
     remove: 'Remove',
     add: 'Add',
     all: 'All',
+    enable: 'Enable',
+    disable: 'Disable',
     searching: 'Searching...',
     generating: 'Generating...',
     clear: 'Clear',
@@ -392,6 +394,8 @@ const en = {
       eventPlaceholder: 'e.g. payment_received',
       noDownstreamActions: 'No downstream actions',
       activeSentinels: 'Active Sentinels on this transition',
+      promptSentinelName: 'Enter a name for the new Sentinel:',
+      noSentinels: 'No sentinels configured for this transition.',
     },
     condition: {
       jsonError: 'Invalid JSON format',

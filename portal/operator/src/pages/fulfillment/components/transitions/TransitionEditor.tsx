@@ -6,16 +6,20 @@ import { ActionEditor } from './ActionEditor';
 import { useLang } from '../../../../providers/LanguageProvider';
 import { Button } from '../../../../components/ui';
 import { extractProfilePin, extractTargetState } from '../profile-list/utils';
+import { callRpc } from '../../../../utils/rpc';
+import { SentinelCard } from '../SentinelCard';
+import { useUI } from '../../../../providers/UIProvider';
 
 type TransitionTab = 'trigger' | 'condition' | 'actions';
 
-export function TransitionEditor({ transition, onChange, metaFields, states, stateMeta, sentinels, profileId }: {
+export function TransitionEditor({ transition, onChange, metaFields, states, stateMeta, sentinels, profileId, onRefreshSentinels }: {
   transition: Transition; onChange: (t: Transition) => void;
   metaFields: MetaField[]; states: string[]; stateMeta?: Record<string, StateMeta>;
-  sentinels: any[]; profileId: string;
+  sentinels: any[]; profileId: string; onRefreshSentinels?: () => void;
 }) {
   const { t } = useLang();
   const tr = t; // alias: the tab .map() below shadows `t` with the tab string
+  const { toast } = useUI();
   const [tab, setTab] = useState<TransitionTab>('trigger');
   const base = (states.length ? states : []).filter(s => !SYSTEM_STATES.includes(s));
   const extra = [transition.from, transition.to].filter(s => s && !SYSTEM_STATES.includes(s) && !base.includes(s));
@@ -26,6 +30,62 @@ export function TransitionEditor({ transition, onChange, metaFields, states, sta
   const addAction = () => onChange({ ...transition, actions: [...actions, { type: 'workflow', workflowId: '', input: { instanceId: { var: 'instance.id' }, sourceId: { var: 'instance.sourceId' } }, on_complete: { event: '', meta_patch: {} } }] });
   const updAction = (i: number, a: Action) => onChange({ ...transition, actions: actions.map((x, idx) => idx === i ? a : x) });
   const delAction = (i: number) => onChange({ ...transition, actions: actions.filter((_, idx) => idx !== i) });
+
+  const [creatingSentinel, setCreatingSentinel] = useState(false);
+
+  const handleAddSentinel = async () => {
+    const finalName = `Watch ${profileId} transition to ${transition.to}`;
+
+    setCreatingSentinel(true);
+    try {
+      const newSentinel = {
+        name: finalName,
+        description: `Auto-generated sentinel for ${profileId} transition to ${transition.to}`,
+        authorityRole: 'system.nexus',
+        status: 'DISABLED',
+        eventSubscriptions: ['EVENT:FULFILLMENT:TRANSITIONED'],
+        context: {
+          guard: {
+            and: [
+              { '==': [{ var: 'event.payload.profileId' }, profileId] },
+              { '==': [{ var: 'event.payload.toState' }, transition.to] }
+            ]
+          },
+          data_fetchers: [],
+          system_prompt_template: ''
+        }
+      };
+
+      await callRpc('nexus.sentinel.create', newSentinel);
+      if (onRefreshSentinels) {
+        onRefreshSentinels();
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to create sentinel');
+    } finally {
+      setCreatingSentinel(false);
+    }
+  };
+
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  const handleToggleSentinel = async (id: string, currentStatus: string) => {
+    setTogglingId(id);
+    try {
+      if (currentStatus === 'ACTIVE') {
+        await callRpc('nexus.sentinel.disable', { id });
+      } else {
+        await callRpc('nexus.sentinel.enable', { id });
+      }
+      if (onRefreshSentinels) {
+        onRefreshSentinels();
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to toggle sentinel status');
+    } finally {
+      setTogglingId(null);
+    }
+  };
 
   const matchingSentinels = (sentinels || [])
     .filter(s => {
@@ -69,27 +129,34 @@ export function TransitionEditor({ transition, onChange, metaFields, states, sta
               </select>
             </Row>
 
-            {matchingSentinels.length > 0 && (
-              <>
-                <hr style={{ border: 'none', borderTop: '1px solid var(--border-color)', margin: '12px 0 6px 0' }} />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', letterSpacing: '0.08em', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    🤖 {t('fulfillment.transitionEditor.activeSentinels') || 'Active Sentinels on this transition'} ({matchingSentinels.length})
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    {matchingSentinels.map(w => (
-                      <div key={w.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
-                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: w.status === 'ACTIVE' ? '#10b981' : '#94a3b8', flexShrink: 0 }} />
-                        <span style={{ color: 'var(--text-primary)', fontWeight: 500 }} title={w.id}>{w.name}</span>
-                        <span style={{ fontSize: '9px', color: '#94a3b8', background: '#f8fafc', border: '1px solid var(--border-color)', padding: '0.5px 5px', borderRadius: '3px', fontFamily: 'var(--font-mono)' }}>
-                          {w.id}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+            <hr style={{ border: 'none', borderTop: '1px solid var(--border-color)', margin: '12px 0 6px 0' }} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', letterSpacing: '0.08em' }}>
+                <span>🤖 {t('fulfillment.transitionEditor.activeSentinels') || 'Active Sentinels on this transition'} ({matchingSentinels.length})</span>
+                <Button variant="secondary" size="sm" onClick={handleAddSentinel} disabled={creatingSentinel} style={{ fontSize: '9px', padding: '2px 8px', height: 'auto' }}>
+                  {creatingSentinel ? '...' : `+ ${t('common.add') || 'Add'}`}
+                </Button>
+              </div>
+
+              {matchingSentinels.length === 0 ? (
+                <div style={{ padding: '10px', textAlign: 'center', border: '1px dashed var(--border-color)', borderRadius: '6px', color: '#94a3b8', fontSize: '11px', background: '#fafafa' }}>
+                  {t('fulfillment.transitionEditor.noSentinels') || 'No sentinels configured for this transition.'}
                 </div>
-              </>
-            )}
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '8px', marginTop: '6px' }}>
+                  {matchingSentinels.map(w => (
+                    <SentinelCard
+                      key={w.id}
+                      id={w.id}
+                      name={w.name}
+                      status={w.status}
+                      togglingId={togglingId}
+                      onToggleStatus={handleToggleSentinel}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

@@ -30,10 +30,14 @@ export function ProfileEditModal({ profile, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const [sentinels, setSentinels] = useState<any[]>([]);
 
-  useEffect(() => {
+  const loadSentinels = () => {
     callRpc<{ items: any[] }>('nexus.sentinel.list', { page: 1, pageSize: 100 })
       .then(r => setSentinels(r?.items ?? []))
       .catch(() => {});
+  };
+
+  useEffect(() => {
+    loadSentinels();
   }, []);
 
   const states = profile?.states ?? [...SYSTEM_STATES];
@@ -146,7 +150,7 @@ export function ProfileEditModal({ profile, onClose, onSaved }: Props) {
           {/* Right panel */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             {selected >= 0 && transitions[selected] ? (
-              <TransitionEditor key={selected} transition={transitions[selected]} onChange={t => updTransition(selected, t)} metaFields={metaFields} states={states} stateMeta={stateMeta} sentinels={sentinels} profileId={profile?.id ?? ''} />
+              <TransitionEditor key={selected} transition={transitions[selected]} onChange={t => updTransition(selected, t)} metaFields={metaFields} states={states} stateMeta={stateMeta} sentinels={sentinels} profileId={profile?.id ?? ''} onRefreshSentinels={loadSentinels} />
             ) : (
               <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>{t('fulfillment.transition.emptyHint')}</div>
             )}

@@ -7,9 +7,11 @@ import type { MetaField, Profile } from '../transitions/types';
 import { watchersFor, formatDate } from './utils';
 import type { WatcherSentinel } from './utils';
 import { RawModal } from './RawModal';
+import { SentinelCard } from '../SentinelCard';
 import { StatesModal } from './StatesModal';
 import { BasicInfoModal } from './BasicInfoModal';
 import { MetaFieldsModal } from './MetaFieldsModal';
+import { useUI } from '../../../../providers/UIProvider';
 
 interface Props {
   profiles: Profile[];
@@ -19,7 +21,21 @@ interface Props {
 
 // ─── ProfileCard ──────────────────────────────────────────────────────────────
 
-function ProfileCard({ profile, onEdit, onStatesUpdated, watchers }: { profile: Profile; onEdit: () => void; onStatesUpdated: () => void; watchers: WatcherSentinel[] | null }) {
+function ProfileCard({
+  profile,
+  onEdit,
+  onStatesUpdated,
+  watchers,
+  togglingId,
+  onToggleSentinel
+}: {
+  profile: Profile;
+  onEdit: () => void;
+  onStatesUpdated: () => void;
+  watchers: WatcherSentinel[] | null;
+  togglingId: string | null;
+  onToggleSentinel: (id: string, status: string) => void;
+}) {
   const { t } = useLang();
   const tr = t; // alias: the transitions .map() below shadows `t` with the transition object
   const [showRaw, setShowRaw] = useState(false);
@@ -144,22 +160,18 @@ function ProfileCard({ profile, onEdit, onStatesUpdated, watchers }: { profile: 
           {watchers.length === 0 ? (
             <div style={{ fontSize: '11px', color: '#cbd5e1', fontStyle: 'italic' }}>{t('fulfillment.profile.noWatchers')}</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '8px', marginTop: '6px' }}>
               {watchers.map(w => (
-                <div key={w.id} data-test="watcher-row" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px' }}>
-                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: w.status === 'ACTIVE' ? '#10b981' : '#94a3b8', flexShrink: 0, display: 'inline-block' }} title={w.status} />
-                  <span style={{ color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }} title={w.id}>
-                    {w.name}
-                    {w.targetState && (
-                      <span style={{ marginLeft: '6px', fontSize: '9px', color: '#059669', background: '#ecfdf5', border: '1px solid #a7f3d0', padding: '0px 4px', borderRadius: '3px', lineHeight: '1.2' }}>
-                        → {w.targetState}
-                      </span>
-                    )}
-                  </span>
-                  <span style={{ fontSize: '9px', color: w.pinned ? '#3b82f6' : '#94a3b8', background: w.pinned ? '#eff6ff' : '#f8fafc', border: `1px solid ${w.pinned ? '#bfdbfe' : 'var(--border-color)'}`, padding: '1px 6px', borderRadius: '4px', flexShrink: 0 }}>
-                    {w.pinned ? t('fulfillment.profile.watcherPinned') : t('fulfillment.profile.watcherStream')}
-                  </span>
-                </div>
+                <SentinelCard
+                  key={w.id}
+                  id={w.id}
+                  name={w.name}
+                  status={w.status || 'DISABLED'}
+                  targetState={w.targetState}
+                  pinned={w.pinned}
+                  togglingId={togglingId}
+                  onToggleStatus={onToggleSentinel}
+                />
               ))}
             </div>
           )}
@@ -183,15 +195,38 @@ function ProfileCard({ profile, onEdit, onStatesUpdated, watchers }: { profile: 
 
 export function ProfileList({ profiles, onEdit, onStatesUpdated }: Props) {
   const { t } = useLang();
+  const { toast } = useUI();
 
   // One sentinel fetch for the whole list (not per card). null = unreadable
   // (operator lacks nexus permission / nexus down) → the section hides entirely.
   const [sentinels, setSentinels] = useState<any[] | null>(null);
-  useEffect(() => {
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  const loadSentinels = () => {
     callRpc<{ items: any[] }>('nexus.sentinel.list', { page: 1, pageSize: 100 })
       .then(r => setSentinels(r?.items ?? []))
       .catch(() => setSentinels(null));
+  };
+
+  useEffect(() => {
+    loadSentinels();
   }, []);
+
+  const handleToggleSentinel = async (id: string, currentStatus: string) => {
+    setTogglingId(id);
+    try {
+      if (currentStatus === 'ACTIVE') {
+        await callRpc('nexus.sentinel.disable', { id });
+      } else {
+        await callRpc('nexus.sentinel.enable', { id });
+      }
+      loadSentinels();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to toggle sentinel status');
+    } finally {
+      setTogglingId(null);
+    }
+  };
 
   if (profiles.length === 0) {
     return (
@@ -210,6 +245,8 @@ export function ProfileList({ profiles, onEdit, onStatesUpdated }: Props) {
           onEdit={() => onEdit(p)}
           onStatesUpdated={onStatesUpdated}
           watchers={sentinels === null ? null : watchersFor(p.id, sentinels)}
+          togglingId={togglingId}
+          onToggleSentinel={handleToggleSentinel}
         />
       ))}
     </div>
