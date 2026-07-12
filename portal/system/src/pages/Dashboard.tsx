@@ -53,7 +53,7 @@ export default function DashboardLayout() {
       {/* Sidebar */}
       <div className={`sys-sidebar bg-bg-primary border-r border-border flex flex-col p-6 shrink-0${isCollapsed ? ' collapsed' : ''}`}>
         {/* Header */}
-        <div className={`text-base font-bold text-accent mb-8 pb-3 border-b-2 border-dashed border-border flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'}`}>
+        <div className={`text-base font-bold text-accent mb-8 pb-[15px] border-b-2 border-dashed border-border flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'}`}>
           {!isCollapsed && <span>{t('dashboard.header')}</span>}
           <button
             onClick={() => setIsCollapsed(v => !v)}
