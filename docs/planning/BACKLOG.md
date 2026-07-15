@@ -36,7 +36,7 @@
 4. **出版清单已按 2026-07-03 拍板重新拆分**（详见 [`VERSION.v2.md`](./VERSION.v2.md) §1/§2/§5、[`VERSION.md`](./VERSION.md) §4 回写）——**规划改动，尚未实现**：
    - **拉回 v1.1.x 排期（判定只加不破）**：多机部署硬化（loopback→service-bot）· `_task` fire-and-forget 丢投修复（**已确认真 bug**，e2e 实测 `order=PLACED instance=CLEARED`，独立于版本归类优先处理）· Saga durable 补偿（跨重启续跑）· autorun 置信判据重设计（续 `risk_tolerance` 具名容忍度档之后）· passport TOTP 自助 · SSE 推送 / MCP adapter / 外部 agent SDK · metrics 正式档。
    - **多租户开放档已取消**（非拉回）——改用 E 线 SOLO Bridge 的联邦隔离（每租户一套独立网格）替代。
-   - **仍留 v2**：actor-claim 全量（用户/服务凭证签名，真破坏性架构）· 完整 at-least-once 重投队列 + 全网统一幂等键（降级为可选/非阻塞）· E 线（bridge 联邦）· F 线的动态插件平台部分。
+   - **仍留 v2**：E 线（bridge 联邦）· F 线的动态插件平台部分——**2026-07-12 起为 v2 仅有的两条主线**（`VERSION.v2.md` 已重编号为 A/B 线）。~~actor-claim 全量 · 完整 at-least-once 重投队列 + 全网统一幂等键~~ **2026-07-12 已搁置出 v2 主线**（平行处理/租户隔离确定走 bridge 联邦形状，同运营者平行网格 = 同信任域，两者均无兑现场景；台账与重启条件见 [`VERSION.v2.md`](./VERSION.v2.md) §2.3）。
 
 ---
 
