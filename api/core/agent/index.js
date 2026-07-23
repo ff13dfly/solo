@@ -144,6 +144,7 @@ app.post('/jsonrpc', async (req, res) => {
                 'methods': () => ({ methods: introspectionMethods, description: config.description || {} }),
                 'entities': () => ({}), // agent microservice has no shared business entities
                 'events':   () => require('./handlers/events'),
+                'guide':    () => require('../../library/guide').readGuide('agent', __dirname),
             };
 
             if (!handlers[method]) {

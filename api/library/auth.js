@@ -26,7 +26,7 @@ const tweetnacl = require('tweetnacl');
 const { parseRouterToken } = require('./router-auth');
 const { createLogger } = require('./logger');
 
-const BASE_PUBLIC_METHODS = ['ping', 'methods', 'entities', 'events'];
+const BASE_PUBLIC_METHODS = ['ping', 'methods', 'entities', 'events', 'guide'];
 
 function createAuthHandlers(config, options = {}) {
     const logger = createLogger(config.serviceName || 'service');

@@ -105,6 +105,7 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'entities': () => require('./handlers/entities'),
                 'events':   () => require('./handlers/events'),
 
+                'guide':    () => require('../../library/guide').readGuide('nexus', __dirname),
                 'nexus.sentinel.create': (p) => {
                     if (!isAdmin) throw jsonrpc.UNAUTHORIZED();
                     return Methods.sentinel.create(p);

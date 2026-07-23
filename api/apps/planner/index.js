@@ -91,6 +91,7 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'entities': () => require('./handlers/entities'),
                 'events':   () => require('./handlers/events'),
 
+                'guide':    () => require('../../library/guide').readGuide('planner', __dirname),
                 // Agenda Handlers
                 'planner.agenda.create': (p) => Methods.agenda.create(p, req.user),
                 'planner.agenda.get': (p) => Methods.agenda.get(p, req.user),

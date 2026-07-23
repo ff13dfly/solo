@@ -214,6 +214,9 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
                     return serviceHandlers.removeService(p, i, r);
                 },
                 'system.capability.list': (p, i, r) => serviceHandlers.capabilities(p, i, r, isAdmin),
+                // Anonymous bootstrap doc; per-service variant self-gates in the
+                // handler (auth required in production, like DISCOVERY_METHODS).
+                'system.guide': (p, i, r) => systemHandlers.systemGuide(p, i, r, isAdmin, !!sessionUser.uid),
 
                 // Auditing & Logs
                 'admin.log.debug': (p, i, r) => systemHandlers.adminGetLogs(p, i, r, isAdmin),

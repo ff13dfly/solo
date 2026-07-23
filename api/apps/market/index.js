@@ -60,6 +60,7 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'entities': () => require('./handlers/entities'),
                 'events':   () => require('./handlers/events'),
 
+                'guide':    () => require('../../library/guide').readGuide('market', __dirname),
                 // create / ship return the business object WITH `_event`; the Router
                 // strips _event from the client response and writes the stream.
                 'market.shipment.create': (p) => Methods.shipment.create(p),

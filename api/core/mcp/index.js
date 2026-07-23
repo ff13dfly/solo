@@ -80,6 +80,7 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'methods':  () => ({ methods: introspectionMethods, description: config.description || {} }),
                 'entities': () => require('./handlers/entities'),
                 'events':   () => require('./handlers/events'),
+                'guide':    () => require('../../library/guide').readGuide('mcp', __dirname),
             };
 
             if (!handlers[method]) return jsonrpc.error(res, jsonrpc.METHOD_NOT_FOUND(method), id, 404);

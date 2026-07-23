@@ -125,6 +125,7 @@ async function bootstrap() {
                     // --- Standard Entity Management ---
                     'entities': () => require('./handlers/entities'),
                     'events':   () => require('./handlers/events'),
+                    'guide':    () => require('../../library/guide').readGuide('storage', __dirname),
                 };
 
                 if (!handlers[method]) {

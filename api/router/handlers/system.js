@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 const { createLogger, query } = require('../../library/logger');
+const { readGuide } = require('../../library/guide');
 const config = require('../config');
 const jsonrpc = require('./jsonrpc');
 
@@ -35,6 +37,54 @@ function createSystemHandlers(addServiceFn, isAdmin, dirname, redisClient, SERVI
                 return res.json({ jsonrpc: '2.0', result, id });
             } catch (e) {
                 return res.json({ jsonrpc: '2.0', error: { code: -32000, message: e.message }, id });
+            }
+        },
+
+        /**
+         * system.guide
+         * 自描述引导入口（docs/feedback/ai-agent-self-describing-api.md 落地）。
+         *
+         * - 无参：返回 Router 自身的 GUIDE.md（JSON-RPC 信封、两条认证流程含参考
+         *   代码、错误码约定、下一步指引）。匿名可读——这是外部 AI 代理唯一需要
+         *   被告知的第一跳，内容是静态引导文档，不泄拓扑。
+         * - { service }：代理转发目标服务的 fleet-standard `guide` 方法（读服务
+         *   目录 GUIDE.md，library/guide.js）。生产环境（非 debug）要求已认证
+         *   会话——与 access.js DISCOVERY_METHODS 的拓扑防泄门径一致。
+         *
+         * @attention 转发用裸 axios（无 Router token）：`guide` 在服务侧
+         *   BASE_PUBLIC_METHODS 白名单内（library/auth.js），与本文件同级的
+         *   service.js 握手期拉 methods/entities 是同一模式。
+         */
+        async systemGuide(params, id, res, isAdminUser, isAuthenticated) {
+            const serviceName = params && params.service;
+
+            if (!serviceName) {
+                return res.json({ jsonrpc: '2.0', result: readGuide('router', dirname), id });
+            }
+
+            if (!config.debug && !isAdminUser && !isAuthenticated) {
+                return jsonrpc.error(res, jsonrpc.ACCESS_DENIED(), id);
+            }
+
+            const svc = SERVICES[serviceName];
+            if (!svc || !svc.url) {
+                return res.json({ jsonrpc: '2.0', error: { code: -32002, message: `Service ${serviceName} not found` }, id });
+            }
+
+            try {
+                const resp = await axios.post(svc.url, {
+                    jsonrpc: '2.0',
+                    method: 'guide',
+                    id: 'guide'
+                }, { timeout: 3000 });
+
+                if (resp.data && resp.data.result) {
+                    return res.json({ jsonrpc: '2.0', result: resp.data.result, id });
+                }
+                // 旧版服务未接线 guide → METHOD_NOT_FOUND；归一成明确的"未提供"
+                return res.json({ jsonrpc: '2.0', result: { available: false, message: `Service "${serviceName}" does not implement guide` }, id });
+            } catch (e) {
+                return res.json({ jsonrpc: '2.0', error: { code: -32000, message: 'Guide fetch failed: ' + e.message }, id });
             }
         },
 

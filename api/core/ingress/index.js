@@ -91,6 +91,7 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'entities': () => require('./handlers/entities'),
                 'events':   () => require('./handlers/events'),
 
+                'guide':    () => require('../../library/guide').readGuide('ingress', __dirname),
                 // Inbound (public): listener → Router → here. API key from the
                 // forwarded Authorization header; params = { request_id, data }.
                 'ingress.ingest': async (p) => {

@@ -139,5 +139,7 @@ module.exports = {
         '<rootDir>/apps/market/tests/returns-contract.test.js',
         '<rootDir>/apps/market/tests/logic.test.js',
         '<rootDir>/apps/planner/tests/returns-contract.test.js',
+        // fleet-standard guide 机制 (2026-07-23, docs/feedback/ai-agent-self-describing-api.md)
+        '<rootDir>/library/tests/guide.test.js',
     ],
 };

@@ -122,6 +122,7 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
             'entities': () => require('./handlers/entities'),
             'events':   () => require('./handlers/events'),
 
+            'guide':    () => require('../library/guide').readGuide('sample', __dirname),
             // Index Management (via library/indexer)
             // @why Enables Portal UI to trigger hot index rebuild without service restart.
             'sample.index.rebuild': (p) => {

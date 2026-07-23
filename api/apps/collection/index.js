@@ -79,6 +79,7 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'entities': () => require('./handlers/entities'),
                 'events':   () => require('./handlers/events'),
 
+                'guide':    () => require('../../library/guide').readGuide('collection', __dirname),
                 // record / settle return the business object WITH `_event`; the
                 // Router strips _event from the client response and writes the stream.
                 'collection.payment.record': (p) => Methods.payment.record({ ...p, _scope: scope }),

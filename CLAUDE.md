@@ -81,6 +81,7 @@ Router 是系统唯一入口，承载 auth / routing / permission / event 等核
 3. 用户主动指示"改 router 的 XX"才算授权；自行推断"router 也需要改"不算授权。
 
 - **声明 + 注册必须同步**：`handlers/introspection.js` 声明的方法 ↔ `index.js` 的 handlers 注册，少一边就是红线。
+- **fleet-standard 系统方法共 5 个**：`ping`/`methods`/`entities`/`events`/`guide`（2026-07-23）。`guide` 返回服务目录 `GUIDE.md`（任务配方，与代码同 commit 更新；`api/library/guide.js`），**只注册不进 introspection 声明**；外部 AI 代理第一跳 = 匿名 `system.guide`（router 下发认证流程 + 信封 + 错误码），`system.guide {service}` 生产需认证。背景见 `docs/feedback/ai-agent-self-describing-api.md`。
 - **命名**：方法 `{service}.{entity}.{action}`；外键 `{targetService}Id`；实体嵌套 ≤ 3 层。
 - **服务间禁止直接互调**：必须经 Router，或返回 `_tasks` 由 Router 异步分发。
 - **方法级权限已由 Router `checkAccess` 解决**：微服务收到请求时这关已过，无需重复做方法级校验（数据级 `constraints` 仍要下游自校）。

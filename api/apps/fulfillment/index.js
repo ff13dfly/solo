@@ -90,6 +90,7 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'entities': () => entities,
                 'events':   () => require('./handlers/events'),
 
+                'guide':    () => require('../../library/guide').readGuide('fulfillment', __dirname),
                 // Relay bot token lifecycle (admin only)
                 'fulfillment.token.set':    async (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); await relay.setToken(p); return { ok: true }; },
                 'fulfillment.token.status': async ()  => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return relay.status(); },

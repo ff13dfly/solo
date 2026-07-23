@@ -23,6 +23,7 @@
 //
 
 const fs = require('fs');
+const path = require('path');
 
 const [servicesJson, outputFile] = process.argv.slice(2);
 if (!servicesJson || !outputFile) {
@@ -34,6 +35,21 @@ const services = JSON.parse(fs.readFileSync(servicesJson, 'utf8'));
 
 const factoryLines = services
     .map(s => `  '${s.name}': () => require('./${s.path}'),`)
+    .join('\n');
+
+// Embed each service's GUIDE.md at build time (fleet-standard `guide` method).
+// esbuild loads .md as empty (--loader:.md=empty), so bundled services cannot
+// fs-read their own GUIDE.md — library/guide.js reads global.__SOLO_GUIDES__
+// first, mirroring the __SOLO_PORTS__ pattern. Services without a GUIDE.md are
+// simply omitted (guide reports { available: false } at runtime).
+const apiDir = path.dirname(path.resolve(outputFile));
+const guideLines = services
+    .map(s => {
+        const guidePath = path.join(apiDir, path.dirname(s.path), 'GUIDE.md');
+        if (!fs.existsSync(guidePath)) return null;
+        return `  '${s.name}': ${JSON.stringify(fs.readFileSync(guidePath, 'utf8'))},`;
+    })
+    .filter(Boolean)
     .join('\n');
 
 // Map of built-in defaults — used when SOLO_SERVICES_JSON is unset (single
@@ -53,6 +69,13 @@ ${factoryLines}
 const BUILT_IN_DEFAULTS = [
 ${defaultsLines}
 ];
+
+// Build-time embedded GUIDE.md contents (fleet-standard \`guide\` method).
+// Read by api/library/guide.js before falling back to fs (which is empty in
+// the bundle — esbuild --loader:.md=empty).
+global.__SOLO_GUIDES__ = {
+${guideLines}
+};
 
 let cfg;
 if (process.env.SOLO_SERVICES_JSON) {

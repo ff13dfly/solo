@@ -99,6 +99,7 @@ app.post('/jsonrpc', async (req, res) => {
             'ping': () => ({ status: 'ok', service: config.serviceName, version: config.version, uptime: new Date().toISOString() }),
             'methods': () => ({ methods: introspectionMethods, description: config.description || {} }),
             'events':   () => require('./handlers/events'),
+            'guide':    () => require('../../library/guide').readGuide('administrator', __dirname),
             'entities': () => require('./handlers/entities'),
             // toFix.md §二.administrator / coherence-debt #4: 运维面(能覆盖任意服务的 config)
             // 按团队既定政策("数据面信 Router / 运维面 handler 硬门")补 in-handler 硬门,

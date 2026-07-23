@@ -105,6 +105,7 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'entities': () => require('./handlers/entities'),
                 'events':   () => require('./handlers/events'),
 
+                'guide':    () => require('../../library/guide').readGuide('notification', __dirname),
                 'notification.send':       (p) => Methods.message.send(p),
                 'notification.inbox.list': (p) => Methods.message.inboxList(p),
                 'notification.inbox.ack':  (p) => Methods.message.inboxAck(p),

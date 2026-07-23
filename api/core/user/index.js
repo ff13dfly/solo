@@ -262,6 +262,7 @@ app.post('/jsonrpc', async (req, res) => {
                 'methods': () => ({ methods: introspectionMethods, description: config.description || {} }),
                 'entities': () => require('./handlers/entities'),
                 'events':   () => require('./handlers/events'),
+                'guide':    () => require('../../library/guide').readGuide('user', __dirname),
             };
 
             let result;

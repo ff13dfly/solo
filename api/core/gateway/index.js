@@ -95,6 +95,7 @@ app.post('/jsonrpc', async (req, res) => {
             'entities': () => entityDefinitions,
             'events':   () => require('./handlers/events'),
 
+            'guide':    () => require('../../library/guide').readGuide('gateway', __dirname),
             // Gateway
             'gateway.echo': (p) => Methods.gateway.echo(p),
 

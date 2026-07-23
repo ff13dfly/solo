@@ -22,6 +22,12 @@ module.exports = {
     // Capability Discovery
     'system.capability.list': { internal: true, public: true, desc: 'Return capability map' },
 
+    // Self-Describing Bootstrap (docs/feedback/ai-agent-self-describing-api.md)
+    // Anonymous first hop for external AI agents: no params → router GUIDE.md
+    // (envelope + auth flows + error codes); { service } → that service's guide
+    // (auth required in production, mirroring the discovery gate in access.js).
+    'system.guide': { internal: true, public: true, desc: 'Self-describing guide: no params = bootstrap doc, { service } = per-service GUIDE.md' },
+
     // Logging & Monitoring (Router Specific)
     'system.log.interaction': { internal: true, public: false, desc: 'Retrieve analyzed user logs' },
     'admin.log.debug': { internal: true, public: false, desc: 'Read router debug logs' },

@@ -86,6 +86,7 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'entities': () => require('./handlers/entities'),
                 'events':   () => require('./handlers/events'),
 
+                'guide':    () => require('../../library/guide').readGuide('approval', __dirname),
                 'approval.record.request': (p) => Methods.record.request(p, ctx),
                 'approval.record.verify':  (p) => Methods.record.verify(p, ctx),
                 'approval.record.confirm': (p) => Methods.record.confirm(p, ctx),
