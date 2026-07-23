@@ -28,6 +28,13 @@ module.exports = {
     // (auth required in production, mirroring the discovery gate in access.js).
     'system.guide': { internal: true, public: true, desc: 'Self-describing guide: no params = bootstrap doc, { service } = per-service GUIDE.md' },
 
+    // AI Feedback Channel (proposal intake — see router GUIDE.md §6)
+    // Anonymous submissions are deduped by fingerprint (count = how many tasks
+    // hit the same wall); triage discipline in docs/feedback/README.md.
+    'system.report': { internal: true, public: true, desc: 'Submit a capability-gap report (missing_capability / bad_returns / unclear_description / chain_failure / other)' },
+    'system.report.list': { internal: true, public: false, desc: 'List collected AI reports (admin; type/status filters)' },
+    'system.report.update': { internal: true, public: false, desc: 'Set triage status of a report (admin; NEW/REVIEWED/RESOLVED)' },
+
     // Logging & Monitoring (Router Specific)
     'system.log.interaction': { internal: true, public: false, desc: 'Retrieve analyzed user logs' },
     'admin.log.debug': { internal: true, public: false, desc: 'Read router debug logs' },

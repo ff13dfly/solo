@@ -97,7 +97,10 @@ cd api
 # ⚠️ 必须用 redis-stack-server（带 RedisJSON）——普通 redis-server 会让 walarchiver/
 #    orchestrator/storage/nexus 等依赖 RedisJSON 的套在 JSON.SET/stream 上挂死（非报错，是无限等）。
 redis-stack-server --port 6379 --daemonize yes --save ""   # 测试需要 Redis（CI 用 redis/redis-stack-server）
-npx jest -c jest.ci.config.js --ci --runInBand             # CI 绿色子集（105 套/1690 测试，2026-06-30 实跑绿，--runInBand 防 MockRouter 并发 flaky）
+# ⚠️ 必须带 REDIS_URL——ci.yml 的 jest job 设了它，本地裸跑没有；agent 等服务 config
+#    兜底是 6699（dev 栈端口），漏设则相关套件对空端口无限重连（无报错、CPU 趋零的挂死，
+#    2026-07-23 实踩：35 分钟无进展）。
+REDIS_URL=redis://localhost:6379 npx jest -c jest.ci.config.js --ci --runInBand   # CI 绿色子集（115 套/1814 测试，2026-07-23 实跑绿 19.5s，--runInBand 防 MockRouter 并发 flaky）
 ```
 
 ⚠️ 仓库里很多 `*.test.js` 不是 hermetic 的：`core/agent/**` 要外部 LLM API；e2e/rbac/integration 要全栈；部分是 `process.exit` 脚本。CI 用 `jest.ci.config.js` 的**白名单**只跑已验证通过的子集（剩余硬化项见 `BACKLOG.md §5`）。

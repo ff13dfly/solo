@@ -13,7 +13,26 @@ export default {
     automation: '自动化控制',
     parser: '解析测试',
     settings: '系统设置',
-    logout: '退出登录'
+    logout: '退出登录',
+    ai_reports: 'AI 需求收集'
+  },
+  ai_reports: {
+    title: 'AI 需求收集',
+    all_statuses: '全部状态',
+    all_types: '全部类型',
+    col_time: '最近提交',
+    col_type: '类型',
+    col_method: '相关方法',
+    col_message: '诉求',
+    col_count: '次数',
+    col_status: '状态',
+    col_actions: 'Triage',
+    mark_reviewed: '已阅',
+    mark_resolved: '已解决',
+    empty: '暂无报告。外部 AI 代理经 system.report 提交能力缺口（见 router GUIDE.md §6）。',
+    footer_hint: '按撞墙次数排序——次数越高 = 越多任务被同一缺口卡住',
+    toast_fetch_fail: '加载失败',
+    toast_update_fail: '状态更新失败'
   },
   nexusHub: {
     subtitle_flow: '事件在总线上流动 → Sentinel 订阅并反应(AI)→ Control 管控运行',

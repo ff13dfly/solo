@@ -13,7 +13,26 @@ export default {
     automation: 'Automation',
     parser: 'Parser',
     settings: 'Settings',
-    logout: 'Logout'
+    logout: 'Logout',
+    ai_reports: 'AI Reports'
+  },
+  ai_reports: {
+    title: 'AI REPORTS',
+    all_statuses: 'ALL STATUSES',
+    all_types: 'ALL TYPES',
+    col_time: 'Last Seen',
+    col_type: 'Type',
+    col_method: 'Method',
+    col_message: 'Message',
+    col_count: 'Hits',
+    col_status: 'Status',
+    col_actions: 'Triage',
+    mark_reviewed: 'REVIEWED',
+    mark_resolved: 'RESOLVED',
+    empty: 'No reports. External AI agents submit capability gaps via system.report (see router GUIDE.md §6).',
+    footer_hint: 'sorted by hit count — more hits = more tasks blocked by the same gap',
+    toast_fetch_fail: 'Failed to load reports',
+    toast_update_fail: 'Failed to update status'
   },
   nexusHub: {
     subtitle_flow: 'Events flow on the bus → Sentinels subscribe & react (AI) → Control runs the plane',

@@ -201,8 +201,9 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
                 // Management & Discovery
                 'system.service.status': (p, i, r) => serviceHandlers.checkServiceStatus(p, i, r),
                 'system.manifest':     (p, i, r) => handlers.manifest(SERVICES)(p, i, r),
-                'system.report':      (p, i, r) => handlers.report(redisClient).submit(p, i, r),
-                'system.report.list': (p, i, r) => handlers.report(redisClient).list(p, i, r, isAdmin),
+                'system.report':        (p, i, r) => handlers.report(redisClient).submit(p, i, r),
+                'system.report.list':   (p, i, r) => handlers.report(redisClient).list(p, i, r, isAdmin),
+                'system.report.update': (p, i, r) => handlers.report(redisClient).update(p, i, r, isAdmin),
                 'system.service.list': (p, i, r) => serviceHandlers.listServices(i, r),
                 'system.service.add': (p, i, r) => {
                     const isLocal = req.ip === '127.0.0.1' || req.ip === '::1' || req.hostname === 'localhost';

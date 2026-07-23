@@ -10,6 +10,7 @@ import WorkflowManagement from './workflows';
 import NexusHub from './NexusHub';
 import IngressManagement from './IngressManagement';
 import ErrorLogs from './ErrorLogs';
+import AiReports from './AiReports';
 import { useLang } from '../providers/LanguageProvider';
 import Settings from './settings';
 
@@ -39,6 +40,7 @@ export default function DashboardLayout() {
     { label: 'Workflows',      id: 'workflows',   path: '/workflows',  name: t('nav.workflows'),              icon: 'W'  },
     { label: 'Ingress',        id: 'ingress',     path: '/ingress',    name: t('nav.ingress') || 'Ingress',   icon: 'I'  },
     { label: 'Agent Nexus',    id: 'nexus',       path: '/nexus',      name: t('nav.nexus') || 'Agent Nexus', icon: 'N'  },
+    { label: 'AI Reports',     id: 'ai-reports',  path: '/ai-reports', name: t('nav.ai_reports') || 'AI Reports', icon: 'R'  },
     { label: 'Error Logs',     id: 'errors',      path: '/errors',     name: t('nav.errors'),                 icon: 'X'  },
   ];
 
@@ -136,6 +138,7 @@ export default function DashboardLayout() {
             {/* legacy deep-links → merged Nexus hub sub-tabs */}
             <Route path="events" element={<Navigate to="/nexus/events" replace />} />
             <Route path="automation" element={<Navigate to="/nexus/control" replace />} />
+            <Route path="ai-reports" element={<AiReports />} />
             <Route path="errors" element={<ErrorLogs />} />
             <Route path="settings" element={<Settings />} />
             <Route path="/" element={<Navigate to="/overview" replace />} />

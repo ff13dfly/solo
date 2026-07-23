@@ -24,6 +24,11 @@ const routeArg = (() => { const i = process.argv.indexOf('--route'); return i > 
   const browser = await chromium.launch();
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
   await ctx.addInitScript(([router, token]) => {
+    // routerManager.ts 现在永远把 DEFAULT(https://localhost:8800/ SSL 代理)插在 index 0，
+    // 存进 localStorage 的地址排 index 1 —— 所以光写 localStorage + index=0 会打到没起的
+    // 8800(Network Error)。改用它的 config.js 种子口:__SOLO_ROUTER__ 在模块加载前置好，
+    // DEFAULT 本身就变成 dev router，index 0 恒指向正确地址。localStorage 仍写，双保险。
+    window.__SOLO_ROUTER__ = router;
     localStorage.setItem('solomind:router_addresses', JSON.stringify([{ url: router, name: 'dev' }]));
     localStorage.setItem('solomind:current_router_index', '0');
     localStorage.setItem('sys_session_token', token);

@@ -141,5 +141,7 @@ module.exports = {
         '<rootDir>/apps/planner/tests/returns-contract.test.js',
         // fleet-standard guide 机制 (2026-07-23, docs/feedback/ai-agent-self-describing-api.md)
         '<rootDir>/library/tests/guide.test.js',
+        // system.report 闭环增强：去重计数 + triage 状态 (2026-07-23)
+        '<rootDir>/router/tests/report.test.js',
     ],
 };

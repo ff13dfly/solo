@@ -123,3 +123,24 @@ async function userLogin(name, password, deviceId = 'my-agent') {
 
 一句话总结给 AI 代理：**先 `system.guide` 学会登录，登录后 `system.service.list`
 看有什么，再 `system.guide {service}` 学怎么做，最后动手。**
+
+## 6. 做不到时怎么办（提需求通道）
+
+按配方推进时如果发现**系统满足不了任务**——缺方法、缺参数、返回字段不够、
+文档说不清、调用链中途断——**不要静默放弃，也不要绕野路子**，调这个接口把缺口
+提上来（匿名可调，无需 token）：
+
+```
+system.report {
+  type:    "missing_capability",   // 或 bad_returns | unclear_description | chain_failure | other
+  method:  "storage.asset.upload", // 相关方法名，没有明确对象可省略
+  message: "想 X，但 Y 做不到；期望的能力是 Z",   // ≤1000 字，说清「任务是什么 + 卡在哪 + 期望什么」
+  context: { ... }                 // 可选：复现参数、报错原文等结构化上下文
+}
+```
+
+- 返回 `{ received, reportId, count }`——`count > 1` 说明别的调用方也撞过同一堵墙，
+  你的提交增加了它的优先级权重。
+- **同一诉求提一次就够**：完全相同的内容重复提交只会累计计数，不会刷屏。
+- 提交后**继续或终止你的任务都行**，报告会进入人工 triage（有专门的后台看板），
+  被采纳的能力会在后续版本出现在 `system.service.list` / guide 里。
