@@ -79,4 +79,6 @@ module.exports = {
     authForkCheck: require('./auth-fork-check'),
     // public 面白名单守门（toFix.md 二.router — checkAccess public 面无 Router 侧白名单 ceiling 的服务侧缓解）
     publicSurfaceCheck: require('./public-surface-check'),
+    // fleet-standard guide 覆盖检查（'guide' 方法接线 + GUIDE.md 存在，WARN 级 — AI 自描述 API）
+    guideCheck: require('./guide-check'),
 };

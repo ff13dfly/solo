@@ -2,12 +2,43 @@
 
 SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 格式参考 [Keep a Changelog](https://keepachangelog.com/)。**每打一个 tag,加一条**(发版流程见 [`../runbook/release-and-branching.md`](../runbook/release-and-branching.md))。
+>
+> **约定(必填字段)**:每个版本条目结尾写一行 **`下游 action：<无 | 具体要做什么 + 迁移指南链接>`**。`deploy/scaffold/upgrade.sh` 升级时会自动扫描比消费者当前版本新的所有条目,把非「无」的 `下游 action` / `BREAKING` 弹成红色 ACTION REQUIRED 横幅——覆盖 bundle 是静默的,这行是给下游的合同,别省。
 
 ---
 
 ## [Unreleased]
 
-> main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打 `v1.1.11`）。
+> main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.1.x`）。
+
+---
+
+## [v1.1.12] — 2026-07-24
+
+> 观测性 + 自描述面收尾 + 一个静默排序哑雷修复。纯框架内改动,**零 wire 破坏**。CI 绿色子集 116 套(entity/search 直接相关 4 套 112 测试全绿;唯一红点是 `decide.test.js` 的 `liveGemini` 段——本机有 Gemini key 才跑的真实 LLM 调用,输出不确定,与本次无关)。全程不碰 `api/router/`。
+
+### Fixed
+- **entity 列表排序对 ISO / 毫秒时间戳混排健壮**(`api/library/entity.js`)。Entity Factory 的 `list`/`multiGet` 默认按 `createdAt` 数字降序,但 storage/user 等服务把 `createdAt` 存成 ISO-8601 字符串 → `(b.createdAt||0)-(a.createdAt||0)` 得 `NaN` → 比较器 no-op → "newest-first" 静默退化成 Redis SET 的无序。新增非抛错的 `toSortableMs()` 归一(数字原样 / ISO 走 `Date.parse` / 缺失或垃圾→0),两处排序改用之;对既有纯数字数据结果逐字节不变。回归:`entity-list-order.test.js` +3 用例(纯 ISO / ISO+毫秒混排 / 垃圾值垫底),5/5 绿。
+
+### Added
+- **14 个服务 GUIDE.md 全覆盖**(fleet-standard `guide` 任务配方)。此前只有 agent/storage 有内容文件,其余 11 个服务(user/planner/fulfillment/approval/orchestrator/nexus/notification/administrator/mcp/gateway/ingress)`guide` 方法虽已接线,但无 GUIDE.md → `system.guide {service}` 返回 `available:false`。本次逐个照真实 introspection/logic 补齐(禁编造),外部 AI 代理现可经 `system.guide {service}` 拿到每个服务的跨方法配方 / 幂等键 / 字段约定。
+- **autocheck `guide-check` 门禁**(`api/autocheck/static/guide-check.js`,WARN 级)。查两点:`index.js` 接线了 `'guide'` 方法 + 服务根有 `GUIDE.md`。已挂 PostToolUse 钩子 → 新建服务缺 guide 会当场提示。非阻断(warnings→exit 0)。
+- **scaffold `upgrade.sh` 破坏性变更横幅**。升级时扫描 CHANGELOG 里比消费者当前版本新的所有条目,把非「无」的 `下游 action` / `BREAKING` 弹成红色 ACTION REQUIRED——补上"覆盖 bundle 是静默的、下游不知道自己还得改代码"这个通知缺口。
+
+### Docs
+- Move B(时间戳格式统一到 `clock.now()` 毫秒)登记为 v2 债,见 `BACKLOG.md §3`——破坏性 wire 变更 + 存量迁移,不在 v1.1.x 翻格式。
+
+> 下游 action：无 —— `bash deploy/scaffold/upgrade.sh <proj>` 后自动生效,无需改消费者代码。
+
+---
+
+## [v1.1.11] — 2026-07-23
+
+> AI 自描述面与需求回流(源起 wavely 反馈)。fleet-standard `guide` 方法 + `system.guide` 匿名第一跳 + `system.report` 闭环增强(去重计数 / triage 状态 / Portal AI Reports 页);并含 `_task` fire-and-forget 丢投修复(router 有限重试退避)与 orchestrator `deprecate`/`restore` 生命周期(新增 `DEPRECATED` 状态)。详见 `CLAUDE.md §4` / git tag `v1.1.11`。
+>
+> 下游 action：无(只加不破)。
+>
+> ⓘ 本条目为回填——`v1.1.11` 已打 tag 但当时漏写 CHANGELOG。
 
 ---
 

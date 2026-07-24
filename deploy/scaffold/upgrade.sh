@@ -259,6 +259,43 @@ if [ $DRY -eq 0 ]; then
     [ $fail -eq 0 ] && log_info "Self-check passed" || log_warn "Self-check found issues (above)"
 fi
 
+# --- 6b. Surface downstream ACTION-REQUIRED / BREAKING notices (CHANGELOG-driven) ---
+# Overwriting the bundle is silent; a consumer who just re-runs this won't learn they
+# must ALSO change their own code. Convention (docs/planning/CHANGELOG.md): every
+# version section ends with a "下游 action：" line. Scan every section strictly newer
+# than the project's previous .solo-version and loudly surface any non-"无" action /
+# BREAKING marker, so a maintainer can't miss it.
+CHANGELOG_FILE="$SOLO_DIR/docs/planning/CHANGELOG.md"
+if [ -f "$CHANGELOG_FILE" ] && [ "$OLD_VER" != "$NEW_VER" ]; then
+    _shown=0
+    while IFS='|' read -r _nver _ntxt; do
+        [ -z "$_nver" ] && continue
+        if [ $_shown -eq 0 ]; then
+            echo ""
+            printf "${RED}============== ⚠  ACTION REQUIRED  ⚠ ==============${NC}\n"
+            printf "${RED}下游需手动处理（重跑本脚本不够）:${NC}\n"
+            _shown=1
+        fi
+        printf "${RED}  [%s] %s${NC}\n" "$_nver" "$_ntxt"
+    done < <(awk -v old="$OLD_VER" '
+        function vnum(v,   a) { gsub(/^v/, "", v); split(v, a, "."); return (a[1]+0)*1000000 + (a[2]+0)*1000 + (a[3]+0) }
+        BEGIN { oldn = vnum(old) }
+        /^## \[v[0-9]+\.[0-9]+\.[0-9]+\]/ { match($0, /v[0-9]+\.[0-9]+\.[0-9]+/); ver = substr($0, RSTART, RLENGTH); vern = vnum(ver); next }
+        # Only the actual field line "下游 action：<...>" is a signal — not prose that
+        # merely mentions the words. Skip when the value is the "无" sentinel (matched as
+        # a token so "无法"/"无需" in a real action text are NOT mistaken for "none").
+        ver && vern > oldn && /下游[[:space:]]*action[[:space:]]*：/ {
+            if ($0 ~ /：[[:space:]]*无([[:space:]]|[[:punct:]]|$)/) next
+            line = $0
+            sub(/^[ >*-]+/, "", line)
+            print ver "|" line
+        }
+    ' "$CHANGELOG_FILE")
+    if [ $_shown -eq 1 ]; then
+        printf "${RED}  ↳ 详情见 docs/planning/CHANGELOG.md 对应版本条目 + docs/runbook/${NC}\n"
+    fi
+fi
+
 # --- 7. Next steps ---
 echo ""
 echo "Next:"

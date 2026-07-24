@@ -66,3 +66,42 @@ describe('entity list — newest-first default ordering', () => {
         expect(p3.items.map((i) => i.createdAt)).toEqual([10]);
     });
 });
+
+// The factory standard is epoch ms, but some services (storage assets, user
+// passport/bot) store createdAt as an ISO-8601 string. A raw numeric subtract on a
+// string yields NaN → the comparator no-ops → newest-first silently degrades to the
+// unordered Redis-SET order. toSortableMs() coerces both shapes so ordering holds.
+describe('entity list — createdAt sort robust to ISO strings and mixed types', () => {
+    test('ISO-8601 string createdAt still yields newest-first', async () => {
+        await entity.create({ name: 'mid', createdAt: '2026-06-01T00:00:00Z' });
+        await entity.create({ name: 'oldest', createdAt: '2026-01-01T00:00:00Z' });
+        await entity.create({ name: 'newest', createdAt: '2026-12-01T00:00:00Z' });
+
+        const { items, total } = await entity.list();
+        expect(total).toBe(3);
+        expect(items.map((i) => i.name)).toEqual(['newest', 'mid', 'oldest']);
+    });
+
+    test('a collection mixing epoch-ms and ISO createdAt orders globally by real time', async () => {
+        const isoMid = '2026-06-01T00:00:00Z';
+        const msMid = Date.parse(isoMid);
+        await entity.create({ name: 'iso-mid', createdAt: isoMid });
+        await entity.create({ name: 'ms-older', createdAt: msMid - 86_400_000 }); // -1 day (number)
+        await entity.create({ name: 'ms-newer', createdAt: msMid + 86_400_000 }); // +1 day (number)
+
+        const { items } = await entity.list();
+        expect(items.map((i) => i.name)).toEqual(['ms-newer', 'iso-mid', 'ms-older']);
+    });
+
+    test('missing/garbage createdAt sorts last, never NaN-breaks the order', async () => {
+        await entity.create({ name: 'real', createdAt: 5000 });
+        await entity.create({ name: 'garbage', createdAt: 'not-a-date' });
+        await entity.create({ name: 'absent' }); // no createdAt passed → factory stamps ms now()
+
+        const { items, total } = await entity.list();
+        expect(total).toBe(3);
+        // 'absent' is factory-stamped with a large ms now() → newest; 'garbage' → 0 → last.
+        expect(items[items.length - 1].name).toBe('garbage');
+        expect(items.map((i) => i.name)).toContain('real');
+    });
+});

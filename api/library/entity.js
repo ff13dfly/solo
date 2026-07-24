@@ -12,6 +12,28 @@ const STATUS_DELETED = STATUS.DELETED;
 const walContext = new AsyncLocalStorage();
 
 /**
+ * Coerce a createdAt/updatedAt value to epoch ms for ORDERING purposes only.
+ *
+ * @why The factory standard is epoch ms (clock.now() / Date.now()), but a few
+ *      services store the timestamp as an ISO-8601 string instead (storage assets,
+ *      user passport/bot). A raw numeric subtract on an ISO string yields NaN, and a
+ *      comparator that returns NaN makes Array.sort a no-op — so "newest-first" would
+ *      silently degrade to the unordered Redis-SET order (sMembers is unordered).
+ *      Coercing both shapes to ms keeps ordering correct regardless of stored format,
+ *      and even across a collection that mixes the two. Non-throwing (unlike
+ *      clock.toMs): an unparseable/absent value sorts last (treated as 0).
+ *      This does NOT normalize what gets stored/returned — only the sort key.
+ */
+function toSortableMs(v) {
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') {
+        const ms = Date.parse(v);
+        return Number.isNaN(ms) ? 0 : ms;
+    }
+    return 0;
+}
+
+/**
  * @why Hardcoded status strings are used as a cross-service convention:
  *      1. Portal/AI consistency: Allows the Operator Portal and AI Agent to reliably
  *         filter and manage entities without per-service configuration.
@@ -406,7 +428,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
                     // chunk + results go out of scope here → GC
                 }
                 // Same newest-first default as the multiGet path (see below).
-                matched.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                matched.sort((a, b) => toSortableMs(b.createdAt) - toSortableMs(a.createdAt));
                 return { items: matched, total: matched.length };
             }
 
@@ -434,7 +456,9 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             // unordered), so without this lists come back in arbitrary order. Sort by
             // createdAt desc BEFORE pagination so newest-first holds across pages, not
             // just within a page. Missing createdAt sorts last (treated as 0).
-            filtered.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            // toSortableMs: createdAt may be epoch ms (factory standard) OR an ISO
+            // string (storage/user) — coerce so newest-first holds for both.
+            filtered.sort((a, b) => toSortableMs(b.createdAt) - toSortableMs(a.createdAt));
 
             // Pagination (Optional for multiGet if limit/offset provided)
             const start = offset || 0;

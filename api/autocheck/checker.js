@@ -113,6 +113,7 @@ async function main() {
     checks.paramConventions.check(resolvedPath, results);
     checks.authForkCheck.check(resolvedPath, results);
     checks.publicSurfaceCheck.check(resolvedPath, results);
+    checks.guideCheck.check(resolvedPath, results);
 
     // ── 运行时检查（服务已启动才有效，--static 跳过）─────────
     if (!isStatic) {
