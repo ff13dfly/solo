@@ -28,9 +28,9 @@
    planner 自动匹配 `#([a-zA-Z0-9]{8})`，把 agenda 的 `todoId` 指向它，并把本 agendaId
    追加进 todo 的 `relatedAgendas`。
    - todo 必须**先存在**：不存在时链接**静默失败**（仅 warn 日志），agenda 照建但不关联。
-   - `agenda.create` 即使成功关联，**返回体里不含 `todoId`**（关联是二次 update 写的）——
-     要 `agenda.get` 才看得到。
-   - `agenda.update` 改了 title/content 会**重算**关联。
+   - `planner.agenda.create` 即使成功关联，**返回体里不含 `todoId`**（关联是二次 update 写的）——
+     要 `planner.agenda.get` 才看得到。
+   - `planner.agenda.update` 改了 title/content 会**重算**关联。
 
 ## 配方三：批量同步（Local-First，慎用）
 

@@ -1,6 +1,6 @@
 ---
 name: solo-service
-description: Use when creating OR modifying a microservice under api/apps/ in this Solo-based project ({{PROJECT_NAME}}, Solo v{{SOLO_VERSION}}). Enforces the wire contract a Solo Router will accept — method naming, introspection↔index sync, the Entity Factory, no service-to-service direct calls — points you at the shipped authoring guides + the api/sample template, and ends on a hard autocheck gate. Invoke before writing any service code, and again before declaring a service done.
+description: Use when creating OR modifying a microservice under api/apps/ in this Solo-based project ({{PROJECT_NAME}}, Solo v{{SOLO_VERSION}}). Enforces the wire contract a Solo Router will accept — method naming, introspection↔index sync, the Entity Factory, no service-to-service direct calls, a self-describing GUIDE.md — points you at the shipped authoring guides + the api/sample template, and ends on a hard autocheck gate. Invoke before writing any service code, and again before declaring a service done.
 ---
 
 # solo-service — write a service the Router will actually accept
@@ -38,6 +38,23 @@ Router capability catalog in Redis — you don't guess it. These docs supply the
 - **Declaration ↔ registration MUST match**: every method declared in
   `handlers/introspection.js` is wired in `index.js`, and vice-versa. A method on one side and
   not the other is a hard failure — autocheck's `introspection` / `route-consistency` rules catch it.
+- **Ship a `GUIDE.md`** — the fleet-standard system methods are five: `ping` / `methods` /
+  `entities` / `events` / **`guide`**. Wire the last one in your `index.js` handlers table and put a
+  `GUIDE.md` next to it:
+
+  ```js
+  'guide': () => require('../../library/guide').readGuide('<service>', __dirname),
+  ```
+
+  `guide` is the one system method that is **registered but NOT declared in
+  `handlers/introspection.js`** — don't add it there. Without the file, `system.guide { service }`
+  answers `available: false` and silently degrades: an external AI agent can see *what* methods you
+  have but never learns *how* to use them. Write the **task recipes** introspection can't express —
+  cross-method ordering, idempotency keys, field semantics, gotchas — not a restatement of
+  signatures. When the prose and the machine-readable schema disagree, **`methods` introspection
+  wins**; say so in the header. Refer to methods by their **fully-qualified** `{service}.{entity}.{action}`
+  name, never a bare `entity.action` shorthand — an agent will copy it straight into a call.
+  Copy the shape from `api/sample/GUIDE.md`. (autocheck `guide-check`, WARN)
 - **No service-to-service direct calls.** Never HTTP/POST another service. Go through the Router:
   `relay.call(...)` for a synchronous reply, or return `_tasks` and let the Router dispatch
   asynchronously, or return `_event` to fan out a fact. (autocheck `relay-check`)
@@ -62,6 +79,30 @@ No `window.alert()` / `window.confirm()` / `window.prompt()` anywhere. Dangerous
 inline warning block or a real confirm modal; light feedback uses the toast system. A native
 browser dialog can't be styled, tested, or told apart from a phishing popup.
 
+## Deployment layout (recommended convention, not a gate)
+
+The `deploy/` directory Solo scaffolds for you is **flat and Solo-owned** — `run.sh`,
+`precheck.sh`, `admin-up.sh`, `services.json`, `solo-services.json`, `seed.json`. It belongs to the
+Solo stack and `upgrade.sh` re-syncs it; don't grow it into a dumping ground for unrelated hosting
+config.
+
+When a repo serves **more than one public surface** (a marketing site, a catalogue site, the Solo
+stack itself — each on its own domain), the convention that holds up is **one directory per
+site/subsystem, each carrying its own `deploy/`**:
+
+```
+<site>/deploy/        # that site's deploy script + reverse-proxy config
+                      # name the config after the domain: nginx-<domain>.conf, <domain>.conf, …
+<solo-stack>/deploy/  # the Solo-owned flat deploy/ above, untouched
+```
+
+Why: everything needed to ship one domain stays self-contained and greppable by domain name, and it
+never tangles with the Solo-owned `deploy/` that gets overwritten on upgrade. Single-surface
+projects don't need this — the flat scaffolded `deploy/` is already right.
+
+This is a convention, not something autocheck enforces. Follow the layout already present in the
+repo you're in; if there isn't one and the repo is about to grow a second domain, adopt this.
+
 ## Step N — the gate (a service is NOT done until this is green)
 
 Run autocheck's static pass on your service. It encodes 40+ of the rules above:
@@ -70,8 +111,10 @@ Run autocheck's static pass on your service. It encodes 40+ of the rules above:
 node api/autocheck/checker.js api/apps/<service> --static
 ```
 
-Fix every finding — do not rationalize past it. Then register the service in
-`deploy/services.json` (private apps list) and confirm the whole set still passes:
+Fix every finding — do not rationalize past it. WARN-level rules (e.g. `guide-check`, which
+verifies the `guide` wiring + `GUIDE.md` above) don't fail the run, but treat them as work to do,
+not noise. Then register the service in `deploy/services.json` (private apps list) and confirm the
+whole set still passes:
 
 ```bash
 bash deploy/precheck.sh        # runs autocheck --static across every service in services.json

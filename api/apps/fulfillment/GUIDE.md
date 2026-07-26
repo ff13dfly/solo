@@ -46,7 +46,7 @@
    PENDING_REVIEW → APPROVED，落 `approvedDigest`（绑定"批的是哪一版"）。此后 profile 才能被实例使用。
    驳回用 `fulfillment.profile.reject { id, reason? }`。
 
-**激活闸（关键）**：`instance.create` **和** `instance.transition` 都会拒绝 reviewState 存在且 ≠ APPROVED
+**激活闸（关键）**：`fulfillment.instance.create` **和** `fulfillment.instance.transition` 都会拒绝 reviewState 存在且 ≠ APPROVED
 的 profile（FORBIDDEN）——新建和 in-flight 实例都拦。改一个已 APPROVED 模板的**可执行字段**
 （`transitions`/`meta_fields`）会**重新 lint + 回落 PENDING_REVIEW + 清审批**，其 in-flight 实例随之冻结待重审；
 只改 `name` 等元数据不触发。

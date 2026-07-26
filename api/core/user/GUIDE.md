@@ -18,7 +18,7 @@
 - 登录回执 `user.login.verify` 已直接带回 `permit` **和** `categories`——读自己的权限/等级
   用登录回执即可，**不要再调 `user.profile`**。
 - `user.profile` 是 **permit-gated**：读**别人**的档案需要显式 grant；拿它查自己会被挡。
-- 系统有**两条互相独立**的权限轴（代码里 `role.assign` 注释明确，最容易混）：
+- 系统有**两条互相独立**的权限轴（代码里 `user.role.assign` 注释明确，最容易混）：
   - **RBAC 轴** = `user.role` + `user.permit`（`{ allow_all, services, constraints }`）——决定能调哪些方法、看哪些行。
   - **TIER 轴** = `categories.POWER`（admin/operator/normal）——决定 portal 访问与 session 策略。
   - `user.role.assign` 只动 RBAC，**绝不碰** `categories.POWER`；改等级走 `user.account.update` 的 `categories`。
@@ -50,8 +50,9 @@
    —— 需**同时**握有设备证明 + 新锚 OTP。成功后旧锚置 `DISABLED`（记 `upgradedTo`），
    身份（role/bot/meta）迁到新锚并发新设备令牌。
 
-**次序 / 幂等**：OTP 一次性消费，验证成功即删；错次累加到上限触发锁定；`otp.request`
-有每锚固定窗口限流，超了抛 `-32029`（带 `retry_after`）。`upgrade` 前必须先 `otp.request`。
+**次序 / 幂等**：OTP 一次性消费，验证成功即删；错次累加到上限触发锁定；`user.passport.otp.request`
+有每锚固定窗口限流，超了抛 `-32029`（带 `retry_after`）。`user.passport.upgrade` 前必须先
+`user.passport.otp.request`。
 
 ## 坑与约定
 

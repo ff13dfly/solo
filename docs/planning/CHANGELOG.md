@@ -11,6 +11,14 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.1.x`）。
 
+### Docs / Scaffold
+- **GUIDE.md 方法引用全部改用全限定名**。交叉核对 13 份 GUIDE.md 引用的方法名 vs 280 个真实声明方法：无编造方法（零漂移），但有 8 处写成了裸 `entity.action` 简写（planner 3 · fulfillment 2 · approval 1 · user 2）——AI 代理照抄去调会吃 `-32601`。已补全为 `{service}.{entity}.{action}`。
+- **下游守门 skill `solo-service` 补两节**（`deploy/scaffold/.claude/skills/`，`upgrade.sh` 会 re-template 下发）：
+  - **红线新增「Ship a `GUIDE.md`」**——此前 skill 完全没提 guide，下游照它建的服务能过 autocheck 却没有 GUIDE.md，`system.guide { service }` 静默返回 `available:false`。现写明五个 fleet-standard 系统方法、`guide` 只注册不进 introspection 声明、GUIDE.md 写任务配方而非方法签名、冲突时以自省为准、方法名必须全限定。
+  - **新增「Deployment layout」推荐约定**——Solo 下发的 `deploy/` 是扁平且 Solo-owned（upgrade 会覆盖）；仓库有多个对外域名时，推荐「一个站点/子系统一个目录、各自带 `deploy/`，反代配置按域名命名」。明确标注是约定、非 autocheck 门禁。
+
+> 下游 action：无 —— `bash deploy/scaffold/upgrade.sh <proj>` 后自动拿到新 skill；已有服务补 GUIDE.md 是建议项（`guide-check` WARN 级，不阻断）。
+
 ---
 
 ## [v1.1.12] — 2026-07-24

@@ -54,7 +54,7 @@ Solo 审批协议（SAP）：把任意 `service:entity:id` 的**变更意图**�
 - **签名可选但两条线签的东西不同**：编码都是 bs58 Ed25519、验签走 `user.key.public`
   （含已退休历史公钥）。record 段签的是 `stageDigest = sha256("{target}\n{stage}\n{payloadHash}")`；
   gate 段直接签 `open` 传入的 `digest`——**别混用**。record 段不传 `signature` 即
-  server-attested（仅记录事实）；`gate.sign` 的 `signature` 必填。
+  server-attested（仅记录事实）；`approval.gate.sign` 的 `signature` 必填。
 - **可见面收窄**：面向外部 AI 的只有 `record.request/get/list`；`verify/confirm/reject`
   与整条 gate 线是 verifier / 人工 / orchestrator 内部通道（方法级权限由 Router `checkAccess` 把关）。
 - 本服务满足不了你的任务时，把缺口提到 `system.report`（用法见 Router guide §6），
