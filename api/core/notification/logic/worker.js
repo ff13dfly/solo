@@ -95,13 +95,30 @@ module.exports = (redis, config, { relay, message = null } = {}) => {
         return {};
     }
 
+    /**
+     * De-dup handle for gateway (gateway.*.send accepts an optional idempotencyKey).
+     *
+     * @why This worker retries transient failures `maxRetries` times. A provider that
+     *      ACCEPTED the message and then timed out looks transient, so the retry used to
+     *      send it a second time. The key lets gateway replay the first result instead.
+     * @attention It must include channel + resolved target: two rules matching the same
+     *      message (same messageId) may legitimately deliver to different recipients —
+     *      keying on messageId alone would silently swallow the second one.
+     */
+    function idempotencyKeyFor(messageId, channel, params, address) {
+        const target = address.to || address.phone || params.url || 'inbox';
+        return `notification:${messageId}:${channel}:${Array.isArray(target) ? target.join(',') : target}`;
+    }
+
     // Per-channel gateway params: the message's OWN payload (the actual content —
     // previously dropped entirely) merges over the rule's static params.
-    function buildParams(channel, params, msg, address) {
+    function buildParams(channel, params, msg, address, messageId) {
         const payload = msg.payload || {};
+        const idempotencyKey = messageId ? idempotencyKeyFor(messageId, channel, params, address) : undefined;
         if (channel === 'email') {
             return {
                 ...params,
+                idempotencyKey,
                 to: address.to || params.to,
                 subject: payload.subject || params.subject || `[${msg.type}]`,
                 content: payload.content || params.content || JSON.stringify(payload),
@@ -110,14 +127,15 @@ module.exports = (redis, config, { relay, message = null } = {}) => {
         if (channel === 'sms') {
             return {
                 ...params,
+                idempotencyKey,
                 phone: address.phone || params.phone,
                 variables: { ...(params.variables || {}), ...(payload.variables || {}) },
             };
         }
         if (channel === 'webhook') {
-            return { ...params, type: msg.type, targetId: msg.targetId, payload };
+            return { ...params, idempotencyKey, type: msg.type, targetId: msg.targetId, payload };
         }
-        return { ...params, targetId: msg.targetId, type: msg.type, payload };
+        return { ...params, idempotencyKey, targetId: msg.targetId, type: msg.type, payload };
     }
 
     // Returns { ok } — ok:false means retry (or { permanent:true } → straight DLQ).
@@ -144,7 +162,7 @@ module.exports = (redis, config, { relay, message = null } = {}) => {
                 return { ok: true, degraded: true };
             }
 
-            const result = await relay.call(`gateway.${channel}.send`, buildParams(channel, params, msg, address));
+            const result = await relay.call(`gateway.${channel}.send`, buildParams(channel, params, msg, address, messageId));
 
             if (result && result.provider === 'mock') {
                 // Honesty: the gateway fell back to its mock (no SMTP/SMS credentials) —

@@ -27,44 +27,10 @@ const introspection = require('../handlers/introspection');
 const config = require('../config');
 const { checkReturn } = require('../../../library/contract');
 
-// fake redis — Entity-Factory (string storage) command surface, per the collection
-// returns-contract test / sample item.test.js pattern. No xAdd → walFile (best-effort,
-// never throws) path is used; no RedisJSON needed (gateway entities are string storage).
-function makeFakeRedis() {
-    const kv = new Map();
-    const sets = new Map();
-    const getSet = (k) => (sets.has(k) ? sets.get(k) : sets.set(k, new Set()).get(k));
-    const apply = {
-        set: (k, v, opts) => { if (opts && opts.NX && kv.has(k)) return null; kv.set(k, v); return 'OK'; },
-        sAdd: (k, m) => { const s = getSet(k); const had = s.has(m); s.add(m); return had ? 0 : 1; },
-        del: (k) => { const had = kv.delete(k); sets.delete(k); return had ? 1 : 0; },
-        sRem: (k, m) => { const s = sets.get(k); return s && s.delete(m) ? 1 : 0; },
-    };
-    return {
-        async get(k) { return kv.has(k) ? kv.get(k) : null; },
-        async set(k, v, opts) { return apply.set(k, v, opts); },
-        async del(k) { return apply.del(k); },
-        async mGet(keys) { return keys.map((k) => (kv.has(k) ? kv.get(k) : null)); },
-        async sAdd(k, m) { return apply.sAdd(k, m); },
-        async sMembers(k) { return sets.has(k) ? [...sets.get(k)] : []; },
-        async sRem(k, m) { return apply.sRem(k, m); },
-        async sIsMember(k, m) { return sets.has(k) && sets.get(k).has(m) ? 1 : 0; },
-        multi() {
-            const ops = [];
-            const chain = {
-                set(k, v, opts) { ops.push(['set', k, v, opts]); return chain; },
-                sAdd(k, m) { ops.push(['sAdd', k, m]); return chain; },
-                del(k) { ops.push(['del', k]); return chain; },
-                sRem(k, m) { ops.push(['sRem', k, m]); return chain; },
-                async exec() { return ops.map(([op, ...args]) => apply[op](...args)); },
-            };
-            return chain;
-        },
-    };
-}
-
-// Silent logger — logic/index.js calls logger.info on the send paths.
-const logger = { info() {}, warn() {}, error() {}, debug() {}, setRedis() {} };
+// Map-backed fake Redis + silent logger live in tests/helpers/fake-redis.js (shared with
+// send-validation.test.js): Entity-Factory string-storage surface, no RedisJSON, and no
+// xAdd → library/logger takes its best-effort WAL-file path.
+const { makeFakeRedis, silentLogger: logger } = require('./helpers/fake-redis');
 
 const byName = Object.fromEntries(introspection.map((m) => [m.name, m]));
 const method = (n) => byName[n];

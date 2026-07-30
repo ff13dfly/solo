@@ -184,6 +184,10 @@ const FIXTURE_REGISTRY = {
     'system.fulfillment': { 'EVENT:FULFILLMENT:*': ['*'] },
     // e2e-admin 的测试流(94-event-id-dedup 直接 event.emit 验 Router 的 event_id 去重)。
     'e2e-admin': { 'EVENT:E2EDEDUP:*': ['e2e.dedup'] },
+    // gateway 每次出站投递后经 _event 夹带发 EVENT:GATEWAY:DELIVERY(sent/mocked)。
+    // ⚠️ 生产默认表在 api/router/config.js,尚未加此条(需授权改 router)——所以这里加了
+    //    e2e 能验、生产仍会被注册表拦。见 docs/planning/gateway-gaps.md G8。
+    gateway: { 'EVENT:GATEWAY:DELIVERY': ['*'] },
 };
 
 async function seedBots() {

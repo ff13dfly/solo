@@ -57,6 +57,10 @@ const ONLY = (() => {
 const FIXTURE_REGISTRY = {
     collection: { 'EVENT:PAYMENT:RECEIVED': ['payment.received'], 'EVENT:PAYMENT:SETTLED': ['payment.settled'] },
     market:     { 'EVENT:SHIPMENT:CREATED': ['shipment.created'], 'EVENT:SHIPMENT:SHIPPED': ['shipment.shipped'] },
+    // gateway 出站投递事件(sent/mocked,经 _event 夹带)。放这里让 dev 栈能验;
+    // ⚠️ 生产默认表在 api/router/config.js(受保护目录),尚未登记此条 → 生产上仍会被
+    //    注册表拦下。见 docs/planning/gateway-gaps.md G8。
+    gateway:    { 'EVENT:GATEWAY:DELIVERY': ['*'] },
 };
 
 function loadDefs() {

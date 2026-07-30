@@ -35,9 +35,17 @@ module.exports = {
         },
         api: {
             key: process.env.EMAIL_API_KEY || '',
-            url: process.env.EMAIL_API_URL || 'https://api.resend.com/emails'
+            url: process.env.EMAIL_API_URL || 'https://api.resend.com/emails',
+            // Body-shape adapter (logic/email.js API_PROVIDERS). Only 'resend' ships;
+            // SendGrid/SES need an adapter, not just a different EMAIL_API_URL.
+            provider: process.env.EMAIL_API_PROVIDER || 'resend'
         }
     },
+
+    // Strict template variables: an omitted {{var}} becomes an error instead of shipping
+    // the literal placeholder to the recipient. OFF by default (v1.1.x = only-add);
+    // recommended ON for OTP-carrying deployments.
+    strictVariables: process.env.GATEWAY_STRICT_VARIABLES === 'true',
 
     // Encryption key for sensitive entity fields (SMTP pass, etc.)
     secretKey: process.env.GATEWAY_SECRET_KEY || '',
@@ -90,7 +98,10 @@ module.exports = {
                 'gateway.sms.template.list': ['list SMS templates'],
                 'gateway.sms.template.update': ['update SMS template'],
                 'gateway.sms.template.delete': ['delete SMS template'],
-                'gateway.sms.send': ['send SMS via stored template']
+                'gateway.sms.send': ['send SMS via stored template'],
+                'gateway.webhook.send': ['POST a signed JSON payload to an external endpoint'],
+                'gateway.delivery.get': ['get one delivery record by ID'],
+                'gateway.delivery.list': ['list delivery records — what actually went out (SENT/MOCKED/FAILED)']
             }
         },
         zh: {
@@ -119,7 +130,10 @@ module.exports = {
                 'gateway.sms.template.list': ['列出短信模版'],
                 'gateway.sms.template.update': ['更新短信模版'],
                 'gateway.sms.template.delete': ['删除短信模版'],
-                'gateway.sms.send': ['按模版发送短信']
+                'gateway.sms.send': ['按模版发送短信'],
+                'gateway.webhook.send': ['向外部端点 POST 带签名的 JSON'],
+                'gateway.delivery.get': ['按 ID 获取投递记录'],
+                'gateway.delivery.list': ['列出投递台账——实际发出了什么（SENT/MOCKED/FAILED）']
             }
         }
     }

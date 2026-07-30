@@ -133,6 +133,9 @@ log_warn "Generating initial admin credentials..."
 ADMIN_USER="admin"
 ADMIN_PASS=$(node -e "process.stdout.write(require('crypto').randomBytes(12).toString('hex'))")
 JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")
+# gateway 用它派生 AES 密钥加密 SMTP 账号密码（logic/smtp.js）。不设则
+# gateway.smtp.create 直接抛 'GATEWAY_SECRET_KEY is not set' → SMTP 账号功能不可用。
+GATEWAY_SECRET_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")
 
 node -e "
 const crypto = require('crypto');
@@ -330,21 +333,47 @@ PORTAL_OPERATOR_PORT=3600
 PORTAL_SYSTEM_PORT=3650
 CLIENT_MOBILE_PORT=3700
 
-# Email Gateway (gateway service)
-# channel: auto | smtp | api | mock  (auto = api if key set, smtp if host set, else mock)
+# --- Outbound gateway (gateway service) ---
+
+# 加密 SMTP 账号密码用（gateway.smtp.* 的前置条件，已随机生成）。
+# ⚠️ 换掉它 = 存量 SMTP 账号密码解不开（需重新录入），不要随手改。
+GATEWAY_SECRET_KEY=$GATEWAY_SECRET_KEY
+
+# Email —— channel: auto | smtp | api | mock
+# auto = api if EMAIL_API_KEY set, smtp if EMAIL_SMTP_HOST set, else mock
+# ⚠️ 落到 mock = 什么都没真发出去（返回 provider:'mock' + 随机 messageId）。
 # EMAIL_CHANNEL=auto
 # EMAIL_FROM=noreply@example.com
 #
-# SMTP channel:
+# SMTP channel（也可不配这里，改用 gateway.smtp.create 建多账号、发送时传 smtpId）:
 # EMAIL_SMTP_HOST=smtp.example.com
 # EMAIL_SMTP_PORT=587
 # EMAIL_SMTP_SECURE=false
 # EMAIL_SMTP_USER=user@example.com
 # EMAIL_SMTP_PASS=yourpassword
 #
-# HTTP API channel (Resend by default; set EMAIL_API_URL for other providers):
+# HTTP API channel —— body 形状 = Resend 兼容（{from,to,subject,text,html}）。
+# SendGrid / SES 的 body 形状不同，换它们需要在 logic/email.js 加适配器，光改 URL 不通。
 # EMAIL_API_KEY=re_xxxx
 # EMAIL_API_URL=https://api.resend.com/emails
+
+# SMS —— channel: auto | aliyun | twilio | mock
+# auto = aliyun if SMS_ALIYUN_KEY_ID set, twilio if SMS_TWILIO_SID set, else mock
+# ⚠️ 短信只能套模版：先 gateway.sms.template.create 建模版，providerCode 必须是
+#    提供商侧已审批的模版码；随手发自由文本会被运营商拒。
+# SMS_CHANNEL=auto
+#
+# 阿里云（签名走 ACS3-HMAC-SHA256，无需装官方 SDK）:
+# SMS_ALIYUN_KEY_ID=LTAI_xxxx
+# SMS_ALIYUN_KEY_SECRET=xxxx
+# SMS_ALIYUN_SIGN_NAME=YourSignName
+# SMS_ALIYUN_ENDPOINT=https://dysmsapi.aliyuncs.com
+#
+# Twilio（providerCode = Content SID `HXxxxx`；模版实体建议同时声明 variableOrder，
+#         否则命名变量无法映射成 Twilio 要求的位置键 {"1":…}）:
+# SMS_TWILIO_SID=ACxxxx
+# SMS_TWILIO_TOKEN=xxxx
+# SMS_TWILIO_FROM=+15551234567
 
 # Optional
 # LOG_LEVEL=info

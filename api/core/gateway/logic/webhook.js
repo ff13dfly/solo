@@ -17,6 +17,7 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const { URL } = require('url');
+const clock = require('../../../library/clock');
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -40,7 +41,7 @@ function send({ url, payload, type, targetId, secret, timeoutMs }) {
             return reject(new Error('webhook.send: loopback targets are not allowed (internal calls go via the Router)'));
         }
 
-        const sentAt = Date.now();
+        const sentAt = clock.now();
         const body = JSON.stringify({ type: type || 'notification', targetId: targetId || null, payload: payload || {}, sent_at: sentAt });
 
         const headers = {

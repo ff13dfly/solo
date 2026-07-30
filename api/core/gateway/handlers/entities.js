@@ -25,11 +25,32 @@ module.exports = {
             name:        { type: 'string',   description: 'Template name (e.g. welcome, reset_password)', required: true },
             subject:     { type: 'string',   description: 'Email subject line, supports {{variable}}', required: true },
             html:        { type: 'string',   description: 'HTML body, supports {{variable}}', required: true },
+            text:        { type: 'string',   description: 'Plain-text body (text/plain part), supports {{variable}}. Omitted → derived from html' },
             variables:   { type: 'array',    description: 'Declared variable names (e.g. ["name","code"])' },
             description: { type: 'string',   description: 'Purpose of this template' },
             status:      { type: 'enum',     options: ['ACTIVE', 'DELETED'], description: 'Template status' },
             createdAt:   { type: 'datetime', description: 'Creation timestamp' },
             updatedAt:   { type: 'datetime', description: 'Last update timestamp' }
+        }
+    },
+
+    delivery: {
+        name: 'delivery',
+        description: 'Queryable record of one outbound send attempt (email / sms / webhook). Written best-effort — an audit row never fails a delivery the provider accepted.',
+        fields: {
+            id:                { type: 'string',   description: 'Unique identifier', required: true },
+            channel:           { type: 'enum',     options: ['email', 'sms', 'webhook'], description: 'Outbound channel', required: true },
+            target:            { type: 'string',   description: 'Recipient — email address(es), phone, or webhook URL', required: true },
+            provider:          { type: 'string',   description: "Provider that handled it: smtp|api|aliyun|twilio|webhook|mock (null when it failed before reaching one). 'mock' = nothing actually left the system" },
+            deliveryStatus:    { type: 'enum',     options: ['SENT', 'MOCKED', 'FAILED'], description: 'Outcome of THIS attempt. Distinct from `status`, which is the entity lifecycle', required: true },
+            templateId:        { type: 'string',   description: 'Template used, if any' },
+            subject:           { type: 'string',   description: 'Email subject (email channel only)' },
+            providerMessageId: { type: 'string',   description: "Provider-side message id (Aliyun BizId / Twilio sid / SMTP messageId / 'wh-<ts>')" },
+            idempotencyKey:    { type: 'string',   description: 'Caller-supplied de-dup key, if any' },
+            error:             { type: 'string',   description: 'Failure reason (deliveryStatus=FAILED), truncated to 500 chars' },
+            status:            { type: 'enum',     options: ['ACTIVE', 'DELETED'], description: 'Entity lifecycle (NOT the delivery outcome — see deliveryStatus)' },
+            createdAt:         { type: 'datetime', description: 'Creation timestamp' },
+            updatedAt:         { type: 'datetime', description: 'Last update timestamp' }
         }
     },
 
@@ -40,8 +61,9 @@ module.exports = {
             id:           { type: 'string',   description: 'Unique identifier', required: true },
             name:         { type: 'string',   description: 'Template name (e.g. verify_code)', required: true },
             channel:      { type: 'enum',     options: ['aliyun', 'twilio', 'mock'], description: 'SMS provider channel', required: true },
-            providerCode: { type: 'string',   description: 'Provider-side template code (pre-approved)', required: true },
+            providerCode: { type: 'string',   description: 'Provider-side template code (pre-approved). Aliyun: TemplateCode · Twilio: Content SID (HX…)', required: true },
             variables:    { type: 'array',    description: 'Declared variable names (e.g. ["code","minutes"])' },
+            variableOrder:{ type: 'array',    description: 'Named→positional order for Twilio ContentVariables ({"1":…}). Required for the twilio channel; ignored by aliyun' },
             description:  { type: 'string',   description: 'Purpose of this template' },
             status:       { type: 'enum',     options: ['ACTIVE', 'DELETED'], description: 'Template status' },
             createdAt:    { type: 'datetime', description: 'Creation timestamp' },

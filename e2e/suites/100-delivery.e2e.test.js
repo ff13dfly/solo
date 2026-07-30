@@ -150,6 +150,73 @@ gate('100 · delivery plane + reversible bot suspension', () => {
         expect(res.error.message).toMatch(/sse/i);
     });
 
+    // ── 投递台账 / 幂等键 / 投递事件(gateway-gaps G5·G7·G8,2026-07-30) ──────────
+    //
+    // 这三条只能在真链路上验:hermetic 套证明不了 `_event` 真被 Router 抽走并写进流
+    // (一个 `{type}` 缺 `stream` 的信封在单测里长得完全正常,在 Router 里被静默 skip)。
+    test('6. 出站台账 + 事件落流 + 幂等回放(经真 Router)', async () => {
+        const STREAM = 'EVENT:GATEWAY:DELIVERY';
+        const before = await redis.xLen(STREAM).catch(() => 0);
+        const idemKey = `e2e-100-${PID}-idem`;
+
+        // 直调 gateway(不经 notification):mock 通道 → provider:'mock'
+        const first = V.assertResult(await rpc('gateway.email.send', {
+            to: `ledger-${PID}@example.com`,
+            subject: `L-${PID}`, content: 'body',
+            idempotencyKey: idemKey,
+        }, ADMIN_TOKEN), 'gateway.email.send #1');
+
+        expect(first.provider).toBe('mock');
+        expect(typeof first.deliveryId).toBe('string');
+        // Router 必须把 `_event` 从结果里摘掉,不能漏给客户端
+        expect(first._event).toBeUndefined();
+
+        // ① 台账可查(经 Router 的新方法)
+        const row = V.assertResult(await rpc('gateway.delivery.get', { id: first.deliveryId }, ADMIN_TOKEN), 'delivery.get');
+        expect(row.channel).toBe('email');
+        expect(row.target).toBe(`ledger-${PID}@example.com`);
+        expect(row.deliveryStatus).toBe('MOCKED');      // 无凭证 → 什么都没真发出去
+        expect(row.idempotencyKey).toBe(idemKey);
+
+        const listed = V.assertResult(await rpc('gateway.delivery.list', { limit: 20 }, ADMIN_TOKEN), 'delivery.list');
+        expect(listed.items.some((r) => r.id === first.deliveryId)).toBe(true);
+
+        // ② 事件真的写进了 Redis 流(注册表放行 + Router 盖信封)
+        let entries = [];
+        for (let i = 0; i < 20 && entries.length === 0; i++) {
+            await sleep(250);
+            const after = await redis.xLen(STREAM).catch(() => 0);
+            if (after > before) {
+                entries = await redis.xRange(STREAM, '-', '+');
+            }
+        }
+        expect(entries.length).toBeGreaterThan(0);
+        const mine = entries
+            .map((e) => e.message)
+            .filter((m) => (m.payload || '').includes(first.deliveryId));
+        expect(mine).toHaveLength(1);
+        expect(mine[0].type).toBe('gateway.delivery.mocked');
+        expect(mine[0].source).toBe('gateway');          // Router 盖的 source,不可伪造
+        expect(mine[0].event_id).toBeTruthy();
+        expect(JSON.parse(mine[0].payload)).toMatchObject({
+            channel: 'email', provider: 'mock', status: 'MOCKED', deliveryId: first.deliveryId,
+        });
+
+        // ③ 同幂等键 → 回放首次结果,不重发、不新增台账行
+        const replay = V.assertResult(await rpc('gateway.email.send', {
+            to: `ledger-${PID}@example.com`,
+            subject: `L-${PID}`, content: 'body',
+            idempotencyKey: idemKey,
+        }, ADMIN_TOKEN), 'gateway.email.send #2 (same key)');
+
+        expect(replay.deduplicated).toBe(true);
+        expect(replay.messageId).toBe(first.messageId);
+        expect(replay.deliveryId).toBe(first.deliveryId);
+
+        const after2 = V.assertResult(await rpc('gateway.delivery.list', { limit: 50 }, ADMIN_TOKEN), 'delivery.list #2');
+        expect(after2.items.filter((r) => r.idempotencyKey === idemKey)).toHaveLength(1);
+    }, 40_000);
+
     test('5. 可逆 bot 暂停:suspend 即时咬活 token,resume 后恢复', async () => {
         const BOT = `system.e2e100-${PID}`;
         // 建 bot + 授一个无害读权限 + 发证

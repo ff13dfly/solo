@@ -128,6 +128,10 @@ describe('notification delivery reliability', () => {
         expect(gatewayCall[1].to).toBe('fuu@example.com');
         expect(gatewayCall[1].subject).toBe('S-alert');     // msg.payload no longer dropped
         expect(gatewayCall[1].content).toBe('C-body');
+        // De-dup handle for gateway: a retry after an accepted-then-timed-out send replays
+        // instead of re-sending. Keyed by message + channel + RESOLVED target, because two
+        // rules on one message may legitimately go to different recipients.
+        expect(gatewayCall[1].idempotencyKey).toBe('notification:m-addr:email:fuu@example.com');
         expect(redis._zsets.get(R.queueRetry)?.size || 0).toBe(0);
         expect(redis._lists.get(R.queueDead)?.length || 0).toBe(0);
     });

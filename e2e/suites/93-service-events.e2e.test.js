@@ -24,11 +24,13 @@ const SERVICES_WITH_EMITS = [
     { id: 'fulfillment',  minEmits: 1 },
     { id: 'nexus',        minEmits: 1 },
     { id: 'ingress',      minEmits: 1 },
+    // gateway: delivery outcomes (sent / mocked) — 2026-07-30, gateway-gaps G8.
+    { id: 'gateway',      minEmits: 2 },
 ];
 
 // Services expected to have empty declarations (not an error — just no events yet)
 const SERVICES_WITH_EMPTY_EVENTS = [
-    'administrator', 'agent', 'gateway', 'notification',
+    'administrator', 'agent', 'notification',
     'user', 'approval', 'planner', 'storage',
 ];
 

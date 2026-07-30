@@ -11,6 +11,27 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.1.x`）。
 
+### Fixed — gateway 出站通道（详情台账 [`gateway-gaps.md`](./gateway-gaps.md)）
+
+> 2026-07-30 gateway 全量读码审计（19 条缺口）后的首轮补齐：**11 条已修 + 2 条部分**，全部"只加不破"。hermetic CI 白名单 **119 套 / 1882 测试全绿**（gateway 从 2 套 → 5 套）。全程未碰 `api/router/`。
+
+- **🔴 阿里云短信通道此前根本发不出去**（`logic/sms.js`）。旧代码用 `Authorization: AccessKeyId <id>` + JSON body 打 dysmsapi——**这不是任何签名方案**，每条都 4xx；而 `resolveChannel` 一见 key id 就选 aliyun、不降级 mock，**配了真凭证比不配更糟**。现新增 `logic/providers/aliyun-sign.js` 实现 V3 `ACS3-HMAC-SHA256` 头签名（无新依赖、时间/nonce 可注入）。**顺带修掉一个更隐蔽的**：阿里云业务失败是 HTTP 200 + body `Code: 'isv.*'`，旧代码只看 `res.ok` → **失败当成功上报**；现按 `Code` 判定，非限流类标永久错（`httpStatus:400` → 直接 DLQ），限流类留临时错走退避。
+- **Twilio 命名变量映射成位置键**：`sms_template` 新增可选 `variableOrder` → `ContentVariables` 生成 `{"1":…,"2":…}`（Twilio 不认命名键）；twilio 通道的 `phone` 要求 E.164，阿里云仍收国内裸号。
+- **email api 通道诚实化**：body 形状 = **Resend 兼容**，登记进 `API_PROVIDERS` 适配器表（`EMAIL_API_PROVIDER` 选，未登记的名字 fail-fast）。README 此前写"走 SendGrid / SES"是**假的**——它们 body 形状不同，只改 `EMAIL_API_URL` 不通。
+- **脚手架 `.env` 缺 `GATEWAY_SECRET_KEY`** → 下发项目里 `gateway.smtp.create` 直接抛 `not set`、SMTP 账号功能不可用。`init.sh` 现随机生成并写入，同时补全 `SMS_*` 全部注释位。
+- **发前校验取代"打了提供商才知道错"**：模版必填字段（create/update 两侧）+ 收件人格式（`to`/`cc`/`bcc`/`replyTo`/`phone`，复用 `library/validate.js` 的 PATTERNS）→ 一律 `-32602`，正好在 notification 的永久错集合里 → **直接 DLQ，不烧 5 次重试**。不完整模版此前是 `undefined.replace is not a function`，现在点名缺哪个字段。
+- **`Date.now()` 清零**：gateway 全面改用 `library/clock.js`（这才写得出"冻结时钟断言签名逐字节确定"的测试）；rmbg 的 multipart boundary 改随机（用时间当 boundary 本就会撞）。
+
+### Added — gateway 投递可观测 + 可靠
+
+- **投递台账**（`gateway.delivery.get/list` + `delivery` 实体）。出站此前是**唯一没有可查记录的核心链路**（只有 md5 哈希目录下的本机 WAL 文件）。每次 send 写一行，`deliveryStatus` = `SENT`/`MOCKED`/`FAILED`（**与 Entity Factory 自己的 `status` 分开命名**，避开 `state↔status` 同名陷阱）。写入**尽力而为**：Redis 挂了只丢 `deliveryId`，不把已被提供商收下的投递变成失败。
+- **幂等键**（三个 send 的可选 `idempotencyKey`，24h）。镜像 ingress 的入站去重到出站方向：同 key 回放首次结果（`deduplicated:true`）、不重发、不新增台账行；失败会释放 key（否则一次失败把 key 永久锁死）；并发撞同 key 抛**临时**错。**notification worker 已自动带 key** = `notification:{messageId}:{channel}:{解析后收件人}`——含 channel 与收件人是必须的，只按 messageId 去重会把"一条消息命中两条规则发给两个人"的第二条静默吞掉。
+- **投递事件**：流 `EVENT:GATEWAY:DELIVERY`，type `gateway.delivery.sent` / `gateway.delivery.mocked`，经 Router `_event` 夹带发出（无 relay、无 bot token、未改 router 代码），`handlers/events.js` 的 `emits` 从空数组变为如实声明。sentinel 现在能对"什么都没真发出去"做反应。**⚠️ 两条限制**：① `_event` 只能搭成功结果 → `DELIVERY_FAILED` 需 gateway 自持 relay token（与附件同一份基建，台账 G8/G13），当下失败可查性由台账兜住；② Router 有事件注册表闸，**生产默认表（`api/router/config.js`）尚未登记 gateway → 生产上这两个事件目前会被拦下**（dev/e2e 已在各自 fixture 放行、真链路已验证）。等一行授权：`'gateway': { 'EVENT:GATEWAY:DELIVERY': ['*'] }`。
+- **邮件补 `cc` / `bcc` / `replyTo`**（两条通道都透传）与**模版纯文本正文** `text`（不给则从 html 派生——此前 text/plain 部分塞的是 HTML 源码）。
+- **可选严格变量** `GATEWAY_STRICT_VARIABLES=true`：模版变量漏传直接拒发，取代把字面量 `{{code}}` 发给用户。**默认关**（行为不变），带 OTP 的部署建议开。
+
+> 下游 action：无（全部只加不破，默认值即现行为）。**但两件事要知道**：① 若你已配阿里云短信凭证，此前发送其实一直失败，升级后才真正能发——请先用测试号验证；② 想要投递台账/幂等，分别是新方法 `gateway.delivery.*` 与新可选参数 `idempotencyKey`，不改现有调用。
+
 ### Docs / Scaffold
 - **GUIDE.md 方法引用全部改用全限定名**。交叉核对 13 份 GUIDE.md 引用的方法名 vs 280 个真实声明方法：无编造方法（零漂移），但有 8 处写成了裸 `entity.action` 简写（planner 3 · fulfillment 2 · approval 1 · user 2）——AI 代理照抄去调会吃 `-32601`。已补全为 `{service}.{entity}.{action}`。
 - **下游守门 skill `solo-service` 补两节**（`deploy/scaffold/.claude/skills/`，`upgrade.sh` 会 re-template 下发）：

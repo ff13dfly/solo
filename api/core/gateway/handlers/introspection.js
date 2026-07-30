@@ -41,17 +41,19 @@ const EMAIL_TEMPLATE_RETURN = [
     { name: 'name',        type: 'string' },
     { name: 'subject',     type: 'string' },
     { name: 'html',        type: 'string' },
+    { name: 'text',        type: 'string' },     // optional plain-text sibling of html
     { name: 'variables',   type: 'array' },
     { name: 'description', type: 'string' },
 ];
 
 const SMS_TEMPLATE_RETURN = [
     ...ENTITY_BASE,
-    { name: 'name',         type: 'string' },
-    { name: 'channel',      type: 'string' },
-    { name: 'providerCode', type: 'string' },
-    { name: 'variables',    type: 'array' },
-    { name: 'description',  type: 'string' },
+    { name: 'name',          type: 'string' },
+    { name: 'channel',       type: 'string' },
+    { name: 'providerCode',  type: 'string' },
+    { name: 'variables',     type: 'array' },
+    { name: 'variableOrder', type: 'array' },    // named→positional map for twilio
+    { name: 'description',   type: 'string' },
 ];
 
 // Entity-Factory .list() → { items, total } (an OBJECT, not a bare array).
@@ -66,11 +68,34 @@ const DELETE_RETURN = [
 ];
 
 // email.send / sms.send providers (logic/email.js, logic/sms.js, and the inline smtpId
-// branch in logic/index.js) every non-throwing path returns exactly these three keys.
+// branch in logic/index.js) every non-throwing path returns these three keys.
+//
+// `deliveryId` — ledger row id (logic/delivery.js). NOT required: the ledger write is
+//   best-effort, so a Redis hiccup drops the id rather than the delivery.
+// `deduplicated` — only present (true) when an `idempotencyKey` replayed a prior result.
+// (`_event` also rides the result, but the Router strips it before the client sees it, so
+//  it is deliberately NOT part of the caller-visible contract.)
 const SEND_RETURN = [
-    { name: 'success',   type: 'boolean', required: true },
-    { name: 'messageId', type: 'string',  required: true },
-    { name: 'provider',  type: 'string',  required: true },
+    { name: 'success',      type: 'boolean', required: true },
+    { name: 'messageId',    type: 'string',  required: true },
+    { name: 'provider',     type: 'string',  required: true },
+    { name: 'deliveryId',   type: 'string' },
+    { name: 'deduplicated', type: 'boolean' },
+];
+
+// Delivery ledger row (entities.js `delivery`). Factory-guaranteed keys are required;
+// content keys come from the send path and are typed but conditional.
+const DELIVERY_RETURN = [
+    ...ENTITY_BASE,
+    { name: 'channel',           type: 'string' },
+    { name: 'target',            type: 'string' },
+    { name: 'provider',          type: 'string' },
+    { name: 'deliveryStatus',    type: 'string' },   // SENT | MOCKED | FAILED
+    { name: 'templateId',        type: 'string' },
+    { name: 'subject',           type: 'string' },
+    { name: 'providerMessageId', type: 'string' },
+    { name: 'idempotencyKey',    type: 'string' },
+    { name: 'error',             type: 'string' },
 ];
 
 module.exports = [
@@ -89,7 +114,7 @@ module.exports = [
     { name: 'gateway.smtp.test',   params: ['id'], returns: ['success', 'message'], returns_schema: [{ name: 'success', type: 'boolean', required: true }, { name: 'message', type: 'string', required: true }], description: 'Verify SMTP connection for an account', ai: false },
 
     // --- Email Template Management ---
-    { name: 'gateway.email.template.create', params: ['name', 'subject', 'html', 'variables'], returns: ['id', 'status', 'createdAt'], returns_schema: EMAIL_TEMPLATE_RETURN, description: 'Create email template', ai: false },
+    { name: 'gateway.email.template.create', params: ['name', 'subject', 'html', 'text', 'variables'], returns: ['id', 'status', 'createdAt'], returns_schema: EMAIL_TEMPLATE_RETURN, description: 'Create email template (name/subject/html required; text = optional plain-text part)', ai: false },
     { name: 'gateway.email.template.get',    params: ['id'], returns: ['id', 'status'], returns_schema: EMAIL_TEMPLATE_RETURN, description: 'Get email template by ID', ai: false },
     { name: 'gateway.email.template.list',   params: [], returns: ['items', 'total'], returns_schema: LIST_RETURN, description: 'List email templates', ai: false },
     { name: 'gateway.email.template.update', params: ['id'], returns: ['id', 'status', 'updatedAt'], returns_schema: EMAIL_TEMPLATE_RETURN, description: 'Update email template', ai: false },
@@ -98,15 +123,15 @@ module.exports = [
     // --- Email Send ---
     {
         name: 'gateway.email.send',
-        params: ['to', 'subject', 'content', 'templateId', 'variables', 'smtpId'],
+        params: ['to', 'subject', 'content', 'html', 'cc', 'bcc', 'replyTo', 'templateId', 'variables', 'smtpId', 'idempotencyKey'],
         returns: ['success', 'messageId', 'provider'],
         returns_schema: SEND_RETURN,
-        description: 'Send email — directly (subject+content) or via template (templateId+variables). Optional smtpId selects a stored SMTP account.',
+        description: 'Send email — directly (subject+content) or via template (templateId+variables). Optional smtpId selects a stored SMTP account; cc/bcc/replyTo accept an address or an array. Recipients are format-checked (invalid → -32602, no provider call).',
         ai: true
     },
 
     // --- SMS Template Management ---
-    { name: 'gateway.sms.template.create', params: ['name', 'channel', 'providerCode', 'variables'], returns: ['id', 'status', 'createdAt'], returns_schema: SMS_TEMPLATE_RETURN, description: 'Create SMS template', ai: false },
+    { name: 'gateway.sms.template.create', params: ['name', 'channel', 'providerCode', 'variables', 'variableOrder'], returns: ['id', 'status', 'createdAt'], returns_schema: SMS_TEMPLATE_RETURN, description: 'Create SMS template (variableOrder maps named vars to Twilio positional ContentVariables)', ai: false },
     { name: 'gateway.sms.template.get',    params: ['id'], returns: ['id', 'status'], returns_schema: SMS_TEMPLATE_RETURN, description: 'Get SMS template by ID', ai: false },
     { name: 'gateway.sms.template.list',   params: [], returns: ['items', 'total'], returns_schema: LIST_RETURN, description: 'List SMS templates', ai: false },
     { name: 'gateway.sms.template.update', params: ['id'], returns: ['id', 'status', 'updatedAt'], returns_schema: SMS_TEMPLATE_RETURN, description: 'Update SMS template', ai: false },
@@ -115,7 +140,7 @@ module.exports = [
     // --- SMS Send ---
     {
         name: 'gateway.sms.send',
-        params: ['templateId', 'phone', 'variables'],
+        params: ['templateId', 'phone', 'variables', 'idempotencyKey'],
         returns: ['success', 'messageId', 'provider'],
         returns_schema: SEND_RETURN,
         description: 'Send SMS via stored template (templateId + phone + variables)',
@@ -125,17 +150,23 @@ module.exports = [
     // --- Outbound Webhook Send ---
     {
         name: 'gateway.webhook.send',
-        params: ['url', 'payload', 'type', 'targetId', 'secret', 'timeoutMs'],
+        params: ['url', 'payload', 'type', 'targetId', 'secret', 'timeoutMs', 'idempotencyKey'],
         returns: ['success', 'status', 'provider', 'messageId'],
         returns_schema: [
-            { name: 'success',   type: 'boolean', required: true },
-            { name: 'status',    type: 'number',  required: true },  // upstream HTTP status (2xx)
-            { name: 'provider',  type: 'string',  required: true },  // always 'webhook'
-            { name: 'messageId', type: 'string',  required: true },  // `wh-<sentAt>`
+            { name: 'success',      type: 'boolean', required: true },
+            { name: 'status',       type: 'number',  required: true },  // upstream HTTP status (2xx)
+            { name: 'provider',     type: 'string',  required: true },  // always 'webhook'
+            { name: 'messageId',    type: 'string',  required: true },  // `wh-<sentAt>`
+            { name: 'deliveryId',   type: 'string' },                   // ledger row (best-effort)
+            { name: 'deduplicated', type: 'boolean' },                  // idempotencyKey replay
         ],
         description: 'POST a JSON payload to an external endpoint (machine target). Optional secret → HMAC-SHA256 X-Solo-Signature header.',
         ai: false
     },
+
+    // --- Delivery Ledger ---
+    { name: 'gateway.delivery.get',  params: ['id'], returns: ['id', 'status'], returns_schema: DELIVERY_RETURN, description: 'Get one delivery record by ID', ai: false },
+    { name: 'gateway.delivery.list', params: ['page', 'limit', 'search'], returns: ['items', 'total'], returns_schema: LIST_RETURN, description: 'List delivery records (what actually went out, newest first). deliveryStatus: SENT | MOCKED | FAILED', ai: false },
 
     // --- Image Processing ---
     {

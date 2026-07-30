@@ -1,5 +1,6 @@
 const https = require('https');
 const http = require('http');
+const crypto = require('crypto');
 
 /**
  * RMBG: Background removal via local ONNX server with cloud API fallback.
@@ -49,7 +50,9 @@ async function cutoutRemoveBg(imageBase64) {
     if (!apiKey) throw new Error('REMOVEBG_API_KEY not configured');
 
     const imageBuffer = Buffer.from(imageBase64, 'base64');
-    const boundary = `----FormBoundary${Date.now()}`;
+    // Random, not time-based: a frozen or coarse clock collides across concurrent requests,
+    // and a boundary that also occurs in the body bytes corrupts the upload.
+    const boundary = `----FormBoundary${crypto.randomBytes(12).toString('hex')}`;
     const parts = [
         `--${boundary}\r\nContent-Disposition: form-data; name="image_file"; filename="image.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`,
         imageBuffer,

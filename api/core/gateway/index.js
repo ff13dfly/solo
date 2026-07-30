@@ -130,6 +130,10 @@ app.post('/jsonrpc', async (req, res) => {
             // Outbound Webhook Send
             'gateway.webhook.send': (p) => Methods.webhook.send(p),
 
+            // Delivery Ledger
+            'gateway.delivery.get':  (p) => Methods.delivery.get(p),
+            'gateway.delivery.list': (p) => Methods.delivery.list(p),
+
             // Image Processing
             'gateway.rmbg.cutout': (p) => Methods.rmbg.cutout(p)
         };
