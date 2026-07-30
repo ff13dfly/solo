@@ -126,6 +126,7 @@ authority 的"真问题"：**身份与最小权限没落到每个 agent**。
 | **AI 准确率 eval** | NL→意图/参数准确率**无系统评估**（mobile route-mocked e2e 故意 mock 掉 AI）。真实载体 = `api/autonomous/workflow-auditor/` + `agent.case.generate`。做成 eval/基准线，非 tester 微服务。（注：portal/system 旧 `AISupport` 页已于 2026-06 移除，不复活。） | `docs/protocol/zh/ai-test.md`（stub） |
 | **返回契约债** | 全 14 服务"声明 vs 真实返回"审计后剩 ~47 条**非阻塞**缺陷（同族/跨路径形状不一致 · 裸数组 list · agent provider 分歧 · 条件键）。`returns_schema` 已如实标注、e2e 全过 → 属一致性/约定债 + 几个未完成功能。🔴 影响 fulfillment 取数的仅 B/D/H 类。守卫已建（`library/contract.js` + ai:true 覆盖闸 + `fulfillment/logic/lint.js`）。 | `docs/planning/return-contract-debt.md`（2026-06-18 审计，带 file:line） |
 | **时间戳格式债（Move B，v2）** | 权威格式 = epoch 毫秒（`clock.now()` / Entity Factory 盖章 + 数字排序）；storage/user 等把 `createdAt` 存成 ISO 字符串是偏差。哑雷（Factory 排序遇 ISO → `NaN` → 静默乱序）已于 v1.1.12「只加不破」摁掉（`entity.js` `toSortableMs`）。**真正统一成毫秒 = 破坏性 wire 变更 + 存量数据迁移 + reindex → 归 v2**，别在 patch 里翻格式（会断 Portal / 下游 wavely 的 ISO 解析）。各服务 GUIDE.md 已如实标注各自是 ISO 还是毫秒。 | `CHANGELOG v1.1.12`、`api/library/entity.js`（`toSortableMs`） |
+| **gateway 出站缺口** | 2026-07-30 gateway 全量读码审计，19 条按 🔴半实现/🟠结构性/🟡能力空白/⚪一致性 分档。**🔴 最狠的是 aliyun 短信签名协议不对（`logic/sms.js:10`，用 `Authorization: AccessKeyId` 而非 RPC/V3 签名）——配了凭证反而全 4xx 且不降级 mock**；`GATEWAY_SECRET_KEY` 没进脚手架 .env → 下发项目 SMTP 账号功能直接不可用；Twilio/README 承诺的 SendGrid·SES 均未验证/不存在。🟠 结构性：出站是唯一无可查台账的核心链路（只写 md5 哈希目录本地 WAL）、无回执回流（status 恒 sent）、无幂等键（worker 重试 5 次 → 可能重复发送）、`events.js` emits 空（sentinel 对投递失败全瞎，可用 Router `_event` 夹带补、不碰 router）、无出站配额而 `email.send` 是 `ai:true`、portal 零管理页。🟡 无附件/cc/bcc（storage 文件发不出去）。**除 G9(b)/G16 默认翻转/G19 归 v2，其余全可"只加不破"进 v1.1.x。** | `docs/planning/gateway-gaps.md`（带 file:line + 分批推进顺序 + 验收总则） |
 | **架构协调性债** | "长歪了"清单（非 bug，是不一致）：① 四份各自为政的 60s 进程内缓存多数无 bust（router events/tasks/ratelimit + agent model_config；§5.6③ 根因）—— **✅ 功能面已修（2026-07-01：tasks/ratelimit 写即 bust + model_config 已带 bust + events 无运行时写者不需要）**，DRY 合并留 v2 ② 两份手工同步的 bot 权限图（seed-bots ↔ e2e harness）③ `public` 声明散 3 层无单一真源（"public 太多"的结构根因）④ 服务内 admin 校验深浅不一（8 服务 vs 纯 Router，约定 vs 实践）⑤ 端口两份真源（services.json ↔ config.js portFor）⑥ 返回契约债（见上条）⑦ 桩/真方法混排 introspection。②④⑤⑦ 可 v1.1.x 顺手做；①DRY 合并 + ③ 留 v2 破坏窗口。 | `docs/planning/coherence-debt.md`（2026-07-01 走查，带 file:line + 归属标注） |
 
 ---
@@ -175,6 +176,7 @@ authority 的"真问题"：**身份与最小权限没落到每个 agent**。
 
 ## 附：本清单合并了哪些来源
 - `docs/planning/toFix.md` —— API 待修详情（保留为 drill-down；其条目在 §2/§3 已索引）。
+- `docs/planning/gateway-gaps.md` —— gateway 出站缺口台账（2026-07-30 读码审计，19 条，drill-down；§3 已索引）。
 - `docs/protocol/zh/context.md §11.2` —— nexus 上下文协议的未尽（已在 §2 汇总）。
 - `api/core/orchestrator/AUDIT.md` —— 编排实现差距（仍是权威详情）。
 - `docs/protocol/zh/governance.md` —— 治理缝合图（信任根/双轨审批/actor-claim）。
