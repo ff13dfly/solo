@@ -32,6 +32,16 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > 下游 action：无（全部只加不破，默认值即现行为）。**但两件事要知道**：① 若你已配阿里云短信凭证，此前发送其实一直失败，升级后才真正能发——请先用测试号验证；② 想要投递台账/幂等，分别是新方法 `gateway.delivery.*` 与新可选参数 `idempotencyKey`，不改现有调用。
 
+### Added — 第二轮（2026-07-30 下午）：gateway relay 收官 + approval 规则档 + storage 语义 + 硬化
+
+- **gateway `system.gateway` relay bot（一份基建四个收益）**：`deploy/bot-permits.js` 单一真源加 bot（permit：`storage.asset.get/resolve`），dev/e2e 播种自动跟进；gateway 构造 relay + `gateway.token.set/status/clear`（admin，镜像 notification 体例）。落地：① **邮件附件** `attachments:[{assetId,filename?}]`——只接 storage 引用拒裸 base64，relay 取元数据+URL 流式下载，总量 cap 10MB/10 个（`GATEWAY_ATTACH_MAX_*`），坏引用在写台账/占幂等键**之前** fail-fast；② **失败投递事件** `gateway.delivery.failed`（relay `event.emit`，fire-and-forget、不吞原始错误、无 token 退化为仅台账行）；③ **回执回流** `gateway.delivery.update`（SENT→DELIVERED/BOUNCED/COMPLAINED，DELIVERED→迟到退信；MOCKED/FAILED 终态；gateway 不自建流消费循环——provider webhook 经 ingress → 消费者调本方法，三层分工不串味）；④ **通道探针** `gateway.channel.test`（smtp verify / resend GET domains / aliyun 签名 QuerySmsSignList / twilio GET 账号——全只读不真发，失败报告不抛错，无探针的 provider 诚实 `supported:false`）。
+- **Router 默认事件注册表登记 gateway**（`api/router/config.js`，**授权改动**）：`'gateway'`（`_event` 夹带 sent/mocked）+ `'system.gateway'`（relay 失败事件）两行，`EVENT:GATEWAY:DELIVERY` 生产可用；e2e/dev fixture 同步（inject-workflows 走 merge 不再重复）。
+- **approval 规则档 + record 过期**（BACKLOG "approval 深挖"；m-of-n 与 gate expiry 经复核**早已存在**，此为真缺口补齐）：① `approval.policy.*`（set/delete admin · list/resolve）——`subjectPattern`（精确或尾部 `*` glob，与事件注册表同方言）→ 默认 `requiredSigners`/`expiresInSec`；**显式参数永远赢，策略只补空白**（gate.open 的 requiredSigners 从"签名默认 1"改为 undefined 检测，行为对既有调用方逐字节不变）；② **record 轨过期**：`request` 加可选 `expiresInSec`（≥60，或策略按 target 补），INIT/DISPATCHED 过期惰性翻 `EXPIRED`（终态 fail-closed，verify/confirm/reject 全拒；不设且无策略 = 永不过期 = 历史行为）；③ approval 全面 clock 化（expiry 测试可冻结时间）。hermetic `policy.test.js` 13 用例入 CI；config description 顺手补齐 gate/policy/token 全部方法（原来只列了 record）。
+- **storage visibility 语义修复**（wavely 反馈三条全采纳，零行为变更）：GUIDE.md 新增「visibility 保护的是什么」节（RPC 面 vs 字节面、`STORAGE_ACCESS` 两档后果、"只设 visibility 无效"）；`oss/index.js` 注释纠偏（`|| 'private'` 兜底 ≠ 系统默认）+ **启动期告警**（`access=public` 时 warn 一行，unit 测试的 private 配置不受噪音）。处理结论已回写反馈文档。
+- **生产硬化**：① **Redis 口令**——scaffold `init.sh` 生成 `REDIS_PASSWORD` 写 `.env`（REDIS_URL 内嵌 + 独立行），`run.sh` 起 redis 带 `--requirepass`、全部 redis-cli 经 `REDISCLI_AUTH`（不用 `-a` 防 ps 泄露）；无密码 .env 保持旧行为（only-add）。② `.env` 补 `CORS_ORIGINS` 注释位。③ **复核纠偏**：CORS（`library/cors.js`）与 `/metrics`（`library/health.js` + 三服务业务 gauge）**早已落地**，toFix §2 相应条目是 stale——BACKLOG §3 生产硬化行已重写。**仍欠一件**：Router token jti 级反重放（Ed25519 确定性签名 + 毫秒 iat → 无 jti 则同毫秒合法并发与窗口内重放不可区分，需 `router/handlers/forward.js` 加一行随机 jti，**待授权**；现有 iat 新鲜度窗口已把重放压到秒级）。
+
+> 下游 action：无（全部只加不破）。**要知道的三件**：① 新项目 `.env` 自带 Redis 口令，旧项目 upgrade 后不自动加（.env 是项目自有文件）——想启用手动补 `REDIS_PASSWORD` + 改 REDIS_URL；② 附件/失败事件需 `RELAY:TOKEN:gateway`（dev `seed-bots.js` 自动，生产照 bot-permits 播种）；③ approval 无既有策略时行为零变化，建策略即生效。
+
 ### Docs / Scaffold
 - **GUIDE.md 方法引用全部改用全限定名**。交叉核对 13 份 GUIDE.md 引用的方法名 vs 280 个真实声明方法：无编造方法（零漂移），但有 8 处写成了裸 `entity.action` 简写（planner 3 · fulfillment 2 · approval 1 · user 2）——AI 代理照抄去调会吃 `-32601`。已补全为 `{service}.{entity}.{action}`。
 - **下游守门 skill `solo-service` 补两节**（`deploy/scaffold/.claude/skills/`，`upgrade.sh` 会 re-template 下发）：

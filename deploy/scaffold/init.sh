@@ -136,6 +136,8 @@ JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toS
 # gateway 用它派生 AES 密钥加密 SMTP 账号密码（logic/smtp.js）。不设则
 # gateway.smtp.create 直接抛 'GATEWAY_SECRET_KEY is not set' → SMTP 账号功能不可用。
 GATEWAY_SECRET_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")
+# Redis 口令（生产硬化）：run.sh 起 redis 时 --requirepass，客户端从 REDIS_URL 内嵌密码连。
+REDIS_PASSWORD=$(node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))")
 
 node -e "
 const crypto = require('crypto');
@@ -318,8 +320,15 @@ log_info "Redis port: $REDIS_PORT (auto-selected, not currently in use)"
 
 cat > "$NEW_DIR/.env" << EOF
 # Solo Core
-REDIS_URL=redis://127.0.0.1:$REDIS_PORT
+# Redis 带口令（run.sh 起 redis 时 --requirepass；改/删密码要与 redis_data 里已持久化的
+# 实例一致，否则连不上）。REDIS_PASSWORD 单独一行给 run.sh / redis-cli(REDISCLI_AUTH) 用。
+REDIS_URL=redis://:$REDIS_PASSWORD@127.0.0.1:$REDIS_PORT
+REDIS_PASSWORD=$REDIS_PASSWORD
 JWT_SECRET=$JWT_SECRET
+
+# CORS（生产建议设置）：不设 = 全开（dev 行为）；none = 拒绝所有跨域；
+# 或逗号分隔的精确 origin 白名单。全部服务经 library/cors.js 统一吃这一个开关。
+# CORS_ORIGINS=https://yourapp.example.com
 
 # Router Identity
 SOLO_KEYPAIR_PATH=$NEW_DIR/.keypair

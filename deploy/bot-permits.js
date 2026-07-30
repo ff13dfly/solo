@@ -37,6 +37,11 @@ const BOT_PERMITS = {
     // ingress:event.emit → EVENT:WEBHOOK:*(无下游服务调用,permit 为空)。
     'system.ingress':      {},
 
+    // gateway 出站增值:附件按 storage 引用取字节(asset.get 元数据 + resolve 拿 URL),
+    // 失败投递事件走 event.emit(EVENT:GATEWAY:DELIVERY / gateway.delivery.failed)。
+    // 缺席时优雅降级:无附件能力 + 失败只记台账 —— 普通 send 不依赖本 bot。
+    'system.gateway':      { storage: ['storage.asset.get', 'storage.asset.resolve'] },
+
     // fulfillment:emit EVENT:FULFILLMENT:*(经 Router 事件注册表)+ 调 agent.chat 做 profile.generate(NL → profile)。
     'system.fulfillment':  { agent: ['agent.chat'] },
 

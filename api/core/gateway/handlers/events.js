@@ -34,6 +34,14 @@ module.exports = {
             mechanism:   '_event piggyback on the RPC result (Router extracts + publishes)',
             payload:     PAYLOAD,
         },
+        {
+            stream:      'EVENT:GATEWAY:DELIVERY',
+            type:        'gateway.delivery.failed',
+            trigger:     'a send threw at the provider (after recording the FAILED ledger row)',
+            description: '投递失败。走 relay event.emit（`_event` 只能搭成功结果），source = system.gateway bot；relay token 未播则只有台账行、无事件（fail-soft）。payload 额外带 `error`。',
+            mechanism:   'relay → event.emit (system.gateway bot) — fire-and-forget',
+            payload:     { ...PAYLOAD, error: 'string — failure reason (truncated 500)' },
+        },
     ],
     subscribes: [],
 };

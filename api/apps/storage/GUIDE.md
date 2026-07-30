@@ -15,7 +15,7 @@ CAS（内容寻址）文件存储：文件按 SHA-256 去重，同一内容永�
    - `file`：**base64 字符串**，上限 `maxLength: 5242880`（≈5MB base64，原文件 ~3.7MB）。
      超限先压缩/缩图再传，别硬试。
    - `visibility`：`public | internal | private`，不传默认 `internal`。
-     要给前端 `<img>` 直接引用的传 `public`。
+     要给前端 `<img>` 直接引用的传 `public`。**语义边界见下方"visibility 保护的是什么"。**
    - 需要已认证会话（记录 owner），匿名上传已关闭。
 2. 返回 `{ id, sha256, size, url, ... }` — `id` 即 assetId，拿去挂业务实体。
 
@@ -39,6 +39,22 @@ CAS（内容寻址）文件存储：文件按 SHA-256 去重，同一内容永�
 - `storage.asset.multi { ids }` → 批量 resolve（需认证）。
 - `storage.asset.get { id }` → 原始元数据（无 url 装饰；legacy 记录可能只有
   `id` + `sha256`，其余字段别当必有）。
+
+## visibility 保护的是什么（重要，别误读）
+
+`visibility` 是 **RPC 面**的读授权：决定谁能通过 `storage.asset.resolve` / `get` **取得 URL**
+（`public` 任何人 / `internal` 需登录 / `private` 仅 owner）。**它不保护字节本身。**
+
+URL 拿到后能否下载，由**部署侧**的 `STORAGE_ACCESS` 决定：
+- `public`（**默认**）= 稳定无签名 URL —— 知道 URL 即可匿名下载，`internal`/`private` 资产也一样；
+- `private` = 限时签名 URL（默认 30 分钟过期）。
+
+这是标准的能力 URL（capability URL）模型（同 S3 预签名），不是缺陷；但字面上
+`internal` 三个字容易被读成"字节也内部可见"——**不是**。结论：
+
+> **真需要字节级隔离，必须部署侧设 `STORAGE_ACCESS=private`；只设 `visibility` 无效。**
+> 反过来，测试期接受"知道 URL 就能下"（key 是内容 hash、不可枚举）也是合理选择——
+> 但要**知情地**选，服务启动日志里有对应告警可核对。
 
 ## 坑与约定
 

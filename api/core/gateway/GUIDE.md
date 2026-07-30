@@ -49,20 +49,44 @@ webhook）的镜像。
 把 JSON POST 到外部端点。body 会被包成 `{ type, targetId, payload, sent_at }`。
 `url` 来自调用方（notification 规则参数 / sentinel 配置），**绝不取自用户资料**。
 
-## 配方四：查"到底发出去了没"（投递台账）
+## 配方四：查"到底发出去了没"（投递台账 + 回执）
 
 每次 send（三个通道都算）都会写一行 `delivery` 实体，返回值里带 `deliveryId`：
 
 - `gateway.delivery.get { id }` —— 看单条。
 - `gateway.delivery.list { page?, limit?, search? }` —— 看台账，新的在前。
+- `gateway.delivery.update { id, deliveryStatus, detail? }` —— **回执回流**（见下）。
 
 关键字段 **`deliveryStatus`**（≠ 实体生命周期 `status`）：
 - `SENT` —— 真提供商收下了。
 - `MOCKED` —— **什么都没发出去**（无凭证降级 mock）。
 - `FAILED` —— 打提供商失败，`error` 里是原因（截断 500 字）。
+- `DELIVERED` / `BOUNCED` / `COMPLAINED` —— 回执态，由 `delivery.update` 推进。
+
+**回执怎么接**（gateway 自己不消费事件流，保持哑管道）：提供商的送达/退信 webhook →
+listener 归一化 → `ingress.ingest` → `EVENT:WEBHOOK:{provider}` → 你的消费者
+（workflow / sentinel / ops bot）解析后调 `gateway.delivery.update`。合法转移：
+`SENT → DELIVERED|BOUNCED|COMPLAINED`，`DELIVERED → BOUNCED|COMPLAINED`（迟到退信）；
+`MOCKED`/`FAILED` 是终态（没有提供商侧消息可回执）。
 
 台账是**尽力而为**的：Redis 写失败只会让 `deliveryId` 缺失，**不会**让一次已被提供商
 收下的投递变成失败。所以"没有 deliveryId"≠"没发出去"。
+
+## 配方六：验凭证不用真发一条（通道探针）
+
+`gateway.channel.test { channel: 'email'|'sms' }` —— 打提供商的**只读**端点，什么都不发：
+- email/smtp → SMTP 握手验证；email/api（resend）→ GET /domains；
+- sms/aliyun → 签名 QuerySmsSignList；sms/twilio → GET 账号资源。
+- 返回 `{ resolved, supported, ok, error?, note? }`。**`resolved:'mock'` + `ok:true` = 根本没配凭证**。
+- 连通性失败**报告不抛错**（`ok:false` + error）；没有只读探针的 provider 诚实返回 `supported:false`。
+
+## 配方七：发带附件的邮件（storage 引用）
+
+`gateway.email.send` 加 `attachments: [{ assetId, filename? }]` —— **只接 storage 引用，
+不接裸 base64**（大文件别过 Router）。gateway 用自己的 relay bot（`system.gateway`）去
+storage 拉元数据 + 字节，两条邮件通道（smtp/api）都透传。上限：默认总 10MB / 10 个
+（`GATEWAY_ATTACH_MAX_{BYTES,COUNT}`）。**前置**：`RELAY:TOKEN:gateway` 已播
+（`deploy/seed-bots.js` 自动做）；没播则带附件的 send 直接 `-32602` 报清楚缺什么。
 
 ## 配方五：防重复发送（幂等键）
 
@@ -79,23 +103,18 @@ notification worker 已自动带 key：`notification:{messageId}:{channel}:{reso
 
 ## 事件（nexus sentinel 可订阅）
 
-send 成功后经 Router `_event` 夹带发出（Router 会在回客户端前摘掉，所以你在返回值里看不到）。
-流名 **`EVENT:GATEWAY:DELIVERY`**，两个 type：
+流名 **`EVENT:GATEWAY:DELIVERY`**，三个 type（注册表已在框架默认表登记，生产可用）：
 
-| type | 什么时候 |
-|------|---------|
-| `gateway.delivery.sent` | 真提供商收下 |
-| `gateway.delivery.mocked` | 落到 mock —— **什么都没真发出去**（生产上出现即配置缺失） |
+| type | 什么时候 | 走哪条路 |
+|------|---------|---------|
+| `gateway.delivery.sent` | 真提供商收下 | `_event` 夹带（Router 抽走后发布，客户端看不到） |
+| `gateway.delivery.mocked` | 落到 mock —— **什么都没真发出去**（生产上出现即配置缺失） | 同上 |
+| `gateway.delivery.failed` | 打提供商失败（台账已记 FAILED 行） | relay `event.emit`（`system.gateway` bot），payload 多一个 `error` |
 
 payload：`{ channel, target, provider, providerMessageId, deliveryId, templateId, status }`。
 
-⚠️ 两条限制：
-- **失败没有事件**：`_event` 只能搭在成功结果上，投递失败请查台账 `deliveryStatus=FAILED`。
-- **生产上还需事件注册表放行**：Router 只发登记过的 `(source, stream, type)`。dev/e2e 已放行，
-  生产默认表需加 `'gateway': { 'EVENT:GATEWAY:DELIVERY': ['*'] }`（在 `api/router/config.js`）。
-  未加时事件被静默拦下 → **判断"发没发出去"请以台账为准，别依赖事件**。
-
-（两条的进展见 `docs/planning/gateway-gaps.md` G8。）
+⚠️ `failed` 事件依赖 `RELAY:TOKEN:gateway` 已播——没播则失败只有台账行、无事件（fail-soft，
+不影响错误本身照常抛给调用方）。判断"发没发出去"的权威永远是台账。
 
 ## 通道解析（config.js，决定"到底发没发出去"）
 
@@ -127,8 +146,7 @@ email `channel`: `auto|smtp|api|mock`；sms `channel`: `auto|aliyun|twilio|mock`
   默认超时 10s（`timeoutMs` 可调）。
 - **SMTP 密码加密存储**：需 `GATEWAY_SECRET_KEY`（未设则 create/解密抛错）；`smtp.get/list/create`
   输出**永远抹掉 `pass`**，拿不到明文是设计如此。
-- **附件还不支持**：`attachments` 未实现（G13），要发文件目前只能把链接写进正文。
-  `cc` / `bcc` / `replyTo` 已可用。
+- **附件已支持但只接 storage 引用**（配方七）；`cc` / `bcc` / `replyTo` 可用。
 - **没有出站配额/频控**：本层不限速（Router 的限流是按调用方 session，不是按收件人），
   循环的 workflow 会一直发。见 `docs/planning/gateway-gaps.md` G9。
 - 实体全为**硬删除**，无软删回收站；`createdAt/updatedAt` 是时间戳数字。

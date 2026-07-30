@@ -1,6 +1,7 @@
 const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
 const createEntity = require('../../../library/entity');
+const clock = require('../../../library/clock');
 const jsonrpc = require('../handlers/jsonrpc');
 
 /**
@@ -22,7 +23,7 @@ const jsonrpc = require('../handlers/jsonrpc');
  */
 const STATE = { OPEN: 'OPEN', APPROVED: 'APPROVED', REJECTED: 'REJECTED', EXPIRED: 'EXPIRED' };
 
-module.exports = (redis, { config, relay }) => {
+module.exports = (redis, { config, relay, policy = null }) => {
     const gates = createEntity(redis, {
         serviceName: config.serviceName,
         entityName: 'gate',
@@ -30,6 +31,17 @@ module.exports = (redis, { config, relay }) => {
         softDelete: true,
         searchFields: ['subject', 'state'],
     });
+
+    // Policy fills what the CALLER leaves blank (never overrides an explicit param):
+    // exact/glob subject match → { requiredSigners?, expiresInSec? }. No policy service
+    // injected (tests) or no match → nulls, config defaults apply as before.
+    async function policyDefaults(subject) {
+        if (!policy) return {};
+        try {
+            const { matched, policy: p } = await policy.resolve({ subject });
+            return matched ? p : {};
+        } catch (_) { return {}; }   // a broken policy read must not block opening a gate
+    }
 
     // Verify a signature against the approver's CURRENT or any RETIRED public key.
     function verifyAgainst(digest, signatureBs58, publicKeys) {
@@ -43,7 +55,7 @@ module.exports = (redis, { config, relay }) => {
 
     // Lazily flip an OPEN-but-past-deadline gate to EXPIRED (fail-closed read).
     async function settleExpiry(gate) {
-        if (gate.state === STATE.OPEN && gate.expiresAt && Date.now() > gate.expiresAt) {
+        if (gate.state === STATE.OPEN && gate.expiresAt && clock.now() > gate.expiresAt) {
             return gates.update({ id: gate.id, state: STATE.EXPIRED });
         }
         return gate;
@@ -54,11 +66,26 @@ module.exports = (redis, { config, relay }) => {
          * Open a fresh multi-sig gate. Orchestrator calls this once per approval cycle
          * and stores the returned id on the workflow.
          */
-        async open({ subject, digest, requiredSigners = 1, expiresInSec, submitterUid = null } = {}) {
+        async open({ subject, digest, requiredSigners, expiresInSec, submitterUid = null } = {}) {
             if (!subject) throw jsonrpc.MISSING_PARAM('subject');
             if (!digest || !/^[0-9a-f]{16,128}$/i.test(digest)) throw jsonrpc.INVALID_PARAM('digest must be a hex string');
-            const required = Math.max(1, parseInt(requiredSigners, 10) || 1);
-            const ttl = parseInt(expiresInSec, 10) || (config.gate && config.gate.defaultExpirySec) || 259200; // 72h
+
+            // Precedence: explicit caller param > matching policy > config default.
+            // (Previously requiredSigners defaulted to 1 in the signature, which made
+            // "caller didn't say" indistinguishable from "caller said 1" — undefined now
+            // means "ask policy".)
+            const p = (requiredSigners === undefined || expiresInSec === undefined)
+                ? await policyDefaults(subject) : {};
+            const required = Math.max(1, parseInt(
+                requiredSigners !== undefined ? requiredSigners
+                    : (p.requiredSigners !== undefined ? p.requiredSigners
+                        : ((config.gate && config.gate.defaultRequiredSigners) || 1)),
+                10) || 1);
+            const ttl = parseInt(
+                expiresInSec !== undefined ? expiresInSec
+                    : (p.expiresInSec !== undefined ? p.expiresInSec
+                        : ((config.gate && config.gate.defaultExpirySec) || 259200)),   // 72h
+                10) || 259200;
 
             return gates.create({
                 subject,
@@ -67,7 +94,7 @@ module.exports = (redis, { config, relay }) => {
                 submitterUid,
                 signers: [],
                 state: STATE.OPEN,
-                expiresAt: Date.now() + ttl * 1000,
+                expiresAt: clock.now() + ttl * 1000,
                 approvedAt: null,
             });
         },
@@ -114,14 +141,14 @@ module.exports = (redis, { config, relay }) => {
                 approverUid,
                 signature,
                 publicKey: keys[0],
-                signedAt: Date.now(),
+                signedAt: clock.now(),
             }];
             const reachedThreshold = signers.length >= gate.requiredSigners;
             const next = {
                 id,
                 signers,
                 state: reachedThreshold ? STATE.APPROVED : STATE.OPEN,
-                approvedAt: reachedThreshold ? Date.now() : null,
+                approvedAt: reachedThreshold ? clock.now() : null,
             };
             const updated = await gates.update(next);
             return { id, state: updated.state, signed: signers.length, required: gate.requiredSigners };
@@ -132,7 +159,7 @@ module.exports = (redis, { config, relay }) => {
             if (!id) throw jsonrpc.MISSING_PARAM('id');
             const gate = await gates.get({ id });
             if (gate.state !== STATE.OPEN) throw jsonrpc.FORBIDDEN(`Gate is ${gate.state}, not OPEN`);
-            return gates.update({ id, state: STATE.REJECTED, rejectReason: reason, rejectedBy: byUid, rejectedAt: Date.now() });
+            return gates.update({ id, state: STATE.REJECTED, rejectReason: reason, rejectedBy: byUid, rejectedAt: clock.now() });
         },
 
         async get({ id } = {}) {

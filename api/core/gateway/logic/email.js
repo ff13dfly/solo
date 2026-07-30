@@ -32,7 +32,7 @@ async function getSmtpTransporter(cfg) {
     return _smtpTransporter;
 }
 
-async function sendSmtp(cfg, { to, cc, bcc, replyTo, subject, content, html }) {
+async function sendSmtp(cfg, { to, cc, bcc, replyTo, subject, content, html, attachments }) {
     const transporter = await getSmtpTransporter(cfg);
     const info = await transporter.sendMail({
         from: cfg.from,
@@ -42,7 +42,9 @@ async function sendSmtp(cfg, { to, cc, bcc, replyTo, subject, content, html }) {
         ...(replyTo ? { replyTo } : {}),
         subject,
         text: content,
-        html: html || content
+        html: html || content,
+        // Pre-fetched by logic/attachments.js: [{filename, contentType, content:Buffer}]
+        ...(attachments && attachments.length ? { attachments } : {})
     });
     return { success: true, messageId: info.messageId, provider: 'smtp' };
 }
@@ -56,7 +58,7 @@ const asList = (v) => (v === undefined || v === null ? undefined : (Array.isArra
 const API_PROVIDERS = {
     resend: {
         // https://resend.com/docs/api-reference/emails/send-email
-        body: (cfg, { to, cc, bcc, replyTo, subject, content, html }) => JSON.stringify({
+        body: (cfg, { to, cc, bcc, replyTo, subject, content, html, attachments }) => JSON.stringify({
             from: cfg.from,
             to: asList(to),
             ...(cc ? { cc: asList(cc) } : {}),
@@ -64,7 +66,11 @@ const API_PROVIDERS = {
             ...(replyTo ? { reply_to: asList(replyTo) } : {}),
             subject,
             text: content,
-            html: html || content
+            html: html || content,
+            // Resend wants base64 content per attachment.
+            ...(attachments && attachments.length ? {
+                attachments: attachments.map((a) => ({ filename: a.filename, content: a.content.toString('base64') }))
+            } : {})
         }),
         headers: (cfg) => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.api.key}` }),
         messageId: (data) => data.id,
@@ -114,4 +120,4 @@ async function send(cfg, params) {
     return { success: true, messageId, provider: 'mock' };
 }
 
-module.exports = { send, resolveChannel, API_PROVIDERS };
+module.exports = { send, resolveChannel, getSmtpTransporter, API_PROVIDERS };

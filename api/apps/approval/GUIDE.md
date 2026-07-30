@@ -14,9 +14,11 @@ Solo 审批协议（SAP）：把任意 `service:entity:id` 的**变更意图**�
 
 ## 配方一：发起一次变更审批（record 三段链）
 
-1. `approval.record.request { target, payload }` → 生成 `INIT` 记录，返回 `id`。
+1. `approval.record.request { target, payload, expiresInSec? }` → 生成 `INIT` 记录，返回 `id`。
    - `target` 是 `service:entity:id` 表达式；`payload` 是非空 `Operation[]`，
      每个 op 的 `op ∈ UPDATE|DELETE|ADD` 且 `field` 必填。
+   - `expiresInSec`（≥60）可选：设了则 `INIT/DISPATCHED` 过期惰性翻 `EXPIRED`（终态，
+     不能再 verify/confirm/reject）；不设且无策略命中则**永不过期**（历史行为）。
 2. 另一个人 `approval.record.verify { id }` → `INIT → DISPATCHED`（核准内容）。
 3. 再一个人 `approval.record.confirm { id }` → `DISPATCHED → DONE`，盖 `confirmedAt`。
 4. 任意时刻可 `approval.record.reject { id, reason? }` → `INIT|DISPATCHED → REJECTED`。
@@ -29,9 +31,9 @@ Solo 审批协议（SAP）：把任意 `service:entity:id` 的**变更意图**�
 
 ## 配方二：高风险多签门（gate，m-of-n）
 
-1. `approval.gate.open { subject, digest, requiredSigners, expiresInSec? }` → `OPEN`，返回 `id`。
-   - `digest` 是被批对象定义的 hex 串（16–128 位）；`requiredSigners` 即阈值 m（默认 1）；
-     `expiresInSec` 不传默认 72h。
+1. `approval.gate.open { subject, digest, requiredSigners?, expiresInSec? }` → `OPEN`，返回 `id`。
+   - `digest` 是被批对象定义的 hex 串（16–128 位）；`requiredSigners` 即阈值 m；
+     `expiresInSec` 是有效期。**两者不传时按策略补**（见配方三），仍无则默认 1 签 / 72h。
 2. 每个审批人先用 `user.key.sign` 对 **gate 的 `digest`** 签名，再
    `approval.gate.sign { id, approverUid, signature }`。
 3. 累计到 m 个**不同** approver 的有效签名 → 自动翻 `APPROVED`。
@@ -42,12 +44,28 @@ Solo 审批协议（SAP）：把任意 `service:entity:id` 的**变更意图**�
 
 **过期 fail-closed**：`OPEN` 门过了 `expiresAt`，下一次读/签会惰性翻成 `EXPIRED`，无法再签。
 
+## 配方三：审批策略（规则档——把"要几个人签"从调用方代码收进一处）
+
+`approval.policy.*`（写操作仅 admin）把 **subject 模式**绑定到默认值：
+
+```
+approval.policy.set { subjectPattern: "workflow:*", requiredSigners: 2, expiresInSec: 86400 }
+```
+
+- 之后凡 `gate.open` 的 `subject`（或 `record.request` 的 `target`）命中该模式、
+  **且调用方没显式传**对应参数，就用策略值。**显式参数永远赢**——策略只补空白，零破坏。
+- 匹配规则：**精确 > 最长尾部 `*` glob > 无**（与 Router 事件注册表同一方言）。
+  `*` 单独一个是兜底 catch-all。`*` 只能放末尾。
+- `approval.policy.resolve { subject }` 可查"这个 subject 归哪条策略管"——回答
+  "开这个门要几个人签"而不用真开一个。
+- record 线策略只取 `expiresInSec`（record 的签名人数由三段链结构决定，不吃 requiredSigners）。
+
 ## 坑与约定
 
-- **state ≠ status**：`state` 是 SAP 状态机（record: `INIT|DISPATCHED|DONE|REJECTED`；
+- **state ≠ status**：`state` 是 SAP 状态机（record: `INIT|DISPATCHED|DONE|REJECTED|EXPIRED`；
   gate: `OPEN|APPROVED|REJECTED|EXPIRED`）；`status` 是实体软删生命周期 `ACTIVE|DELETED`。
   判断审批进度看 `state`，别看 `status`。
-- **时间戳是 epoch 毫秒数字**（`Date.now()`），不是 ISO 字符串——
+- **时间戳是 epoch 毫秒数字**，不是 ISO 字符串——
   `createdAt/updatedAt/confirmedAt/expiresAt/approvedAt` 皆然。
 - **身份不靠参数传**：申请人/签署人取自 Router 验证过的会话（`ctx.actor`），你只提交内容，
   系统记录"谁在何时对哪个 payloadHash 操作"。自审/独立审批人比较是 uid 字符串比较。

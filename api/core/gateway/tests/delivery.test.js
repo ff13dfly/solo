@@ -247,6 +247,46 @@ describe('delivery events (_event piggyback)', () => {
         expect(replay.deduplicated).toBe(true);
     });
 
+    test('a FAILED send emits gateway.delivery.failed via relay event.emit (fire-and-forget)', async () => {
+        const emitted = [];
+        const fakeRelay = { call: (method, p) => { emitted.push({ method, p }); return Promise.resolve({ written: 1 }); } };
+        const logic = createLogic(makeFakeRedis(), { serviceName: 'gateway', config, logger: silentLogger, relay: fakeRelay });
+
+        await expect(logic.webhook.send({ url: 'http://127.0.0.1:1/cb', payload: {} })).rejects.toThrow();
+        await new Promise((r) => setImmediate(r));   // flush the fire-and-forget microtask
+
+        expect(emitted).toHaveLength(1);
+        expect(emitted[0].method).toBe('event.emit');
+        expect(emitted[0].p.stream).toBe('EVENT:GATEWAY:DELIVERY');
+        expect(emitted[0].p.type).toBe('gateway.delivery.failed');
+        expect(emitted[0].p.payload).toMatchObject({ channel: 'webhook', status: 'FAILED' });
+        expect(typeof emitted[0].p.payload.error).toBe('string');
+        // The ledger row id rides the event so a consumer can join back to the record.
+        const listed = await logic.delivery.list({});
+        expect(emitted[0].p.payload.deliveryId).toBe(listed.items[0].id);
+    });
+
+    test('a relay hiccup on the failed-event path never masks the original send error', async () => {
+        const fakeRelay = { call: () => Promise.reject(new Error('NO_TOKEN')) };
+        const logic = createLogic(makeFakeRedis(), { serviceName: 'gateway', config, logger: silentLogger, relay: fakeRelay });
+
+        // The original connection error surfaces — not the relay's NO_TOKEN.
+        await expect(logic.webhook.send({ url: 'http://127.0.0.1:1/cb', payload: {} }))
+            .rejects.toThrow(/ECONNREFUSED|connect/i);
+        await new Promise((r) => setImmediate(r));
+        expect((await logic.delivery.list({})).total).toBe(1);   // ledger row still written
+    });
+
+    test('successful sends do NOT go through relay (they ride the _event piggyback)', async () => {
+        const emitted = [];
+        const fakeRelay = { call: (m) => { emitted.push(m); return Promise.resolve({}); } };
+        const logic = createLogic(makeFakeRedis(), { serviceName: 'gateway', config, logger: silentLogger, relay: fakeRelay });
+        const res = await logic.email.send({ to: 'a@example.com', subject: 'S', content: 'c' });
+        await new Promise((r) => setImmediate(r));
+        expect(emitted).toHaveLength(0);
+        expect(res._event[0].type).toBe('gateway.delivery.mocked');
+    });
+
     test('what is emitted matches what handlers/events.js declares (stream + type + payload keys)', async () => {
         // Router builds its registry view from this declaration, so a drift here means the
         // event is either blocked (undeclared triple) or advertised but never sent.
@@ -254,6 +294,7 @@ describe('delivery events (_event piggyback)', () => {
         expect(new Set(declared)).toEqual(new Set([
             'EVENT:GATEWAY:DELIVERY|gateway.delivery.sent',
             'EVENT:GATEWAY:DELIVERY|gateway.delivery.mocked',
+            'EVENT:GATEWAY:DELIVERY|gateway.delivery.failed',
         ]));
         for (const e of events.emits) assertRouterWireShape({ ...e, payload: e.payload || {} });
 
@@ -269,12 +310,69 @@ describe('delivery events (_event piggyback)', () => {
     });
 });
 
+// ─── G6: receipt flow-back (delivery.update) ──────────────────────────────────
+
+describe('delivery.update (receipts)', () => {
+    // A SENT row to advance — webhook against a local listener is the cheapest real send.
+    async function sentRow() {
+        const server = http.createServer((req, res) => { res.statusCode = 200; res.end('{}'); });
+        await new Promise((r) => server.listen(0, '127.0.0.1', r));
+        try {
+            const res = await M.webhook.send({ url: `http://127.0.0.1:${server.address().port}/cb`, payload: {} });
+            return res.deliveryId;
+        } finally {
+            await new Promise((r) => server.close(r));
+        }
+    }
+
+    test('SENT → DELIVERED → BOUNCED (late bounce), receiptAt/receiptDetail recorded', async () => {
+        const id = await sentRow();
+
+        const delivered = await M.delivery.update({ id, deliveryStatus: 'DELIVERED' });
+        expect(delivered.deliveryStatus).toBe('DELIVERED');
+        expect(typeof delivered.receiptAt).toBe('number');
+
+        const bounced = await M.delivery.update({ id, deliveryStatus: 'bounced', detail: 'mailbox full' });
+        expect(bounced.deliveryStatus).toBe('BOUNCED');       // case-insensitive input
+        expect(bounced.receiptDetail).toBe('mailbox full');
+    });
+
+    test('MOCKED and FAILED rows are terminal — nothing provider-side to receipt', async () => {
+        const mocked = await M.email.send({ to: 'a@example.com', subject: 'S', content: 'c' });
+        await expect(M.delivery.update({ id: mocked.deliveryId, deliveryStatus: 'DELIVERED' }))
+            .rejects.toMatchObject({ code: -32602, message: /illegal receipt transition MOCKED/ });
+
+        await expect(M.webhook.send({ url: 'http://127.0.0.1:1/cb', payload: {} })).rejects.toThrow();
+        const failedRow = (await M.delivery.list({})).items.find((r) => r.deliveryStatus === 'FAILED');
+        await expect(M.delivery.update({ id: failedRow.id, deliveryStatus: 'BOUNCED' }))
+            .rejects.toMatchObject({ code: -32602, message: /illegal receipt transition FAILED/ });
+    });
+
+    test('receipt statuses are the only legal targets; attempt statuses are refused', async () => {
+        const id = await sentRow();
+        for (const bad of ['SENT', 'MOCKED', 'FAILED', 'ACTIVE', 'nonsense']) {
+            await expect(M.delivery.update({ id, deliveryStatus: bad }))
+                .rejects.toMatchObject({ code: -32602, message: /deliveryStatus must be one of/ });
+        }
+        await expect(M.delivery.update({ deliveryStatus: 'DELIVERED' }))
+            .rejects.toMatchObject({ code: -32602 });          // missing id
+    });
+
+    test('BOUNCED is terminal (no receipt loops)', async () => {
+        const id = await sentRow();
+        await M.delivery.update({ id, deliveryStatus: 'BOUNCED' });
+        await expect(M.delivery.update({ id, deliveryStatus: 'DELIVERED' }))
+            .rejects.toMatchObject({ code: -32602, message: /illegal receipt transition BOUNCED/ });
+    });
+});
+
 // ─── declaration hygiene ──────────────────────────────────────────────────────
 
 describe('declarations', () => {
     test('the delivery entity is declared and separates deliveryStatus from entity status', () => {
         expect(entities.delivery).toBeDefined();
-        expect(entities.delivery.fields.deliveryStatus.options).toEqual(['SENT', 'MOCKED', 'FAILED']);
+        expect(entities.delivery.fields.deliveryStatus.options)
+            .toEqual(['SENT', 'MOCKED', 'FAILED', 'DELIVERED', 'BOUNCED', 'COMPLAINED']);
         expect(entities.delivery.fields.status.options).toEqual(['ACTIVE', 'DELETED']);
     });
 
@@ -284,5 +382,8 @@ describe('declarations', () => {
         }
         expect(byName['gateway.delivery.get']).toBeDefined();
         expect(byName['gateway.delivery.list']).toBeDefined();
+        expect(byName['gateway.delivery.update']).toBeDefined();
+        expect(byName['gateway.channel.test']).toBeDefined();
+        expect(byName['gateway.email.send'].params).toContain('attachments');
     });
 });

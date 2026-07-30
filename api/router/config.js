@@ -61,6 +61,16 @@ module.exports = {
     'system.fulfillment': {
       'EVENT:FULFILLMENT:*': ['*'],
     },
+    // gateway outbound delivery outcomes (2026-07-30, gateway-gaps G8): sent/mocked ride
+    // the _event piggyback on the RPC result (source = the 'gateway' service); failed goes
+    // out via the system.gateway relay bot's event.emit (the piggyback only carries events
+    // on a SUCCESSFUL result). Same stream, three types: gateway.delivery.{sent,mocked,failed}.
+    'gateway': {
+      'EVENT:GATEWAY:DELIVERY': ['*'],
+    },
+    'system.gateway': {
+      'EVENT:GATEWAY:DELIVERY': ['*'],
+    },
   },
 
   // event.md D10 — approximate stream MAXLEN (placeholder; xAdd currently unbounded).

@@ -90,12 +90,26 @@ const DELIVERY_RETURN = [
     { name: 'channel',           type: 'string' },
     { name: 'target',            type: 'string' },
     { name: 'provider',          type: 'string' },
-    { name: 'deliveryStatus',    type: 'string' },   // SENT | MOCKED | FAILED
+    { name: 'deliveryStatus',    type: 'string' },   // SENT|MOCKED|FAILED → receipts: DELIVERED|BOUNCED|COMPLAINED
     { name: 'templateId',        type: 'string' },
     { name: 'subject',           type: 'string' },
     { name: 'providerMessageId', type: 'string' },
     { name: 'idempotencyKey',    type: 'string' },
     { name: 'error',             type: 'string' },
+    { name: 'receiptAt',         type: 'number' },   // set by delivery.update (receipt flow-back)
+    { name: 'receiptDetail',     type: 'string' },
+];
+
+// relay.status(): the no-token path returns ONLY { hasToken:false }; the has-token path
+// adds the rest — so only hasToken is required (same declaration as notification.token.status).
+const TOKEN_STATUS_RETURN = [
+    { name: 'hasToken',      type: 'boolean', required: true },
+    { name: 'sub',           type: 'string' },
+    { name: 'expiresAt',     type: 'number' },
+    { name: 'ttlMs',         type: 'number' },
+    { name: 'lastRefreshAt', type: 'number' },
+    { name: 'needsRotation', type: 'boolean' },
+    { name: 'expired',       type: 'boolean' },
 ];
 
 module.exports = [
@@ -123,10 +137,10 @@ module.exports = [
     // --- Email Send ---
     {
         name: 'gateway.email.send',
-        params: ['to', 'subject', 'content', 'html', 'cc', 'bcc', 'replyTo', 'templateId', 'variables', 'smtpId', 'idempotencyKey'],
+        params: ['to', 'subject', 'content', 'html', 'cc', 'bcc', 'replyTo', 'templateId', 'variables', 'smtpId', 'idempotencyKey', 'attachments'],
         returns: ['success', 'messageId', 'provider'],
         returns_schema: SEND_RETURN,
-        description: 'Send email — directly (subject+content) or via template (templateId+variables). Optional smtpId selects a stored SMTP account; cc/bcc/replyTo accept an address or an array. Recipients are format-checked (invalid → -32602, no provider call).',
+        description: 'Send email — directly (subject+content) or via template (templateId+variables). Optional smtpId selects a stored SMTP account; cc/bcc/replyTo accept an address or an array; attachments are storage references [{assetId, filename?}] (requires the system.gateway relay bot). Recipients are format-checked (invalid → -32602, no provider call).',
         ai: true
     },
 
@@ -166,7 +180,62 @@ module.exports = [
 
     // --- Delivery Ledger ---
     { name: 'gateway.delivery.get',  params: ['id'], returns: ['id', 'status'], returns_schema: DELIVERY_RETURN, description: 'Get one delivery record by ID', ai: false },
-    { name: 'gateway.delivery.list', params: ['page', 'limit', 'search'], returns: ['items', 'total'], returns_schema: LIST_RETURN, description: 'List delivery records (what actually went out, newest first). deliveryStatus: SENT | MOCKED | FAILED', ai: false },
+    { name: 'gateway.delivery.list', params: ['page', 'limit', 'search'], returns: ['items', 'total'], returns_schema: LIST_RETURN, description: 'List delivery records (what actually went out, newest first). deliveryStatus: SENT | MOCKED | FAILED | DELIVERED | BOUNCED | COMPLAINED', ai: false },
+    {
+        name: 'gateway.delivery.update',
+        params: ['id', 'deliveryStatus', 'detail'],
+        returns: ['id', 'status', 'updatedAt'],
+        returns_schema: DELIVERY_RETURN,
+        description: 'Receipt flow-back: advance a SENT row to DELIVERED/BOUNCED/COMPLAINED (provider webhook → ingress → consumer → here). MOCKED/FAILED rows are terminal.',
+        ai: false
+    },
+
+    // --- Channel Probes ---
+    {
+        name: 'gateway.channel.test',
+        params: ['channel'],
+        returns: ['channel', 'resolved', 'supported', 'ok'],
+        returns_schema: [
+            { name: 'channel',   type: 'string',  required: true },   // 'email' | 'sms'
+            { name: 'resolved',  type: 'string',  required: true },   // smtp|api|mock / aliyun|twilio|mock
+            { name: 'supported', type: 'boolean', required: true },   // false = no read-only probe for this provider
+            { name: 'ok',        type: 'boolean', required: true },
+            { name: 'error',     type: 'string' },
+            { name: 'note',      type: 'string' },
+        ],
+        description: "Probe a channel's credentials via a read-only provider endpoint — sends NOTHING. resolved:'mock' + ok:true means no credentials at all.",
+        ai: false
+    },
+
+    // §7.7 — admin-only token lifecycle for the internal-call relay (system.gateway bot)
+    {
+        name: 'gateway.token.set',
+        params: [
+            { name: 'token',     type: 'string', maxLength: 512 },
+            { name: 'expiresAt', type: 'number' },
+            { name: 'sub',       type: 'string', optional: true, maxLength: 64, pattern: 'id' }
+        ],
+        returns: ['ok'],
+        returns_schema: [{ name: 'ok', type: 'boolean', required: true }],
+        description: 'Admin: inject bot session token into relay store',
+        ai: false
+    },
+    {
+        name: 'gateway.token.status',
+        params: [],
+        returns: ['hasToken'],
+        returns_schema: TOKEN_STATUS_RETURN,
+        description: 'Admin: inspect relay token state (does not return the token)',
+        ai: false
+    },
+    {
+        name: 'gateway.token.clear',
+        params: [],
+        returns: ['ok'],
+        returns_schema: [{ name: 'ok', type: 'boolean', required: true }],
+        description: 'Admin: clear relay token (emergency revoke)',
+        ai: false
+    },
 
     // --- Image Processing ---
     {

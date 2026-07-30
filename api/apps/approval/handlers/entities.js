@@ -9,13 +9,29 @@ module.exports = {
             "id":          { type: "string",   description: "Approval record ID", required: true },
             "target":      { type: "string",   description: "Target entity expression (service:entity:id)", required: true },
             "payload":     { type: "array",    description: "Operation[] describing the intended change (op/field/oldValue/newValue/meta)" },
-            "state":       { type: "enum",      options: ["INIT", "DISPATCHED", "PENDING", "DONE", "REJECTED", "FAILED"], description: "SAP state machine (protocol §4); distinct from lifecycle status" },
+            "state":       { type: "enum",      options: ["INIT", "DISPATCHED", "PENDING", "DONE", "REJECTED", "FAILED", "EXPIRED"], description: "SAP state machine (protocol §4); distinct from lifecycle status. EXPIRED = deadline passed while INIT/DISPATCHED (fail-closed, terminal)" },
             "applicant":   { type: "string",   description: "uid of the requester" },
             "evidence":    { type: "array",    description: "Append-only attestation trail (stage/actor/payloadHash/timestamp; reserves publicKey+signature for Ed25519)" },
             "confirmedAt": { type: "datetime", description: "Confirmation timestamp" },
+            "expiresAt":   { type: "datetime", description: "Optional deadline (explicit expiresInSec or policy match); absent = never expires" },
             "status":      { type: "enum",      options: [STATUS.ACTIVE, STATUS.DELETED], description: "Lifecycle status (entity-factory soft delete)" },
             "createdAt":   { type: "datetime", description: "Creation timestamp" },
             "updatedAt":   { type: "datetime", description: "Last update timestamp" }
+        }
+    },
+    "policy": {
+        description: "Approval policy (rules tier): subject-pattern → default requiredSigners/expiry for gates and records. Explicit caller params always win; policies only fill blanks",
+        softDelete: true,
+        sensitiveFields: [],
+        fields: {
+            "id":              { type: "string",  description: "Policy ID", required: true },
+            "subjectPattern":  { type: "string",  description: "Exact subject or trailing-* glob (e.g. 'workflow:*'); '*' alone = catch-all", required: true },
+            "requiredSigners": { type: "integer", description: "Default m for gate.open when the caller omits requiredSigners (1..20)" },
+            "expiresInSec":    { type: "integer", description: "Default TTL for gate.open / record.request when the caller omits expiresInSec (≥60)" },
+            "description":     { type: "string",  description: "Why this policy exists" },
+            "status":          { type: "enum",     options: [STATUS.ACTIVE, STATUS.DELETED], description: "Lifecycle status (entity-factory soft delete)" },
+            "createdAt":       { type: "datetime", description: "Creation timestamp" },
+            "updatedAt":       { type: "datetime", description: "Last update timestamp" }
         }
     },
     "gate": {

@@ -70,6 +70,20 @@ const LIST_RETURN = [
     { name: 'total', type: 'number', required: true },
 ];
 
+// --- POLICY entity (set/get return the full record) --------------------------------
+//   requiredSigners/expiresInSec/description are all OPTIONAL policy fields — a policy
+//   may set only one of them (the others stay caller/config-defaulted).
+const POLICY_RETURN = [
+    { name: 'id',              type: 'string', required: true },
+    { name: 'subjectPattern',  type: 'string', required: true },   // exact or trailing-* glob
+    { name: 'requiredSigners', type: 'number' },
+    { name: 'expiresInSec',    type: 'number' },
+    { name: 'description',     type: 'string' },
+    { name: 'status',          type: 'string', required: true },   // ENTITY lifecycle: ACTIVE|DELETED
+    { name: 'createdAt',       type: 'number', required: true },
+    { name: 'updatedAt',       type: 'number', required: true },
+];
+
 const methods = [
     {
         name: 'approval.record.request',
@@ -195,6 +209,56 @@ const methods = [
         returns: ['items', 'total'],
         returns_schema: LIST_RETURN,
         description: 'List approval gates, filter by subject/state',
+        ai: false
+    },
+
+    // ── Policy tier (rules engine, minimal): subject-pattern → gate/record defaults ──
+    // Explicit caller params ALWAYS beat policy; policy only fills blanks. Matching is
+    // exact > longest trailing-'*' glob (same dialect as the Router event registry).
+    {
+        name: 'approval.policy.set',
+        params: [
+            { name: 'subjectPattern',  type: 'string', required: true, maxLength: 128 },  // exact or trailing-* glob
+            { name: 'requiredSigners', type: 'number', optional: true },                  // 1..20
+            { name: 'expiresInSec',    type: 'number', optional: true },                  // ≥ 60
+            { name: 'description',     type: 'string', optional: true, maxLength: 300 }
+        ],
+        returns: ['id', 'subjectPattern'],
+        returns_schema: POLICY_RETURN,
+        description: 'Admin: create/update (upsert by pattern) an approval policy — defaults for gates/records whose subject matches',
+        ai: false
+    },
+    {
+        name: 'approval.policy.delete',
+        params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }],
+        returns: ['id', 'status'],
+        returns_schema: [
+            { name: 'id',     type: 'string', required: true },
+            { name: 'status', type: 'string', required: true },   // DELETED (soft delete)
+        ],
+        description: 'Admin: delete an approval policy (soft delete)',
+        ai: false
+    },
+    {
+        name: 'approval.policy.list',
+        params: [
+            { name: 'limit',  type: 'number', optional: true },
+            { name: 'offset', type: 'number', optional: true }
+        ],
+        returns: ['items', 'total'],
+        returns_schema: LIST_RETURN,
+        description: 'List approval policies',
+        ai: false
+    },
+    {
+        name: 'approval.policy.resolve',
+        params: [{ name: 'subject', type: 'string', required: true, maxLength: 128 }],
+        returns: ['matched', 'policy'],
+        returns_schema: [
+            { name: 'matched', type: 'boolean', required: true },
+            { name: 'policy',  type: 'object' },   // null when no pattern matches
+        ],
+        description: 'Which policy governs this subject? (exact > longest trailing-glob > none) — answers "what would opening this gate require" without opening one',
         ai: false
     },
 

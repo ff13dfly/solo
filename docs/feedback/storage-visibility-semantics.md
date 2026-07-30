@@ -118,4 +118,22 @@ driver.access = storageConfig.access || 'private';   // ← 生产路径永远�
 
 ## 处理结论(solo 侧)
 
-<!-- 待 solo 侧 triage 后补:采纳/驳回理由与落地清单 -->
+**三条建议全部采纳,已落地(2026-07-30)。** 判定:能力 URL 模型本身不改(部署方选
+`access=public` 是合法且常见的取舍,wavely 自己在 nginx 注释里也确认过知情),要修的是
+"这条边界没有任何一处对使用者明说"——因此三处修复全是文档/告警,零行为变更:
+
+1. **GUIDE.md 补语义边界节**(建议 1,主要)——`apps/storage/GUIDE.md` 新增
+   「visibility 保护的是什么(重要,别误读)」:RPC 面 vs 字节面、`STORAGE_ACCESS`
+   两档的确切后果、"真需要字节级隔离必须部署侧设 private,只设 visibility 无效"。
+   upload 配方处加指路。外部 AI 代理经 `system.guide {service:"storage"}` 即可拿到。
+2. **注释纠偏**(建议 2)——`oss/index.js` 的 `|| 'private'` 行加注"生产默认来自
+   config.js = public,别把这行读成系统默认 private";`resolveUrl` 的 docstring 从
+   "by default signed"改为陈述分支条件,并写明 visibility 只管 RPC 面。
+3. **启动期告警**(建议 3)——`createStorageProvider` 在 `access==='public'` 时
+   `warn` 一行(unsigned URL + visibility 只约束 RPC 面 + 要隔离设 STORAGE_ACCESS=private)。
+   只在 public 模式触发:单测自建 private 配置不受噪音;生产默认路径必然打出。
+   未做 per-listener 的 `publicRead` 探测(local-oss server 是独立进程,storage 侧
+   探不到它的开关;SOLO 自带的 local-oss-server 默认 publicRead=false 是安全的,
+   wavely 的自建启动器翻转默认属派生项目自担,由上面这行框架级告警兜底提醒)。
+
+证据:`api/apps/storage/GUIDE.md`、`api/apps/storage/oss/index.js`(注释 + boot warn)。

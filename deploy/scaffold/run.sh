@@ -125,6 +125,15 @@ SSL_PID=""
 REDIS_STARTED_BY_US=0
 REDIS_PORT=$(node -e "try{const u=new URL(process.env.REDIS_URL||'redis://127.0.0.1:6379');process.stdout.write(u.port||'6379')}catch(e){process.stdout.write('6379')}")
 
+# Redis auth (production hardening): REDIS_PASSWORD comes from .env (init.sh generates it;
+# older projects without the line keep running unauthenticated — only-add). The password
+# also rides inside REDIS_URL (redis://:pass@host:port) for the node clients; REDISCLI_AUTH
+# is how redis-cli picks it up WITHOUT -a (which would leak it into `ps` output).
+if [ -z "${REDIS_PASSWORD:-}" ]; then
+    REDIS_PASSWORD=$(node -e "try{const u=new URL(process.env.REDIS_URL||'');process.stdout.write(u.password||'')}catch(e){process.stdout.write('')}")
+fi
+[ -n "$REDIS_PASSWORD" ] && export REDISCLI_AUTH="$REDIS_PASSWORD"
+
 cleanup() {
     echo ""
     log_warn "Stopping all services..."
@@ -168,10 +177,13 @@ if ! redis-cli -p "$REDIS_PORT" ping &>/dev/null 2>&1; then
     fi
     log_warn "Starting Redis ($REDIS_BIN) on port $REDIS_PORT..."
     mkdir -p "$SCRIPT_DIR/redis_data"
+    # --requirepass only when a password is configured — a passwordless .env keeps the
+    # old open behavior (dev / pre-upgrade projects), a populated one locks the port.
     "$REDIS_BIN" --port "$REDIS_PORT" \
         --daemonize yes \
         --dir "$SCRIPT_DIR/redis_data" \
         --logfile "$SCRIPT_DIR/redis.log" \
+        ${REDIS_PASSWORD:+--requirepass "$REDIS_PASSWORD"} \
         --save "3600 1" --save "300 100" --save "60 10000"
     for i in $(seq 1 20); do
         redis-cli -p "$REDIS_PORT" ping &>/dev/null 2>&1 && break

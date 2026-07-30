@@ -47,6 +47,12 @@ module.exports = {
     // recommended ON for OTP-carrying deployments.
     strictVariables: process.env.GATEWAY_STRICT_VARIABLES === 'true',
 
+    // Email attachments (storage references, fetched via the system.gateway relay bot).
+    attachments: {
+        maxBytes: parseInt(process.env.GATEWAY_ATTACH_MAX_BYTES, 10) || 10 * 1024 * 1024,
+        maxCount: parseInt(process.env.GATEWAY_ATTACH_MAX_COUNT, 10) || 10,
+    },
+
     // Encryption key for sensitive entity fields (SMTP pass, etc.)
     secretKey: process.env.GATEWAY_SECRET_KEY || '',
 
@@ -101,7 +107,12 @@ module.exports = {
                 'gateway.sms.send': ['send SMS via stored template'],
                 'gateway.webhook.send': ['POST a signed JSON payload to an external endpoint'],
                 'gateway.delivery.get': ['get one delivery record by ID'],
-                'gateway.delivery.list': ['list delivery records — what actually went out (SENT/MOCKED/FAILED)']
+                'gateway.delivery.list': ['list delivery records — what actually went out (SENT/MOCKED/FAILED + receipts)'],
+                'gateway.delivery.update': ['receipt flow-back: advance SENT to DELIVERED/BOUNCED/COMPLAINED'],
+                'gateway.channel.test': ['probe channel credentials via read-only provider endpoint (sends nothing)'],
+                'gateway.token.set': ['admin: inject relay bot token'],
+                'gateway.token.status': ['admin: inspect relay token state'],
+                'gateway.token.clear': ['admin: clear relay token']
             }
         },
         zh: {
@@ -133,7 +144,12 @@ module.exports = {
                 'gateway.sms.send': ['按模版发送短信'],
                 'gateway.webhook.send': ['向外部端点 POST 带签名的 JSON'],
                 'gateway.delivery.get': ['按 ID 获取投递记录'],
-                'gateway.delivery.list': ['列出投递台账——实际发出了什么（SENT/MOCKED/FAILED）']
+                'gateway.delivery.list': ['列出投递台账——实际发出了什么（SENT/MOCKED/FAILED + 回执态）'],
+                'gateway.delivery.update': ['回执回流：把 SENT 推进到 DELIVERED/BOUNCED/COMPLAINED'],
+                'gateway.channel.test': ['只读探针验证通道凭证（不真发任何东西）'],
+                'gateway.token.set': ['管理员：注入 relay bot token'],
+                'gateway.token.status': ['管理员：查看 relay token 状态'],
+                'gateway.token.clear': ['管理员：清除 relay token']
             }
         }
     }

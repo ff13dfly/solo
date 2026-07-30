@@ -8,6 +8,8 @@ const { insert } = require('../../../library/logger');
 const clock = require('../../../library/clock');
 const jsonrpc = require('../../../library/jsonrpc');
 const { createDeliveryLedger } = require('./delivery');
+const { fetchAttachments } = require('./attachments');
+const probe = require('./probe');
 const { PATTERNS } = require('../../../library/validate');
 
 // E.164 — Twilio (and most non-Chinese carriers) reject anything else. Aliyun accepts
@@ -116,12 +118,13 @@ function assertPhoneNumber(phone, channel) {
 }
 
 function createLogic(redisClient, options = {}) {
-    const { config = {}, logger } = options;
+    const { config = {}, logger, relay = null } = options;
     const emailCfg = config.email || {};
     const smsCfg = config.sms || {};
     // OFF by default = v1.1.x only-add. ON: an omitted {{var}} is an error instead of
     // shipping the literal placeholder to the recipient (GATEWAY_STRICT_VARIABLES=true).
     const strictVars = config.strictVariables === true;
+    const attachCfg = config.attachments || {};
 
     // --- Entity Factories ---
     const smtpEntity = createSmtpEntity(redisClient);
@@ -139,7 +142,8 @@ function createLogic(redisClient, options = {}) {
     });
 
     // Queryable ledger + idempotency + `_event` piggyback for every outbound send.
-    const ledger = createDeliveryLedger(redisClient, { logger });
+    // relay (system.gateway bot, optional) adds: FAILED events via event.emit + attachments.
+    const ledger = createDeliveryLedger(redisClient, { logger, relay });
 
     return {
         // --- CONNECTIVITY & DIAGNOSTICS ---
@@ -208,6 +212,23 @@ function createLogic(redisClient, options = {}) {
                     }
                 }
 
+                // Attachments are storage REFERENCES ({assetId, filename?}) resolved via the
+                // gateway relay bot — fetched BEFORE ledger.run so a bad reference fails fast
+                // (no ledger row, no idempotency claim, no provider call).
+                let attachments = null;
+                if (Array.isArray(params.attachments) && params.attachments.length) {
+                    if (!relay) {
+                        throw jsonrpc.INVALID_PARAMS(
+                            'attachments require the gateway relay bot (system.gateway / RELAY:TOKEN:gateway) — not provisioned on this deployment'
+                        );
+                    }
+                    try {
+                        attachments = await fetchAttachments(relay, params.attachments, attachCfg);
+                    } catch (e) {
+                        throw jsonrpc.INVALID_PARAMS(`attachments: ${e.message}`);
+                    }
+                }
+
                 const result = await ledger.run({
                     channel: 'email',
                     target: Array.isArray(to) ? to.join(',') : to,
@@ -226,7 +247,8 @@ function createLogic(redisClient, options = {}) {
                                 ...(replyTo ? { replyTo } : {}),
                                 subject: resolvedSubject,
                                 text: resolvedContent,
-                                html: resolvedHtml || resolvedContent
+                                html: resolvedHtml || resolvedContent,
+                                ...(attachments ? { attachments } : {})
                             });
                             return { success: true, messageId: info.messageId, provider: 'smtp' };
                         }
@@ -236,7 +258,8 @@ function createLogic(redisClient, options = {}) {
                             to, cc, bcc, replyTo,
                             subject: resolvedSubject,
                             content: resolvedContent,
-                            html: resolvedHtml
+                            html: resolvedHtml,
+                            attachments
                         });
                     },
                 });
@@ -349,8 +372,15 @@ function createLogic(redisClient, options = {}) {
 
         // --- DELIVERY LEDGER (queryable record of what actually went out) ---
         delivery: {
-            get:  async (params) => ledger.get(params),
-            list: async (params) => ledger.list(params)
+            get:    async (params) => ledger.get(params),
+            list:   async (params) => ledger.list(params),
+            // Receipt flow-back: SENT → DELIVERED/BOUNCED/COMPLAINED (see delivery.js update()).
+            update: async (params) => ledger.update(params)
+        },
+
+        // --- CHANNEL PROBES (credentials wired? — read-only, sends nothing) ---
+        channel: {
+            test: async (params) => probe.testChannel(params, { emailCfg, smsCfg })
         },
 
         // --- IMAGE PROCESSING ---

@@ -66,13 +66,23 @@ function createStorageProvider(storageConfig = {}, deps = {}) {
     }
 
     driver.provider = provider;
+    // NOTE: this `|| 'private'` fallback only applies to DIRECT callers that hand-build a
+    // config (tests/simulation). The production default comes from apps/storage config.js,
+    // which fills access = STORAGE_ACCESS || 'public' — i.e. a real deployment that sets
+    // nothing runs in 'public' mode. Do not read this line as "the system defaults private".
     driver.access = storageConfig.access || 'private';
 
     /**
-     * The URL seam apps/storage uses for resolve()/list()/multi(). Returns a
-     * signed, expiring URL by default (closes the unauthenticated-read hole);
-     * returns a stable public CDN URL when access==='public' and the driver
-     * can build one.
+     * The URL seam apps/storage uses for resolve()/list()/multi(). Branches:
+     *   access==='public' + driver has publicUrl  → stable UNSIGNED URL (anyone holding
+     *                                               the URL can download the bytes)
+     *   otherwise                                 → signed, expiring URL (presignGet)
+     *
+     * @attention `visibility` on an asset governs the RPC face only (who may OBTAIN a URL
+     *   via resolve/get). Byte-level protection is decided HERE by `access`, not by
+     *   visibility — an `internal` asset's bytes are anonymously downloadable in public
+     *   mode. Capability-URL model (same as S3 presign); the boot warning below makes the
+     *   combination explicit. See docs/feedback/storage-visibility-semantics.md.
      */
     driver.resolveUrl = (key, opts = {}) => {
         if (driver.access === 'public' && driver.capabilities().publicUrl) {
@@ -80,6 +90,19 @@ function createStorageProvider(storageConfig = {}, deps = {}) {
         }
         return driver.presignGet(key, opts);
     };
+
+    // Three individually-reasonable defaults (visibility=internal, STORAGE_ACCESS=public,
+    // a permissive byte server) can combine into "everything anonymously downloadable"
+    // with no single place saying so — this warning is that place. Fired once at boot,
+    // only on the public-mode path (unit tests that build private-mode configs stay quiet).
+    if (driver.access === 'public') {
+        const warn = (deps.logger && typeof deps.logger.warn === 'function')
+            ? deps.logger.warn.bind(deps.logger) : console.warn;
+        warn('[storage] STORAGE_ACCESS=public — resolve/list return stable UNSIGNED urls: ' +
+             'anyone holding a url can download the bytes anonymously, regardless of the asset\'s ' +
+             '`visibility` (which gates the RPC face only). For byte-level isolation set ' +
+             'STORAGE_ACCESS=private (signed, expiring urls).');
+    }
 
     return driver;
 }

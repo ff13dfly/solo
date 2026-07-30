@@ -6,8 +6,10 @@
 > **图例**：🔴 声明了实际不通 · 🟠 结构性缺失 · 🟡 能力空白 · ⚪ 一致性债
 > **归属**：`v1.1.x` = 只加不破、现在就能落；`v2` = 需破坏性变更或语义收敛。
 >
-> **进度（2026-07-30 首轮补齐）**：19 条中 **11 条已修**（G1–G5、G7、G14–G18）+ **2 条部分**（G8 成功侧 / G13 的 cc-bcc-replyTo），
-> 全部"只加不破"。剩 G6 / G9 / G10 / G11 / G12 + G8·G13 的尾巴，逐条状态见 §6 的表。
+> **进度（2026-07-30 两轮补齐）**：19 条中 **16 条已修**（G1–G8、G12–G18）。第二轮（relay 基建批）收掉
+> G6 回执 / G8 失败事件 / G12 探针 / G13 附件——`system.gateway` bot 一份基建四个收益；router 默认表
+> 已登记 gateway 事件（授权改动）。**剩 3 条**：G9 出站配额（a 档 v1.1.x / b 档 v2）· G10 portal 页 ·
+> G11 多通道账号实体，见 §6 的表。
 > **未部署 · provider 真机未验证**（阿里云/Twilio 需真凭证 + 已审模版）；hermetic 全绿见 §7。
 
 ---
@@ -83,13 +85,16 @@ SMTP 账号 CRUD（密码 AES 加密 + `gateway.smtp.test` 探活）· 邮件模
 - **证据**：`api/core/gateway/logic/delivery.js`、`logic/index.js`（三处 `ledger.run`）、`handlers/entities.js`（delivery 实体）、`handlers/introspection.js`（`DELIVERY_RETURN` + 两方法）、`index.js`（注册）。
 - **遗留**：台账没有 `requestedBy`（调用者身份）——gateway 的 logic 层拿不到 `req.user`，要透传得改 `index.js` 全部 handler 签名，本轮没动。
 
-### G6. 无回执 / 状态回流 —— `status` 恒 `sent`
+### G6. 无回执 / 状态回流 —— `status` 恒 `sent`  ✅ 已修（2026-07-30 第二轮）
 
 - **现象**：三个 send 路径写的 `status` 全是硬编码 `'sent'`（`logic/index.js:112,149`），provider 的异步回执（bounce / complaint / delivered）没有任何入口。
 - **影响**：退信、投诉率、黑名单一概不知；给已失效地址反复发信会伤发信域名信誉。
 - **修法**：**复用 ingress，不新造入站面**——provider 的 webhook 由 listener 归一化 → `ingress.ingest` → `EVENT:WEBHOOK:{provider}`；gateway 订阅该事件（`handlers/events.js` 的 `subscribes`）把 `delivery` 台账（G5）的 status 推进。**依赖 G5**。
 - **验收**：e2e 用 mock listener 打一条 bounce → 台账里对应 delivery 变 `BOUNCED`。
 - **归属**：`v1.1.x`（依赖 G5）。抑制列表（发前查黑名单）可作为第二步。
+- **修法（已落地）**：新增 `gateway.delivery.update { id, deliveryStatus, detail? }`——回执由消费者推进（provider webhook → listener → `ingress.ingest` → `EVENT:WEBHOOK:{provider}` → workflow/sentinel → 本方法），**gateway 自己不建流消费循环**（保持哑管道，领域判断留给消费者，与 ingress README §1 的三层分工一致）。合法转移：`SENT → DELIVERED|BOUNCED|COMPLAINED`、`DELIVERED → BOUNCED|COMPLAINED`（迟到退信）；`MOCKED`/`FAILED`/回执态为终态。盖 `receiptAt` + `receiptDetail`（截 500）。
+- **验证**：hermetic `delivery.test.js`（转移合法性 5 用例：正向链、终态拒、非法目标拒、大小写容错、BOUNCED 终态）；e2e `100-delivery` 用例 7（经真 Router 推进 DELIVERED→BOUNCED + MOCKED 拒绝）。
+- **遗留**：抑制列表（发前查 BOUNCED 历史拒发）未做——第二步。
 
 ### G7. 无幂等键 —— 重试可能重复发送  ✅ 已修（2026-07-30）
 
@@ -103,7 +108,7 @@ SMTP 账号 CRUD（密码 AES 加密 + `gateway.smtp.test` 探活）· 邮件模
 - **验证**：`tests/delivery.test.js` —— 同 key 只打 provider 一次 + 台账只一行 + `deduplicated:true`、不同 key 互不影响、无 key 则行为不变、失败释放 key 后重试是真重试（两行台账）、并发 IN_FLIGHT 抛 retryable 且**一条都没发**；`core/notification/tests/worker.test.js` 断言 key 逐字节正确。
 - **证据**：`logic/delivery.js:claim/settle/release`、`handlers/introspection.js`（三个 send 的 `idempotencyKey` 参数 + `deduplicated` 可选返回键）、`core/notification/logic/worker.js:98-135`。
 
-### G8. 不发任何事件 —— sentinel 无法对投递失败做反应  🟡 部分已修（2026-07-30，成功侧已通；失败侧受机制限制）
+### G8. 不发任何事件 —— sentinel 无法对投递失败做反应  ✅ 已修（2026-07-30 两轮：成功侧 `_event` + 失败侧 relay + 注册表全通）
 
 - **现象**：`handlers/events.js` 是 `{ emits: [], subscribes: [] }`。投递成功 / 失败 / 降级 mock 都不上事件总线。
 - **影响**：v1.1 的主场景之一（nexus sentinel 事件订阅式反应体）对"投递失败"完全瞎——只能靠人翻 notification DLQ。
@@ -115,7 +120,7 @@ SMTP 账号 CRUD（密码 AES 加密 + `gateway.smtp.test` 探活）· 邮件模
 - **⚠️ 落地过程中踩到的两个真坑（记下来，下次做事件的服务照抄）**：
   1. **`_event` 的信封形状是 `{stream, type, payload}`**，`stream` = Redis 流名、`type` = 点分逻辑名。第一版写成 `{ type: 'EVENT:GATEWAY:DELIVERY_SENT' }`（缺 `stream`）—— 单测里长得完全正常，**在 Router 里被静默 skip**（`router/handlers/events.js:143` 缺 stream 直接 continue）。hermetic 测试证不了这个，是 e2e 才抓到的。现测试里已按 Router 契约逐字段断言（`assertRouterWireShape`）。
   2. **还有一道注册表闸**：Router 只放行登记在事件注册表里的 `(source, stream, type)` 三元组，未登记 → `BLOCKED — not in registry`。已加进 **e2e harness 的 `FIXTURE_REGISTRY`** 与 **dev 的 `deploy/mock/inject-workflows.js`**（都不是 router），所以 e2e/dev 已真通；但**生产默认表在 `api/router/config.js` 的 `eventRegistry`（受保护目录）**，尚未登记 → **生产上这两个事件目前仍会被拦下**。需授权后加一行：`'gateway': { 'EVENT:GATEWAY:DELIVERY': ['*'] }`。**在那之前，投递可查性靠 G5 台账，不靠事件。**
-- **失败侧仍缺（follow-up）**：`DELIVERY_FAILED` 事件需要 gateway 自己持 relay token（`deploy/seed-bots.js` + e2e harness 双镜像加 `system.gateway` bot，与 G13 附件所需的 relay 是同一份基建）→ **和 G13 一起做最省事**。当下失败可查性由 G5 台账兜住（`deliveryStatus=FAILED` + `error`），不是黑洞，但 sentinel 还订阅不到。
+- ~~**失败侧仍缺（follow-up）**~~ ✅ **失败侧已落地（2026-07-30 第二轮）**：`system.gateway` relay bot（`deploy/bot-permits.js` 单一真源，dev/e2e 播种自动跟进）+ gateway 构造 relay（`gateway.token.set/status/clear` 管理生命周期，镜像 notification 体例）。失败路径记完台账行后 **fire-and-forget** `relay.call('event.emit')` 发 `gateway.delivery.failed`（payload 多带 `error`）——不等待、不吞原始错误，relay 未播则退化为"仅台账行"。**注册表已全通**：`api/router/config.js` 默认表加 `'gateway'` + `'system.gateway'` 两行（用户授权，2026-07-30），e2e/dev fixture 同步；`deploy/mock/inject-workflows.js` 因走 merge 不再重复。
 - **验证**：`tests/delivery.test.js`（hermetic）—— 信封形状按 Router 契约断言、mock 带 `.mocked`、真 provider 带 `.sent`、幂等回放不带 `_event`、声明↔实发的 stream|type 与 payload 键一致（防漂移）。**e2e 真链路**：`suites/100-delivery` 新增用例 6 —— 经真 Router 发一封 → 事件**真写进 `EVENT:GATEWAY:DELIVERY` 流**（`source:'gateway'` 由 Router 盖章、payload 含 deliveryId）、且 Router 已把 `_event` 从回客户端的结果里摘掉。
 - **证据**：`logic/delivery.js`（`EVENT_STREAM` + EVENTS + run 的 `_event`）、`handlers/events.js`、`e2e/harness/setup.js`（FIXTURE_REGISTRY 加 gateway）、`deploy/mock/inject-workflows.js`（dev 同步）、`e2e/suites/93-service-events.e2e.test.js`（gateway 从"空声明"移到"≥2 emits"）。
 
@@ -142,18 +147,20 @@ SMTP 账号 CRUD（密码 AES 加密 + `gateway.smtp.test` 探活）· 邮件模
 - **修法**：仿 smtp 实体加 `channel_account` 实体（`type: resend|aliyun|twilio`，敏感字段加密，复用 `logic/smtp.js` 的 `deriveKey/encrypt` 那套），send 支持 `accountId` 选账号；env 保留为默认账号（零破坏）。
 - **归属**：`v1.1.x`（纯新增）。**优先级中**——单发信身份够用时可延后。
 
-### G12. 只有 `smtp.test` 一个连通性探针
+### G12. 只有 `smtp.test` 一个连通性探针  ✅ 已修（2026-07-30 第二轮）
 
 - **现象**：`handlers/introspection.js:89` 只有 SMTP 一个 test 方法；email api 通道、sms 两个通道没有对应探针。
 - **影响**："凭证配对了吗"只能真发一条试（短信还要花钱）。
 - **修法**：加 `gateway.channel.test { channel, accountId? }` —— email api 走 provider 的 domains/验证端点（Resend 有），sms 走"余额/签名查询"类只读接口，无只读接口的通道诚实返回 `{ supported:false }`（禁假报成功）。
 - **归属**：`v1.1.x`（与 G11 同批更省事）。
+- **修法（已落地）**：`gateway.channel.test { channel: 'email'|'sms' }`（`logic/probe.js`）——smtp 走 transporter.verify、resend 走 GET /domains、aliyun 走签名 QuerySmsSignList（200 + 业务 Code 双查）、twilio 走 GET 账号资源；mock 诚实报"什么都不会发"。**契约**：连通性失败报告不抛错（`{ok:false,error}`），无只读探针的 provider 返回 `supported:false`，只有非法 `channel` 参数才抛 `-32602`。`accountId` 档（按存储账号探测）未做——smtp 存储账号已有 `gateway.smtp.test`，不重复。
+- **验证**：hermetic `relay-features.test.js`（7 探针用例：四 provider 请求形状 + mock 注记 + 失败报告不抛 + unsupported 诚实）；e2e `100` 用例 7 断言 mock 探针经真 Router 可用。
 
 ---
 
 ## 3. 🟡 邮件能力空白（5 条）
 
-### G13. 无附件 / cc / bcc / replyTo  🟡 部分已修（2026-07-30：cc/bcc/replyTo 已通；附件未做）
+### G13. 无附件 / cc / bcc / replyTo  ✅ 已修（2026-07-30 两轮：cc/bcc/replyTo + 附件）
 
 - **现象**：`gateway.email.send` 参数只有 `to/subject/content/templateId/variables/smtpId`（`handlers/introspection.js:101`），逻辑层同样只透传这些（`logic/index.js:64-100`）。
 - **影响**：storage 有 CAS 文件却发不出去——发对账单、发票、导出报表这类需求直接卡死。这是**能力空白里最刚需的一条**。
@@ -161,7 +168,7 @@ SMTP 账号 CRUD（密码 AES 加密 + `gateway.smtp.test` 探活）· 邮件模
 - **验收**：hermetic 断言 smtp 分支收到 nodemailer 的 `attachments` 数组；e2e 发一封带 storage 附件的邮件到 mock 收件端。
 - **归属**：`v1.1.x`（纯新增可选参数）。
 - **修法（已落地，一半）**：`cc` / `bcc` / `replyTo` 已加——单地址或数组，两条通道都透传（smtp 走 nodemailer 字段，api 走 Resend 的 `cc/bcc/reply_to`），且**逐个做格式校验**、报错点名是哪个字段。
-- **附件仍未做**：需要 gateway 持 relay token 去 storage 取内容（与 G8 失败事件同一份基建，建议同批），且 api/smtp 两通道附件形状不同要分别适配。**别接裸 base64**——20MB bodyLimit 会把 Router 审计日志打爆。
+- ~~**附件仍未做**~~ ✅ **附件已落地（2026-07-30 第二轮）**：`attachments: [{ assetId, filename? }]`——**只接 storage 引用，裸 base64 直接拒**。`logic/attachments.js` 经 `system.gateway` relay 拉 `storage.asset.get`（元数据）+ `resolve`（URL）再流式下载，**总量级 size cap**（默认 10MB / 10 个，`GATEWAY_ATTACH_MAX_{BYTES,COUNT}`；content-length 先拒 + 流式续查双保险）。取附件在 `ledger.run` **之前**——坏引用 fail-fast，不占幂等键、不写台账行、不打提供商。smtp 走 nodemailer `attachments`，api 走 Resend base64；relay 未播则 `-32602` 点名缺 `RELAY:TOKEN:gateway`（永久错，不烧重试）。
 - **验证**：`tests/send-validation.test.js`（cc/bcc/replyTo 各自的非法值 → `-32602` 且 message 点名字段）。
 - **证据**：`logic/index.js`（email.send 的 cc/bcc/replyTo + 校验循环）、`logic/email.js:36-49,58-70`。
 
@@ -249,21 +256,20 @@ SMTP 账号 CRUD（密码 AES 加密 + `gateway.smtp.test` 探活）· 邮件模
 |------|----|------|
 | **一 · 小活** | `G4` 脚手架 .env · `G18` 换 clock · `G15`+`G17` fail-fast · `G3` README 收敛（b 档） | ✅ **全部落地**（2026-07-30） |
 | **二 · 通道可信** | `G1` 阿里云 V3 签名 · `G2` Twilio 位置变量 | ✅ **落地**（2026-07-30，**未对真机验证**） |
-| | `G12` 通道探针（email api / sms 无 test 方法） | ⬜ 未做（批次二尾巴，跳过没做） |
+| | `G12` 通道探针（四 provider 只读探测 + mock 诚实注记） | ✅ **落地**（2026-07-30 第二轮） |
 | **三 · 可观测+可靠** | `G5` delivery 台账 · `G7` 幂等键（含 notification worker 接线） | ✅ **落地**（2026-07-30） |
-| | `G8` 投递事件 | 🟡 成功侧落地；`DELIVERY_FAILED` 需 relay（见下） |
-| | `G6` 回执回流（依赖 G5，现在可做） | ⬜ 未做 |
-| **四 · 能力与界面** | `G13` cc/bcc/replyTo | ✅ 落地 |
-| | `G13` 附件 + `G8` 失败事件 —— **共用同一份 relay 基建，务必同批做** | ⬜ 未做（下一批的首选） |
+| | `G8` 投递事件（sent/mocked `_event` + failed relay + router 注册表两行〔授权〕） | ✅ **全部落地**（2026-07-30 两轮） |
+| | `G6` 回执回流（`delivery.update` + ingress 消费者配方） | ✅ **落地**（2026-07-30 第二轮） |
+| **四 · 能力与界面** | `G13` cc/bcc/replyTo + 附件（storage 引用，`system.gateway` relay） | ✅ **落地**（2026-07-30 两轮） |
 | | `G14` 模版 text | ✅ 落地 |
 | | `G10` portal 页（账号/模版/台账） · `G11` 多通道账号实体 | ⬜ 未做 |
 | **五 · 治理** | `G16` opt-in 严格变量 | ✅ 落地（默认关） |
 | | `G9(a)` 出站配额（默认不限） | ⬜ 未做 |
 | | `G9(b)` AI 出站白名单/审批门 · `G16` 默认翻转 · `G19` rmbg 迁移 | ⬜ **v2** |
 
-**下一批建议**：`G13 附件` + `G8 失败事件` + `G6 回执` —— 三者都要 gateway 持 relay token
-（`deploy/seed-bots.js` + `e2e/harness/setup.js` 双镜像加 `system.gateway` bot），一次基建三个收益。
-其次是 `G10 portal 页`（台账已有数据可展示了）。
+**剩余三条的建议**：`G10 portal 页`（台账/回执数据已齐，纯前端）→ `G9(a)` 出站配额（默认不限，
+小改）→ `G11` 多通道账号（单发信身份够用前不急）。外加两件非代码项：**aliyun/Resend 真机实测**
+（等凭证）与 `deploy/seed-bots.js` 生产播种后验证 `gateway.token.status` 的 `hasToken:true`。
 
 ---
 

@@ -103,6 +103,14 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'approval.gate.get':    (p) => Methods.gate.get(p),
                 'approval.gate.list':   (p) => Methods.gate.list(p),
 
+                // ── Policy tier (rules engine, minimal): subject-pattern → defaults ───
+                // Writes are admin-gated in-service (mirrors token.*): whoever writes
+                // policy decides how many humans a high-risk change needs.
+                'approval.policy.set':     (p) => { if (!ctx.isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.policy.set(p); },
+                'approval.policy.delete':  (p) => { if (!ctx.isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.policy.delete(p); },
+                'approval.policy.list':    (p) => Methods.policy.list(p),
+                'approval.policy.resolve': (p) => Methods.policy.resolve(p),
+
                 // §7.7 — admin-only token lifecycle for the internal-call relay
                 'approval.token.set':    async (p) => { if (!ctx.isAdmin) throw jsonrpc.UNAUTHORIZED(); await relay.setToken(p); return { ok: true }; },
                 'approval.token.status': async () => { if (!ctx.isAdmin) throw jsonrpc.UNAUTHORIZED(); return relay.status(); },

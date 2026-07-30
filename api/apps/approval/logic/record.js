@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
 const createEntity = require('../../../library/entity');
+const clock = require('../../../library/clock');
 const jsonrpc = require('../handlers/jsonrpc');
 
 /**
@@ -23,6 +24,7 @@ const STATE = {
     DONE: 'DONE',
     REJECTED: 'REJECTED',
     FAILED: 'FAILED',
+    EXPIRED: 'EXPIRED',   // deadline passed while INIT/DISPATCHED — fail-closed, terminal
 };
 
 // Allowed state transitions per action (MVP: confirm goes straight DISPATCHED->DONE;
@@ -58,7 +60,7 @@ function verifyAgainst(digest, signatureBs58, publicKeys) {
     });
 }
 
-module.exports = (redis, { config, relay } = {}) => {
+module.exports = (redis, { config, relay, policy = null } = {}) => {
     const records = createEntity(redis, {
         serviceName: config.serviceName,
         entityName: 'record',
@@ -67,12 +69,33 @@ module.exports = (redis, { config, relay } = {}) => {
         searchFields: ['target', 'state'],
     });
 
+    // Lazily flip an in-flight record past its deadline to EXPIRED (fail-closed read):
+    // an INIT/DISPATCHED request nobody acted on must not be approvable months later.
+    // No expiresAt (the default — pre-expiry records and callers that opt out) → never expires.
+    async function settleExpiry(record) {
+        const inFlight = record.state === STATE.INIT || record.state === STATE.DISPATCHED;
+        if (inFlight && record.expiresAt && clock.now() > record.expiresAt) {
+            return records.update({ id: record.id, state: STATE.EXPIRED });
+        }
+        return record;
+    }
+
+    // Policy (approval.policy.*) fills expiry when the caller leaves it blank —
+    // matched on `target` with the same exact/longest-glob dialect gates use.
+    async function policyExpiry(target) {
+        if (!policy) return null;
+        try {
+            const { matched, policy: p } = await policy.resolve({ subject: target });
+            return matched && p.expiresInSec !== undefined ? p.expiresInSec : null;
+        } catch (_) { return null; }
+    }
+
     function attest(stage, actor, payloadHash, { publicKey = null, signature = null } = {}) {
         return {
             stage,
             actor: actor || null,
             payloadHash,
-            timestamp: Date.now(),
+            timestamp: clock.now(),
             method: signature ? 'solana:ed25519' : 'server-attested',
             publicKey,   // populated when a real signature is supplied + verified
             signature,
@@ -121,10 +144,23 @@ module.exports = (redis, { config, relay } = {}) => {
     }
 
     return {
-        /** Applicant files a change request → INIT. Optional Ed25519 `signature`. */
-        async request({ target, payload, signature } = {}, ctx = {}) {
+        /**
+         * Applicant files a change request → INIT. Optional Ed25519 `signature`;
+         * optional `expiresInSec` (precedence: explicit > policy match on target > none —
+         * records WITHOUT a deadline never expire, exactly the pre-expiry behavior).
+         */
+        async request({ target, payload, signature, expiresInSec } = {}, ctx = {}) {
             if (!target) throw jsonrpc.MISSING_PARAM('target');
             assertOperations(payload);
+
+            let ttlSec = null;
+            if (expiresInSec !== undefined) {
+                const s = parseInt(expiresInSec, 10);
+                if (!Number.isInteger(s) || s < 60) throw jsonrpc.INVALID_PARAM('expiresInSec must be an integer ≥ 60');
+                ttlSec = s;
+            } else {
+                ttlSec = await policyExpiry(target);
+            }
 
             const applicant = ctx.actor || null;
             const entry = await signedAttest('request', applicant, target, hashPayload(payload), signature);
@@ -134,13 +170,14 @@ module.exports = (redis, { config, relay } = {}) => {
                 state: STATE.INIT,
                 applicant,
                 evidence: [entry],
+                ...(ttlSec ? { expiresAt: clock.now() + ttlSec * 1000 } : {}),
             });
         },
 
         /** Verifier approves the content → DISPATCHED. Applicant may not self-verify. */
         async verify({ id, signature } = {}, ctx = {}) {
             if (!id) throw jsonrpc.MISSING_PARAM('id');
-            const record = await records.get({ id });
+            const record = await settleExpiry(await records.get({ id }));
             const to = nextState(record, 'verify');
 
             const actor = ctx.actor || null;
@@ -155,7 +192,7 @@ module.exports = (redis, { config, relay } = {}) => {
         /** Confirmer attests physical execution → DONE. Optional Ed25519 `signature`. */
         async confirm({ id, signature } = {}, ctx = {}) {
             if (!id) throw jsonrpc.MISSING_PARAM('id');
-            const record = await records.get({ id });
+            const record = await settleExpiry(await records.get({ id }));
             const to = nextState(record, 'confirm');
 
             const actor = ctx.actor || null;
@@ -168,13 +205,13 @@ module.exports = (redis, { config, relay } = {}) => {
             }
 
             const entry = await signedAttest('confirm', actor, record.target, hashPayload(record.payload), signature);
-            return records.update({ id, state: to, confirmedAt: Date.now(), evidence: [...(record.evidence || []), entry] });
+            return records.update({ id, state: to, confirmedAt: clock.now(), evidence: [...(record.evidence || []), entry] });
         },
 
         /** Reject a request → REJECTED. */
         async reject({ id, reason } = {}, ctx = {}) {
             if (!id) throw jsonrpc.MISSING_PARAM('id');
-            const record = await records.get({ id });
+            const record = await settleExpiry(await records.get({ id }));
             const to = nextState(record, 'reject');
 
             const entry = { ...attest('reject', ctx.actor || null, hashPayload(record.payload)), reason: reason || null };
@@ -183,7 +220,9 @@ module.exports = (redis, { config, relay } = {}) => {
         },
 
         async get({ id } = {}) {
-            return records.get({ id });
+            // Reads settle expiry too — a consumer (e.g. collection's refund gate reading
+            // approval.record.get) must never see a stale INIT/DISPATCHED past deadline.
+            return settleExpiry(await records.get({ id }));
         },
 
         async list({ target, state, limit, offset } = {}) {

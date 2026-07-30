@@ -217,6 +217,60 @@ gate('100 · delivery plane + reversible bot suspension', () => {
         expect(after2.items.filter((r) => r.idempotencyKey === idemKey)).toHaveLength(1);
     }, 40_000);
 
+    // ── 回执回流 + 失败事件 + 通道探针(gateway-gaps G6·G8失败侧·G12,2026-07-30) ──
+    test('7. 回执推进 + 失败事件落流 + 探针只读(经真 Router)', async () => {
+        const STREAM = 'EVENT:GATEWAY:DELIVERY';
+
+        // ① 回执:webhook 发一条(真 SENT 行) → delivery.update 推进 DELIVERED → 迟到 BOUNCED
+        const sent = V.assertResult(await rpc('gateway.webhook.send', {
+            url: `http://127.0.0.1:${whPort}/receipt-${PID}`, payload: { r: 1 },
+        }, ADMIN_TOKEN), 'webhook.send for receipt');
+        expect(sent.provider).toBe('webhook');
+
+        const delivered = V.assertResult(await rpc('gateway.delivery.update', {
+            id: sent.deliveryId, deliveryStatus: 'DELIVERED',
+        }, ADMIN_TOKEN), 'delivery.update DELIVERED');
+        expect(delivered.deliveryStatus).toBe('DELIVERED');
+        expect(typeof delivered.receiptAt).toBe('number');
+
+        const bounced = V.assertResult(await rpc('gateway.delivery.update', {
+            id: sent.deliveryId, deliveryStatus: 'BOUNCED', detail: 'late bounce',
+        }, ADMIN_TOKEN), 'delivery.update BOUNCED');
+        expect(bounced.deliveryStatus).toBe('BOUNCED');
+
+        // 非法转移被拒(MOCKED 是终态)
+        const mocked = V.assertResult(await rpc('gateway.email.send', {
+            to: `receipt-${PID}@example.com`, subject: 'R', content: 'r',
+        }, ADMIN_TOKEN), 'mock email');
+        const illegal = await rpc('gateway.delivery.update', { id: mocked.deliveryId, deliveryStatus: 'DELIVERED' }, ADMIN_TOKEN);
+        expect(illegal.error).toBeDefined();
+        expect(illegal.error.message).toMatch(/illegal receipt transition MOCKED/);
+
+        // ② 失败事件:打一个必然连接失败的端口 → FAILED 台账行 + relay event.emit 落流
+        //    (system.gateway bot 由 harness 从 bot-permits.js 播种;gateway.token.set 收 token)
+        const failRes = await rpc('gateway.webhook.send', { url: 'http://127.0.0.1:1/dead', payload: {} }, ADMIN_TOKEN);
+        expect(failRes.error).toBeDefined();
+
+        let failedEvent = null;
+        for (let i = 0; i < 20 && !failedEvent; i++) {
+            await sleep(250);
+            const entries = await redis.xRange(STREAM, '-', '+').catch(() => []);
+            failedEvent = entries.map((e) => e.message).find((m) => m.type === 'gateway.delivery.failed') || null;
+        }
+        expect(failedEvent).not.toBeNull();
+        expect(failedEvent.source).toBe('system.gateway');       // relay 路径,Router 按 bot 身份盖章
+        const failPayload = JSON.parse(failedEvent.payload);
+        expect(failPayload.channel).toBe('webhook');
+        expect(failPayload.status).toBe('FAILED');
+        expect(typeof failPayload.error).toBe('string');
+
+        // ③ 探针:mock 通道诚实报"什么都不会发";只读、零投递副作用
+        const probeRes = V.assertResult(await rpc('gateway.channel.test', { channel: 'email' }, ADMIN_TOKEN), 'channel.test');
+        expect(probeRes.resolved).toBe('mock');
+        expect(probeRes.ok).toBe(true);
+        expect(probeRes.note).toMatch(/nothing will actually be sent/i);
+    }, 40_000);
+
     test('5. 可逆 bot 暂停:suspend 即时咬活 token,resume 后恢复', async () => {
         const BOT = `system.e2e100-${PID}`;
         // 建 bot + 授一个无害读权限 + 发证

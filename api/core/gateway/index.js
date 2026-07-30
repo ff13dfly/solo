@@ -7,6 +7,7 @@ const { createLogger } = require('../../library/logger');
 const { mountHealth } = require('../../library/health');
 
 const { initializeRedis } = require('./handlers/bootstrap');
+const { createRelay } = require('../../library/relay');
 const authHandlers = require('./handlers/auth');
 const introspectionMethods = require('./handlers/introspection');
 const entityDefinitions = require('./handlers/entities');
@@ -17,6 +18,11 @@ const jsonrpc = require('./handlers/jsonrpc');
 const STARTUP_TIME = new Date().toISOString();
 const app = express();
 const PORT = config.port;
+
+// --- MUTABLE SERVICE STATE (assigned in bootstrap; were implicit globals before) ---
+let redisClient = null;
+let Methods = null;
+let relay = null;
 
 // --- LOGGER ---
 const logger = createLogger(config.serviceName); 
@@ -51,9 +57,15 @@ app.use(authHandlers.middleware);
     try {
         redisClient = await initializeRedis(config.serviceName);
         logger.setRedis(redisClient); // Bind Redis for auto-error reporting
-        
-        Methods = createLogic(redisClient, { serviceName: config.serviceName, config, logger });
-        
+
+        // §7.7 — outbound relay (system.gateway bot): attachments fetch bytes from storage,
+        // FAILED delivery events go out via event.emit. Dormant until RELAY:TOKEN:gateway
+        // is seeded (deploy/seed-bots.js from bot-permits.js) — absence degrades to
+        // "no attachments + ledger-row-only failures", it never blocks plain sends.
+        relay = createRelay({ redis: redisClient, serviceName: config.serviceName, routerUrl: config.routerUrl });
+
+        Methods = createLogic(redisClient, { serviceName: config.serviceName, config, logger, relay });
+
         // Start Server
         app.listen(PORT, () => {
             logger.info(`Service running on port ${PORT}`);
@@ -86,8 +98,12 @@ app.post('/jsonrpc', async (req, res) => {
     if (!Methods) return jsonrpc.error(res, jsonrpc.SERVICE_NOT_READY(), null, 503);
 
     const { jsonrpc: jsonrpc_version, method, params, id } = req.body;
-    
+
     try {
+        // Method-level access is the Router's job (checkAccess); this mirrors the fleet
+        // convention (notification.token.*) of double-gating the relay-token lifecycle only.
+        const requireAdmin = () => { if (req.permit !== 'admin') throw jsonrpc.UNAUTHORIZED(); };
+
         const handlers = {
             // System
             'ping':    () => ({ status: 'ok', service: config.serviceName, version: config.version, uptime: STARTUP_TIME }),
@@ -130,9 +146,18 @@ app.post('/jsonrpc', async (req, res) => {
             // Outbound Webhook Send
             'gateway.webhook.send': (p) => Methods.webhook.send(p),
 
-            // Delivery Ledger
-            'gateway.delivery.get':  (p) => Methods.delivery.get(p),
-            'gateway.delivery.list': (p) => Methods.delivery.list(p),
+            // Delivery Ledger (+ receipt flow-back from provider webhooks via ingress consumers)
+            'gateway.delivery.get':    (p) => Methods.delivery.get(p),
+            'gateway.delivery.list':   (p) => Methods.delivery.list(p),
+            'gateway.delivery.update': (p) => Methods.delivery.update(p),
+
+            // Channel probes (credentials wired? read-only, sends nothing)
+            'gateway.channel.test': (p) => Methods.channel.test(p),
+
+            // §7.7 — admin-only token lifecycle for the internal-call relay (system.gateway)
+            'gateway.token.set':    async (p) => { requireAdmin(); await relay.setToken(p); return { ok: true }; },
+            'gateway.token.status': async () => { requireAdmin(); return relay.status(); },
+            'gateway.token.clear':  async () => { requireAdmin(); await relay.clear(); return { ok: true }; },
 
             // Image Processing
             'gateway.rmbg.cutout': (p) => Methods.rmbg.cutout(p)
