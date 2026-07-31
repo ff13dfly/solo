@@ -6,6 +6,7 @@ import { useLang } from '../providers/LanguageProvider';
 import { useServices } from '../providers/ServicesProvider';
 import { NON_DISCOVERABLE_SERVICES, ExtensionRegistry } from '../ExtensionRegistry';
 import { getCurrentRouterUrl } from '../utils/routerManager';
+import { SYSTEM_NAME } from '../utils/branding';
 import { IconButton } from '../components/ui';
 
 // ── Icon Map ─────────────────────────────────────────────────────────────────
@@ -83,7 +84,7 @@ export default function OperatorLayout() {
           {!isCollapsed ? (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
-                <div style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--accent-color)', letterSpacing: '-0.02em' }}>{t('nav.brand_title')}</div>
+                <div style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--accent-color)', letterSpacing: '-0.02em' }}>{t('nav.brand_title', { system: SYSTEM_NAME })}</div>
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500, opacity: 0.8, marginTop: '2px' }}>{t('nav.brand_subtitle')}</div>
               </div>
               <IconButton

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { clearSession } from '../utils/auth';
 import { useNavigate, useLocation, Routes, Route, Navigate } from 'react-router-dom';
 import { getCurrentRouterUrl } from '../utils/routerManager';
+import { SYSTEM_NAME } from '../utils/branding';
 import ServiceManagement from './services';
 import Overview from './Overview';
 import UserManagement from './users';
@@ -56,7 +57,7 @@ export default function DashboardLayout() {
       <div className={`sys-sidebar bg-bg-primary border-r border-border flex flex-col p-6 shrink-0${isCollapsed ? ' collapsed' : ''}`}>
         {/* Header */}
         <div className={`text-base font-bold text-accent mb-8 pb-[15px] border-b-2 border-dashed border-border flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'}`}>
-          {!isCollapsed && <span>{t('dashboard.header')}</span>}
+          {!isCollapsed && <span>{t('dashboard.header', { system: SYSTEM_NAME })}</span>}
           <button
             onClick={() => setIsCollapsed(v => !v)}
             className="bg-transparent border border-transparent text-text-secondary hover:text-accent hover:border-accent transition-all text-xs w-6 h-6 flex items-center justify-center shrink-0 font-mono"

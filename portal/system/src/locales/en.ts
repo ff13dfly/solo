@@ -101,7 +101,7 @@ export default {
     no_entities: 'No entities.'
   },
   dashboard: {
-    header: 'SYSTEM :: ADMIN',
+    header: '{system} :: ADMIN',
     breadcrumb_root: 'ROOT',
     session_active: 'SESSION ACTIVE',
     status_report: 'STATUS REPORT',
@@ -118,7 +118,9 @@ export default {
     col_method: 'METHOD',
     col_ai: 'AI SUPPORT',
     col_service: 'SERVICE',
-    col_desc: 'DESCRIPTION'
+    col_desc: 'DESCRIPTION',
+    about_title: 'ABOUT THIS SYSTEM',
+    about_default: 'AI-native microservice backend built on Solo. Set SYSTEM_DESCRIPTION in .env to describe this deployment.'
   },
   operator: {
     title: 'OPERATOR MANAGEMENT',
@@ -317,7 +319,7 @@ export default {
     key_close: 'Close'
   },
   login: {
-    "title": "SYSTEM :: ACCESS",
+    "title": "{system} :: ACCESS",
     "disable_fireworks": "Disable Fireworks",
     "enable_fireworks": "Enable Fireworks",
     "gateway_config": "SYSTEM GATEWAY CONFIGURATION",

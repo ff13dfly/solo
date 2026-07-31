@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { callRpc } from '../utils/rpc';
 import { useLang } from '../providers/LanguageProvider';
 import { StatsCards } from '../components/overview/StatsCards';
+import { SystemInfoCard } from '../components/overview/SystemInfoCard';
 import { PublicMethods } from '../components/overview/PublicMethods';
 import { ServiceCapabilities } from '../components/overview/ServiceCapabilities';
 import { AutomationPanel } from '../components/overview/AutomationPanel';
@@ -101,7 +102,8 @@ export default function Overview() {
 
         {/* Sidebar (1 col on large screens) */}
         <div className="xl:col-span-1 w-full xl:min-w-[280px]">
-          <div className="sticky top-4">
+          <div className="sticky top-4 flex flex-col gap-4">
+            <SystemInfoCard t={t} />
             <StatsCards stats={stats} userStats={userStats} loading={loading} t={t} />
           </div>
         </div>

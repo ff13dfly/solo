@@ -8,6 +8,7 @@ import { useLang } from '../providers/LanguageProvider';
 import { Button } from '../components/ui';
 import { getRouterAddresses, getCurrentRouterIndex, setCurrentRouterIndex } from '../utils/routerManager';
 import type { RouterInfo } from '../utils/routerManager';
+import { SYSTEM_NAME } from '../utils/branding';
 
 export default function Login() {
   const { toast } = useUI();
@@ -95,7 +96,7 @@ export default function Login() {
   return (
     <div className="auth-container">
       <div className="auth-header">
-        <div className="auth-title">{t('login.title')}</div>
+        <div className="auth-title">{t('login.title', { system: SYSTEM_NAME })}</div>
         <div className="auth-status-indicator">{t('login.secure')}</div>
       </div>
 

@@ -7,6 +7,7 @@ import { getRouterAddresses, getCurrentRouterIndex, setCurrentRouterIndex } from
 import type { RouterInfo } from '../utils/routerManager';
 import { FireworkBackground } from '../components/FireworkBackground';
 import { useLang } from '../providers/LanguageProvider';
+import { SYSTEM_NAME } from '../utils/branding';
 
 export default function Login() {
   const { t } = useLang();
@@ -117,7 +118,7 @@ export default function Login() {
       <div className="w-[400px] border border-border p-6 relative z-10 bg-bg-primary/80 backdrop-blur-sm shadow-2xl">
         {/* Header */}
         <div className="border-b border-border mb-6 pb-3 flex justify-between items-center">
-          <div className="text-lg font-bold text-accent tracking-widest uppercase">{t('login.title')}</div>
+          <div className="text-lg font-bold text-accent tracking-widest uppercase">{t('login.title', { system: SYSTEM_NAME })}</div>
           <div className="flex items-center">
             <button
               type="button"

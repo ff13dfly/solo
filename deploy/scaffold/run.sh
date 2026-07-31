@@ -279,6 +279,8 @@ done
 # Convention for frontend code:
 #   <script src="/config.js"></script>  (in index.html, before the main bundle)
 #   routerManager.ts reads window.__SOLO_ROUTER__ as the default router URL.
+#   branding.ts (portal/system, portal/operator) reads window.__SOLO_SYSTEM_NAME__,
+#   sourced from SYSTEM_DISPLAY_NAME in .env, to disambiguate multiple deployed instances.
 
 declare -a FE_NAMES FE_PORTS FE_LOGS
 
@@ -300,6 +302,11 @@ serve_frontend() {
         printf 'window.__SOLO_ROUTER__ = "https://localhost:8686/";\n' > "$serve_dir/config.js"
     else
         printf 'window.__SOLO_ROUTER__ = "http://localhost:%s/";\n' "$ROUTER_PORT" > "$serve_dir/config.js"
+    fi
+    local sys_name="${SYSTEM_DISPLAY_NAME:-SYSTEM}"
+    printf 'window.__SOLO_SYSTEM_NAME__ = "%s";\n' "${sys_name//\"/\\\"}" >> "$serve_dir/config.js"
+    if [ -n "$SYSTEM_DESCRIPTION" ]; then
+        printf 'window.__SOLO_SYSTEM_DESCRIPTION__ = "%s";\n' "${SYSTEM_DESCRIPTION//\"/\\\"}" >> "$serve_dir/config.js"
     fi
     local log_file="$DEBUG_DIR/fe_${name}.log"
     "$ROOT_DIR/node_modules/.bin/serve" "$serve_dir" -p "$port" -s \

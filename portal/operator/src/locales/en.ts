@@ -1,7 +1,7 @@
 
 const en = {
   nav: {
-    brand_title: 'SOLO PORTAL',
+    brand_title: '{system}',
     brand_subtitle: 'OPERATOR CONSOLE',
     collapse_sidebar: 'Collapse Sidebar',
     expand_sidebar: 'Expand Sidebar',
@@ -155,7 +155,7 @@ const en = {
     rendering_error: '⚠️ Rendering Error',
   },
   login: {
-    title: 'Operator Portal',
+    title: '{system} :: OPERATOR',
     secure: 'SECURE',
     gateway_config: 'SYSTEM GATEWAY CONFIGURATION',
     router_prod: 'Production',

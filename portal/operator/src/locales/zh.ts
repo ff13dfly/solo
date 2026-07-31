@@ -1,7 +1,7 @@
 
 const zh = {
   nav: {
-    brand_title: 'SOLO 门户',
+    brand_title: '{system}',
     brand_subtitle: '运营控制台',
     collapse_sidebar: '收起侧边栏',
     expand_sidebar: '展开侧边栏',
@@ -155,7 +155,7 @@ const zh = {
     rendering_error: '⚠️ 渲染错误',
   },
   login: {
-    title: '运维管理门户',
+    title: '{system} :: 运维',
     secure: '安全连接',
     gateway_config: '系统网关配置',
     router_prod: '生产环境 (Production)',

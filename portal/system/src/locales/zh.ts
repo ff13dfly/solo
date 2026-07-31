@@ -101,7 +101,7 @@ export default {
     no_entities: '无实体。'
   },
   dashboard: {
-    header: '系统 :: 管理员',
+    header: '{system} :: 管理员',
     breadcrumb_root: '根目录',
     session_active: '会话活跃',
     status_report: '状态报告',
@@ -118,7 +118,9 @@ export default {
     col_method: '方法名',
     col_ai: 'AI支持',
     col_service: '所属服务',
-    col_desc: '描述'
+    col_desc: '描述',
+    about_title: '关于本系统',
+    about_default: '基于 Solo 框架的 AI 原生微服务后台。可在 .env 中设置 SYSTEM_DESCRIPTION 来描述这个部署实例。'
   },
   operator: {
     title: '运维专员管理',
@@ -317,7 +319,7 @@ export default {
     key_close: '关闭'
   },
   login: {
-    "title": "系统 :: 访问",
+    "title": "{system} :: 访问",
     "disable_fireworks": "关闭烟花",
     "enable_fireworks": "开启烟花",
     "gateway_config": "系统网关配置",
