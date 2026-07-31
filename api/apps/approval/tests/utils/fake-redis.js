@@ -6,13 +6,18 @@
 function makeFakeRedis() {
     const kv = new Map();
     const sets = new Map();
+    const zsets = new Map();
+    const counters = new Map();
     const getSet = (k) => (sets.has(k) ? sets.get(k) : sets.set(k, new Set()).get(k));
+    const getZset = (k) => (zsets.has(k) ? zsets.get(k) : zsets.set(k, new Map()).get(k));
 
     function applyOp(op) {
         if (op.t === 'set') kv.set(op.k, op.v);
         else if (op.t === 'sAdd') getSet(op.k).add(op.m);
         else if (op.t === 'del') kv.delete(op.k);
         else if (op.t === 'sRem') getSet(op.k).delete(op.m);
+        else if (op.t === 'zAdd') getZset(op.k).set(op.value, op.score);
+        else if (op.t === 'zRem') getZset(op.k).delete(op.m);
     }
 
     return {
@@ -29,7 +34,12 @@ function makeFakeRedis() {
         async sAdd(k, m) { const s = getSet(k); const had = s.has(m); s.add(m); return had ? 0 : 1; },
         async sRem(k, m) { return getSet(k).delete(m) ? 1 : 0; },
         async sMembers(k) { return [...getSet(k)]; },
+        async sCard(k) { return getSet(k).size; },
         async mGet(keys) { return keys.map(k => (kv.has(k) ? kv.get(k) : null)); },
+        async incr(k) { const n = (counters.get(k) || 0) + 1; counters.set(k, n); return n; },
+        async zAdd(k, { score, value }) { getZset(k).set(value, score); return 1; },
+        async zRem(k, m) { return getZset(k).delete(m) ? 1 : 0; },
+        async zCard(k) { return getZset(k).size; },
 
         multi() {
             const ops = [];
@@ -38,6 +48,8 @@ function makeFakeRedis() {
                 sAdd(k, m) { ops.push({ t: 'sAdd', k, m }); return chain; },
                 del(k) { ops.push({ t: 'del', k }); return chain; },
                 sRem(k, m) { ops.push({ t: 'sRem', k, m }); return chain; },
+                zAdd(k, { score, value }) { ops.push({ t: 'zAdd', k, score, value }); return chain; },
+                zRem(k, m) { ops.push({ t: 'zRem', k, m }); return chain; },
                 async exec() { ops.forEach(applyOp); return ops.map(() => 'OK'); },
             };
             return chain;

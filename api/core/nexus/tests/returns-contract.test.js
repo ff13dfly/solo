@@ -37,6 +37,7 @@ function makeFakeRedis() {
     const hashes = new Map();
     const streams = new Map(); // key -> [{ id, message }]
     const groups = [];
+    const counters = new Map();
     let seq = 0;
     const getSet = (k) => (sets.has(k) ? sets.get(k) : sets.set(k, new Set()).get(k));
     const getStream = (k) => (streams.has(k) ? streams.get(k) : streams.set(k, []).get(k));
@@ -45,6 +46,8 @@ function makeFakeRedis() {
         del: (k) => { const had = kv.has(k); kv.delete(k); sets.delete(k); hashes.delete(k); return had ? 1 : 0; },
         sAdd: (k, m) => { const s = getSet(k); const had = s.has(m); s.add(m); return had ? 0 : 1; },
         sRem: (k, m) => { const s = sets.get(k); return s && s.delete(m) ? 1 : 0; },
+        zAdd: () => 1,
+        zRem: () => 1,
     };
     return {
         async get(k) { return kv.has(k) ? kv.get(k) : null; },
@@ -55,10 +58,13 @@ function makeFakeRedis() {
         async sAdd(k, m) { return apply.sAdd(k, m); },
         async sRem(k, m) { return apply.sRem(k, m); },
         async sMembers(k) { return sets.has(k) ? [...sets.get(k)] : []; },
+        async sCard(k) { return sets.has(k) ? sets.get(k).size : 0; },
         async hGetAll(k) { return hashes.has(k) ? { ...hashes.get(k) } : {}; },
         async xGroupCreate(stream) { groups.push(stream); return 'OK'; },
+        async incr(k) { const n = (counters.get(k) || 0) + 1; counters.set(k, n); return n; },
         async zAdd() { return 1; },
         async zRem() { return 1; },
+        async zCard() { return 0; }, // no cursor-mode list() calls in this suite
         async keys(pattern) {
             // only the `${prefix}*` form is used (schedule.list)
             const star = pattern.indexOf('*');

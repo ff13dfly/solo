@@ -11,6 +11,33 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.1.x`）。
 
+---
+
+## [v1.1.13] — 2026-07-31
+
+> entity.js 游标分页（大集合有界翻页，opt-in）+ portal 品牌可配置 + permit 编辑器黑屏修复 + 错误日志读序修复 + gateway 出站缺口两轮补齐。全部"只加不破"，CI 白名单 122 套 / 1923 测试全绿。
+
+### Added — entity.js 游标分页（大集合的有界翻页）
+
+- Entity Factory 的默认 `list({limit,offset})` 是 `sMembers` 全量拉取 + `mGet` 全量 + 全量排序后才切片——耗时/内存跟总数据量成正比，跟页大小无关（autocheck 的「内存击穿预警」规则只扫服务自己的 `logic/`，扫不到 `api/library/`，这个反模式一直没被抓出来）。新增 `list({cursor})` 作为**加法式、opt-in** 的替代路径：`create()` 起维护一个按插入序打分（非 `createdAt`——避免同毫秒创建撞分导致翻页边界抖动）的 ZSET，`list({cursor})` 用有界的 `ZRANGE ... BYSCORE REV LIMIT` 只读需要的那一页，不碰无关数据。`cursor: null` 取第一页，之后传上一页返回的 `nextCursor`；**不传 `cursor` 的现有全部调用方零变化**，仍走原来的 offset 路径（未改动一行）。
+- **cursor 模式没有 `total`**：keyset 分页天生不知道"共多少页"，硬凑等于又做一次全量计数，违背这个特性存在的意义。UI 要保留"第 X 页共 Y 页"数字分页就用 offset；接受"加载更多"式体验再切 cursor。
+- **存量数据需要迁移**：cursor 模式要求排序 ZSET 与旧 SET 索引条目数一致，不一致直接 `INVALID_PARAMS`（不做静默降级到慢路径——那样"cursor 到底有没有真的变快"会完全不可见）。新增一次性、幂等的迁移入口：每个 entity 实例的 `migrateCursorIndex()` 方法，以及可直接跑的 CLI `deploy/migrate-cursor-index.js <serviceName> <entityName> [json]`。全新服务/全新实体不需要迁移（`create()` 已自动双写两个索引）。
+- 回归：`entity-cursor-pagination.test.js`（9 用例，真实 Redis）+ 全 CI 白名单 122 套/1923 测试绿（新增两个 Redis 命令依赖后，approval/collection/gateway 等服务的 hermetic fake redis 补了 `incr`/`zAdd`/`zRem`）。
+
+> 下游 action：**无强制**（不传 `cursor` 行为完全不变，`migrateCursorIndex()` 不跑也不影响现有 offset 调用）。想在数据量大的实体上用 cursor 分页：① 跑一次 `node deploy/migrate-cursor-index.js <service> <entity>`（RedisJSON 实体加第三个参数 `json`）补历史索引；② 调用侧把 `{limit,offset}` 换成 `{cursor}` 循环取 `nextCursor` 直到为 `null`；③ 若 UI 依赖"第 X 页共 Y 页"，cursor 模式没有这个数字，需要改造成"加载更多"。
+
+### Added — portal 品牌名 / 系统说明可从 `.env` 配置
+
+- system、operator 两个门户的侧边栏标题、登录页标题、登录页"GATEWAY CONFIGURATION"标签不再硬编码 `SYSTEM`/`SOLO`，改读部署时注入的 `window.__SOLO_SYSTEM_NAME__`（源头是 `.env` 的 `SYSTEM_DISPLAY_NAME`，走跟 `__SOLO_ROUTER__` 一样的 `config.js` 运行时注入通道，未配置时显示原文案，行为不变）。多实例同时打开时终于能一眼分清是哪个部署。
+- system 门户 Overview 页统计卡片上方新增说明卡片，展示 `SYSTEM_DESCRIPTION`（同一套注入通道），未配置时显示通用兜底文案。
+- 下游 action：无（默认值即现行为）。想要自定义，在项目 `.env` 加 `SYSTEM_DISPLAY_NAME` / `SYSTEM_DESCRIPTION` 两行，`run.sh` 部署时自动带上。
+
+### Fixed — permit 编辑器黑屏 + 错误日志读序
+
+- **portal/system `PermitEditorModal` 崩溃**：某用户的 permit 缺 `services` 字段（如 `{allow_all:true}`，绕开 `user.permit.update` 校验的手工/历史数据）时，关闭"Administrator Access"开关会渲染出对 `permit.services` 未加保护的取值，抛 `TypeError`；应用没有任何 React Error Boundary，未捕获异常直接卸载整棵组件树 → 黑屏。已在状态初始化处统一规范化 `services` 字段，堵死所有下游用法。用 headless chromium 复现过"改前必崩、改后不崩"两种状态。
+- **`administrator` 的 `admin.log.error` 读序**：`ERROR:QUEUE:*` 只涨不消（`rPush` 无 `LTRIM`/TTL），而默认 `lRange(0, limit-1)` 拿到的是最旧的记录，不是最新的——队列越涨（哪怕只是网络抖动噪音），越新的真实错误越难被默认视图看到。改为从队尾按位置取「最新 N 条」再反转，`listAll` 的跨服务聚合视图也按 `stamp` 重新排序。
+- 下游 action：无（两处都是纯行为修复，接口/参数不变）。
+
 ### Fixed — gateway 出站通道（详情台账 [`gateway-gaps.md`](./gateway-gaps.md)）
 
 > 2026-07-30 gateway 全量读码审计（19 条缺口）后的首轮补齐：**11 条已修 + 2 条部分**，全部"只加不破"。hermetic CI 白名单 **119 套 / 1882 测试全绿**（gateway 从 2 套 → 5 套）。全程未碰 `api/router/`。

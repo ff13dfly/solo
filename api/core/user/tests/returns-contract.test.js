@@ -35,14 +35,18 @@ function makeFakeRedis() {
     const kv = new Map();
     const sets = new Map();
     const hashes = new Map();
+    const zsets = new Map();
     const sOf = (k) => { if (!sets.has(k)) sets.set(k, new Set()); return sets.get(k); };
     const hOf = (k) => { if (!hashes.has(k)) hashes.set(k, new Map()); return hashes.get(k); };
+    const zOf = (k) => { if (!zsets.has(k)) zsets.set(k, new Map()); return zsets.get(k); };
     const apply = {
         set: (k, v, opts) => { if (opts && opts.NX && kv.has(k)) return null; kv.set(k, v); return 'OK'; },
         setEx: (k, _ttl, v) => { kv.set(k, v); return 'OK'; },
         del: (k) => { const had = kv.delete(k) || sets.delete(k) || hashes.delete(k); return had ? 1 : 0; },
         sAdd: (k, m) => { const s = sOf(k); const had = s.has(m); s.add(m); return had ? 0 : 1; },
         sRem: (k, m) => { const s = sets.get(k); return s && s.delete(m) ? 1 : 0; },
+        zAdd: (k, { score, value }) => { zOf(k).set(value, score); return 1; },
+        zRem: (k, m) => { const z = zsets.get(k); return z && z.delete(m) ? 1 : 0; },
         expire: () => 1,
         hSet: (k, f, v) => { hOf(k).set(f, v); return 1; },
     };
@@ -61,6 +65,9 @@ function makeFakeRedis() {
         async sRem(k, m) { return apply.sRem(k, m); },
         async sMembers(k) { return sets.has(k) ? [...sets.get(k)] : []; },
         async sCard(k) { return sets.has(k) ? sets.get(k).size : 0; },
+        async zAdd(k, entry) { return apply.zAdd(k, entry); },
+        async zRem(k, m) { return apply.zRem(k, m); },
+        async zCard(k) { return zsets.has(k) ? zsets.get(k).size : 0; },
         async expire(k, ttl) { return apply.expire(k, ttl); },
         async incr(k) { const n = Number(kv.get(k) || 0) + 1; kv.set(k, String(n)); return n; },
         async hSet(k, f, v) { return apply.hSet(k, f, v); },
@@ -73,6 +80,8 @@ function makeFakeRedis() {
                 setEx(k, ttl, v) { ops.push(['setEx', k, ttl, v]); return chain; },
                 sAdd(k, m) { ops.push(['sAdd', k, m]); return chain; },
                 sRem(k, m) { ops.push(['sRem', k, m]); return chain; },
+                zAdd(k, entry) { ops.push(['zAdd', k, entry]); return chain; },
+                zRem(k, m) { ops.push(['zRem', k, m]); return chain; },
                 del(k) { ops.push(['del', k]); return chain; },
                 expire(k, ttl) { ops.push(['expire', k, ttl]); return chain; },
                 hSet(k, f, v) { ops.push(['hSet', k, f, v]); return chain; },

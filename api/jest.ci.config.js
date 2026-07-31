@@ -65,6 +65,7 @@ module.exports = {
         '<rootDir>/library/tests/jsonrpc.test.js',
         '<rootDir>/library/tests/jsonlogic.test.js',
         '<rootDir>/library/tests/entity-list-order.test.js',
+        '<rootDir>/library/tests/entity-cursor-pagination.test.js',
         '<rootDir>/library/tests/ports.test.js',
         '<rootDir>/library/tests/constants.test.js',
         '<rootDir>/library/tests/filestore.test.js',

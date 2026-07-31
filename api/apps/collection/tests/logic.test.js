@@ -5,15 +5,20 @@ const createLogic = require('../logic');
 const config = require('../config');
 
 function createMockRedis() {
-    const store = {}, sets = {};
+    const store = {}, sets = {}, zsets = {}, counters = {};
     return {
         async set(key, val, opts) { if (opts && opts.NX && store[key] !== undefined) return null; store[key] = val; return 'OK'; },
         async get(key)       { return store[key] || null; },
         async sAdd(key, val) { if (!sets[key]) sets[key] = new Set(); sets[key].add(val); },
         async sMembers(key)  { return sets[key] ? [...sets[key]] : []; },
+        async sCard(key)     { return sets[key] ? sets[key].size : 0; },
         async mGet(keys)     { return keys.map(k => store[k] || null); },
         async del(key)       { delete store[key]; },
         async sRem(key, val) { if (sets[key]) sets[key].delete(val); },
+        async incr(key)      { counters[key] = (counters[key] || 0) + 1; return counters[key]; },
+        async zAdd(key, { score, value }) { if (!zsets[key]) zsets[key] = new Map(); zsets[key].set(value, score); return 1; },
+        async zRem(key, val) { if (zsets[key]) zsets[key].delete(val); },
+        async zCard(key)     { return zsets[key] ? zsets[key].size : 0; },
         async watch()        { return 'OK'; },
         async unwatch()      { return 'OK'; },
         multi() {
@@ -22,6 +27,8 @@ function createMockRedis() {
                 set(k, v)  { ops.push(() => { store[k] = v; }); return p; },
                 sAdd(k, v) { ops.push(() => { if (!sets[k]) sets[k] = new Set(); sets[k].add(v); }); return p; },
                 sRem(k, v) { ops.push(() => { if (sets[k]) sets[k].delete(v); }); return p; },
+                zAdd(k, { score, value }) { ops.push(() => { if (!zsets[k]) zsets[k] = new Map(); zsets[k].set(value, score); }); return p; },
+                zRem(k, v) { ops.push(() => { if (zsets[k]) zsets[k].delete(v); }); return p; },
                 del(k)     { ops.push(() => { delete store[k]; }); return p; },
                 async exec() { ops.forEach(o => o()); return []; }
             };

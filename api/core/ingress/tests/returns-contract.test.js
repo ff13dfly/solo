@@ -25,13 +25,18 @@ function makeFakeRedis() {
     const kv = new Map();
     const sets = new Map();
     const lists = new Map();
+    const zsets = new Map();
+    const counters = new Map();
     const getSet = (k) => (sets.has(k) ? sets.get(k) : sets.set(k, new Set()).get(k));
     const getList = (k) => (lists.has(k) ? lists.get(k) : lists.set(k, []).get(k));
+    const getZset = (k) => (zsets.has(k) ? zsets.get(k) : zsets.set(k, new Map()).get(k));
     const apply = {
         set: (k, v, opts) => { if (opts && opts.NX && kv.has(k)) return null; kv.set(k, v); return 'OK'; },
         sAdd: (k, m) => { const s = getSet(k); const had = s.has(m); s.add(m); return had ? 0 : 1; },
         del: (k) => { const had = kv.delete(k); sets.delete(k); return had ? 1 : 0; },
         sRem: (k, m) => { const s = sets.get(k); return s && s.delete(m) ? 1 : 0; },
+        zAdd: (k, { score, value }) => { getZset(k).set(value, score); return 1; },
+        zRem: (k, m) => { const z = zsets.get(k); return z && z.delete(m) ? 1 : 0; },
     };
     return {
         async get(k) { return kv.has(k) ? kv.get(k) : null; },
@@ -42,6 +47,11 @@ function makeFakeRedis() {
         async sMembers(k) { return sets.has(k) ? [...sets.get(k)] : []; },
         async sRem(k, m) { return apply.sRem(k, m); },
         async sIsMember(k, m) { return sets.has(k) && sets.get(k).has(m) ? 1 : 0; },
+        async sCard(k) { return sets.has(k) ? sets.get(k).size : 0; },
+        async incr(k) { const n = (counters.get(k) || 0) + 1; counters.set(k, n); return n; },
+        async zAdd(k, entry) { return apply.zAdd(k, entry); },
+        async zRem(k, m) { return apply.zRem(k, m); },
+        async zCard(k) { return zsets.has(k) ? zsets.get(k).size : 0; },
         // Review queue (logic/review.js) — plain in-memory array list, mirrors redis semantics closely enough.
         async rPush(k, v) { const l = getList(k); l.push(v); return l.length; },
         async lLen(k) { return lists.has(k) ? lists.get(k).length : 0; },
@@ -71,6 +81,8 @@ function makeFakeRedis() {
                 sAdd(k, m) { ops.push(['sAdd', k, m]); return chain; },
                 del(k) { ops.push(['del', k]); return chain; },
                 sRem(k, m) { ops.push(['sRem', k, m]); return chain; },
+                zAdd(k, entry) { ops.push(['zAdd', k, entry]); return chain; },
+                zRem(k, m) { ops.push(['zRem', k, m]); return chain; },
                 async exec() { return ops.map(([op, ...args]) => apply[op](...args)); },
             };
             return chain;

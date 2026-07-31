@@ -65,8 +65,14 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
 
     // Key pattern: SERVICE:ENTITY:ID
     const getDataKey = (id) => `${SERVICE_UPPER}:${ENTITY_UPPER}:${id}`;
-    // Index pattern: SERVICE:ENTITY:INDEX (Redis Set)
+    // Index pattern: SERVICE:ENTITY:INDEX (Redis Set) — unordered, sMembers-only.
     const getIndexKey = () => `${SERVICE_UPPER}:${ENTITY_UPPER}:INDEX`;
+    // Cursor index: SERVICE:ENTITY:INDEX:CURSOR (Redis ZSET, score = insertion sequence,
+    // NOT createdAt — see create()). Lets list({cursor}) do a bounded ZRANGE instead of
+    // sMembers-the-whole-set-then-slice. Maintained alongside getIndexKey() from create()
+    // (zAdd) and hard-delete (zRem); pre-existing entities need migrateCursorIndex() once.
+    const getCursorIndexKey = () => `${SERVICE_UPPER}:${ENTITY_UPPER}:INDEX:CURSOR`;
+    const getCursorSeqKey = () => `${SERVICE_UPPER}:${ENTITY_UPPER}:INDEX:CURSOR:SEQ`;
 
     // JSON-storage write helper. Only ever invoked on the useJson path (the non-atomic-WAL
     // fallback in update); string entities persist via optimisticUpdate, so this is JSON-only.
@@ -223,6 +229,14 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
                 updatedAt: now
             };
 
+            // Cursor index score = insertion sequence (INCR), not createdAt. createdAt can be
+            // client-supplied (backdated imports) and two creates can land in the same ms —
+            // either would make a createdAt-keyed ZSET score collide or tie ambiguously at the
+            // page boundary. INCR is atomic and strictly increasing, so ties are structurally
+            // impossible; the one-time extra round trip only happens on create(), never on list().
+            const cursorIndexKey = getCursorIndexKey();
+            const seq = await redis.incr(getCursorSeqKey());
+
             if (canAtomicWal) {
                 // 数据 + 索引 + 账本同一个 MULTI:三者同生共死。
                 // (node-redis v5 起 json.* 命令同样可入事务 — 旧注释"json 不支持 MULTI"已过时)
@@ -230,16 +244,19 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
                 if (useJson) multi.json.set(key, '$', data);
                 else multi.set(key, JSON.stringify(data));
                 multi.sAdd(indexKey, id);
+                multi.zAdd(cursorIndexKey, { score: seq, value: id });
                 walMulti(multi, 'create', key, null, data);
                 await multi.exec();
             } else if (useJson) {
                 await redis.json.set(key, '$', data);
                 await redis.sAdd(indexKey, id);
+                await redis.zAdd(cursorIndexKey, { score: seq, value: id });
                 walFile('create', key, null, data);
             } else {
                 const multi = redis.multi();
                 multi.set(key, JSON.stringify(data));
                 multi.sAdd(indexKey, id);
+                multi.zAdd(cursorIndexKey, { score: seq, value: id });
                 await multi.exec();
                 walFile('create', key, null, data);
             }
@@ -329,21 +346,28 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             const existing = await readData(key);
             if (!existing) throw jsonrpc.NOT_FOUND(entityName);
 
+            // Soft-delete never sRem's the SET index either (see the early return above), so
+            // the cursor ZSET mirrors that: only a real hard delete removes the id from both.
+            const cursorIndexKey = getCursorIndexKey();
+
             if (canAtomicWal) {
                 // DEL 是核心命令,json/string 实体都走同一个 MULTI(删除 + 去索引 + 账本)
                 const multi = redis.multi();
                 multi.del(key);
                 multi.sRem(indexKey, id);
+                multi.zRem(cursorIndexKey, id);
                 walMulti(multi, 'delete', key, existing, null);
                 await multi.exec();
             } else {
                 if (useJson) {
                     await redis.del(key);
                     await redis.sRem(indexKey, id);
+                    await redis.zRem(cursorIndexKey, id);
                 } else {
                     const multi = redis.multi();
                     multi.del(key);
                     multi.sRem(indexKey, id);
+                    multi.zRem(cursorIndexKey, id);
                     await multi.exec();
                 }
                 walFile('delete', key, existing, null);
@@ -386,8 +410,14 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
          * @param {Function} [filter]    - Per-item predicate applied inside each batch.
          *                                 Only matched items are kept; the raw batch is released.
          * @param {string}   [keyword]   - Optional keyword to search against configured searchFields.
+         * @param {string|null} [cursor] - Opt into bounded cursor pagination instead of the
+         *                                 default offset path (see _listByCursor). Pass `null`
+         *                                 for the first page, then `response.nextCursor` for
+         *                                 each subsequent call. Omit entirely (don't pass the
+         *                                 key at all) to keep today's offset/total behavior —
+         *                                 that path is untouched by cursor mode.
          */
-        async list({ status = STATUS_ACTIVE, limit = 50, offset = 0, includeDeleted = false, batchSize, filter, keyword } = {}) {
+        async list({ status = STATUS_ACTIVE, limit = 50, offset = 0, includeDeleted = false, batchSize, filter, keyword, cursor } = {}) {
             let finalFilter = filter;
 
             // Auto-construct keyword filter if searchFields are configured
@@ -405,6 +435,12 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
                 } else {
                     finalFilter = keywordFilter;
                 }
+            }
+
+            // cursor === undefined (key not sent at all) → every existing caller, unchanged.
+            // cursor === null / a string → explicit opt-in to the bounded ZRANGE path below.
+            if (cursor !== undefined) {
+                return this._listByCursor({ cursor, limit, status, includeDeleted, filter: finalFilter });
             }
 
             const indexKey = getIndexKey();
@@ -469,6 +505,110 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
                 items: paged,
                 total: filtered.length
             };
+        },
+
+        /**
+         * Bounded cursor pagination — the fast path behind list({cursor}).
+         *
+         * @why The offset path above (and multiGet) must materialize the ENTIRE index
+         *      (sMembers + mGet-everything + sort-everything) before it can slice out one
+         *      page, because a plain Redis SET has no order. This path instead reads a
+         *      ZRANGE window off the cursor ZSET (score = insertion sequence, see create()),
+         *      so cost is proportional to `limit`, not to collection size.
+         * @attention
+         *   1. Requires migrateCursorIndex() to have run at least once for entities that
+         *      existed before this ZSET was introduced — by design this throws rather than
+         *      silently degrading to the slow path (see PR discussion): a silent fallback
+         *      would make "is cursor mode actually fast right now" undiscoverable.
+         *   2. `status`/`filter`/`keyword` are applied AFTER the bounded fetch, per page —
+         *      a page can come back with fewer than `limit` items if most of the window
+         *      doesn't match. No items are skipped across calls (nextCursor always advances
+         *      past every id considered, matched or not), so repeated calls eventually walk
+         *      the whole collection — it just isn't a firm "exactly limit per page" guarantee.
+         *   3. No `total` — keyset/cursor pagination doesn't know "how many pages" without
+         *      a maintained counter (a write-path cost every list() call must not incur just
+         *      because SOME callers want cursor mode). Callers wanting cursor mode accept
+         *      "load more" UX, not "page X of Y".
+         */
+        async _listByCursor({ cursor, limit = 50, status = STATUS_ACTIVE, includeDeleted = false, filter }) {
+            const indexKey = getIndexKey();
+            const cursorIndexKey = getCursorIndexKey();
+
+            const [setCard, zCard] = await Promise.all([redis.sCard(indexKey), redis.zCard(cursorIndexKey)]);
+            if (zCard < setCard) {
+                throw jsonrpc.INVALID_PARAMS(
+                    `Cursor pagination not available for ${entityName}: sorted index not migrated yet ` +
+                    `(has ${zCard} of ${setCard} ids indexed). Run migrateCursorIndex() once for this entity, then retry.`
+                );
+            }
+
+            let afterSeq = null;
+            if (cursor !== null) {
+                afterSeq = parseInt(cursor, 10);
+                if (!Number.isFinite(afterSeq)) throw jsonrpc.INVALID_PARAMS(`Invalid cursor: ${cursor}`);
+            }
+
+            // ZRANGE ... BYSCORE REV takes the bounds as (max, min) — NOT (min, max) — when
+            // REV is set. Passing them the "intuitive" way silently returns nothing or the
+            // wrong order; verified against a live Redis before relying on this (see PR notes).
+            const upperBound = afterSeq === null ? '+inf' : `(${afterSeq}`;
+            const candidateIds = await redis.zRange(cursorIndexKey, upperBound, '-inf', {
+                BY: 'SCORE', REV: true, LIMIT: { offset: 0, count: limit }
+            });
+
+            if (candidateIds.length === 0) return { items: [], nextCursor: null };
+
+            const keys = candidateIds.map(id => getDataKey(id));
+            const results = await readManyData(keys);
+            const items = results.filter(item => {
+                if (!item) return false;
+                if (!includeDeleted && status && item.status !== status) return false;
+                if (filter && !filter(item)) return false;
+                return true;
+            });
+
+            // Cursor always advances past every candidate considered (not just matched ones),
+            // so a filtered-out run never causes a stall or a re-fetch loop on the same window.
+            const lastConsidered = candidateIds[candidateIds.length - 1];
+            const lastSeq = await redis.zScore(cursorIndexKey, lastConsidered);
+            const nextCursor = candidateIds.length < limit ? null : String(lastSeq);
+
+            return { items, nextCursor };
+        },
+
+        /**
+         * One-time backfill: build the cursor ZSET for entities that existed before it was
+         * introduced. Idempotent (zAdd overwrites, SEQ is reset to the same count) — safe to
+         * re-run. New entities never need this; create() maintains the ZSET going forward.
+         * Not exposed as an RPC method by convention — call it from a maintenance script.
+         */
+        async migrateCursorIndex({ chunkSize = 2000 } = {}) {
+            const indexKey = getIndexKey();
+            const cursorIndexKey = getCursorIndexKey();
+            const ids = await redis.sMembers(indexKey);
+
+            if (ids.length === 0) {
+                await redis.set(getCursorSeqKey(), '0');
+                return { migrated: 0 };
+            }
+
+            const keys = ids.map(id => getDataKey(id));
+            const items = await readManyData(keys);
+            // Oldest-first assignment (rank 1..N) — same comparator as the offset path's
+            // "newest-first" sort, just ascending, so rank order matches createdAt order.
+            const ranked = ids
+                .map((id, i) => ({ id, createdAt: items[i] ? items[i].createdAt : 0 }))
+                .sort((a, b) => toSortableMs(a.createdAt) - toSortableMs(b.createdAt));
+
+            for (let i = 0; i < ranked.length; i += chunkSize) {
+                const chunk = ranked.slice(i, i + chunkSize);
+                const multi = redis.multi();
+                chunk.forEach((r, j) => multi.zAdd(cursorIndexKey, { score: i + j + 1, value: r.id }));
+                await multi.exec();
+            }
+            await redis.set(getCursorSeqKey(), String(ranked.length));
+
+            return { migrated: ranked.length };
         },
 
         /**

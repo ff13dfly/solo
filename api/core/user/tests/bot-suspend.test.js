@@ -15,13 +15,18 @@ const config = require('../config');
 function makeFakeRedis() {
     const kv = new Map();
     const sets = new Map();
+    const zsets = new Map();
+    const counters = new Map();
     const getSet = (k) => (sets.has(k) ? sets.get(k) : sets.set(k, new Set()).get(k));
+    const getZset = (k) => (zsets.has(k) ? zsets.get(k) : zsets.set(k, new Map()).get(k));
     const apply = {
         set: (k, v) => { kv.set(k, v); return 'OK'; },
         setEx: (k, _s, v) => { kv.set(k, v); return 'OK'; },
         del: (k) => { const had = kv.delete(k); sets.delete(k); return had ? 1 : 0; },
         sAdd: (k, m) => { const s = getSet(k); const had = s.has(m); s.add(m); return had ? 0 : 1; },
         sRem: (k, m) => { const s = sets.get(k); return s && s.delete(m) ? 1 : 0; },
+        zAdd: (k, { score, value }) => { getZset(k).set(value, score); return 1; },
+        zRem: (k, m) => { const z = zsets.get(k); return z && z.delete(m) ? 1 : 0; },
         expire: () => 1,
     };
     return {
@@ -33,6 +38,9 @@ function makeFakeRedis() {
         async sAdd(k, m) { return apply.sAdd(k, m); },
         async sMembers(k) { return sets.has(k) ? [...sets.get(k)] : []; },
         async sRem(k, m) { return apply.sRem(k, m); },
+        async incr(k) { const n = (counters.get(k) || 0) + 1; counters.set(k, n); return n; },
+        async zAdd(k, entry) { return apply.zAdd(k, entry); },
+        async zRem(k, m) { return apply.zRem(k, m); },
         async expire(k, s) { return apply.expire(k, s); },
         multi() {
             const ops = [];
@@ -40,6 +48,7 @@ function makeFakeRedis() {
                 set(k, v) { ops.push(['set', k, v]); return chain; },
                 setEx(k, s, v) { ops.push(['setEx', k, s, v]); return chain; },
                 sAdd(k, m) { ops.push(['sAdd', k, m]); return chain; },
+                zAdd(k, entry) { ops.push(['zAdd', k, entry]); return chain; },
                 expire(k, s) { ops.push(['expire', k, s]); return chain; },
                 del(k) { ops.push(['del', k]); return chain; },
                 async exec() { return ops.map(([op, ...args]) => apply[op](...args)); },

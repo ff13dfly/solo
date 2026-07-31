@@ -205,11 +205,15 @@ describe('entity WAL — degraded client keeps legacy file WAL', () => {
     function mockRedis() {
         const store = new Map();
         const sets = new Map();
+        const zsets = new Map();
+        const counters = new Map();
         const sOf = (k) => { if (!sets.has(k)) sets.set(k, new Set()); return sets.get(k); };
+        const zOf = (k) => { if (!zsets.has(k)) zsets.set(k, new Map()); return zsets.get(k); };
         return {
-            store, sets,
+            store, sets, zsets,
             async get(k) { return store.has(k) ? store.get(k) : null; },
             async set(k, v) { store.set(k, v); return 'OK'; },
+            async incr(k) { const n = (counters.get(k) || 0) + 1; counters.set(k, n); return n; },
             multi() {
                 const ops = [];
                 const m = {
@@ -217,6 +221,8 @@ describe('entity WAL — degraded client keeps legacy file WAL', () => {
                     sAdd: (k, v) => { ops.push(() => sOf(k).add(v)); return m; },
                     del: (k) => { ops.push(() => store.delete(k)); return m; },
                     sRem: (k, v) => { ops.push(() => sOf(k).delete(v)); return m; },
+                    zAdd: (k, { score, value }) => { ops.push(() => zOf(k).set(value, score)); return m; },
+                    zRem: (k, v) => { ops.push(() => zOf(k).delete(v)); return m; },
                     exec: async () => { ops.forEach((f) => f()); return []; },
                 };
                 return m;
