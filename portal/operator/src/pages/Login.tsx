@@ -102,7 +102,7 @@ export default function Login() {
 
       {/* Gateway Configuration - Always visible at top */}
       <div className="form-group">
-        <label className="form-label">{t('login.gateway_config')}</label>
+        <label className="form-label">{t('login.gateway_config', { system: SYSTEM_NAME })}</label>
         <select
           value={selectedRouterIndex}
           onChange={(e) => handleRouterChange(Number(e.target.value))}

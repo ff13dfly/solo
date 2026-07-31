@@ -157,7 +157,7 @@ const zh = {
   login: {
     title: '{system} :: 运维',
     secure: '安全连接',
-    gateway_config: '系统网关配置',
+    gateway_config: '{system} 网关配置',
     router_prod: '生产环境 (Production)',
     router_local_ssl: '本地开发 (SSL)',
     router_local_http: '本地开发 (HTTP)',

@@ -157,7 +157,7 @@ const en = {
   login: {
     title: '{system} :: OPERATOR',
     secure: 'SECURE',
-    gateway_config: 'SYSTEM GATEWAY CONFIGURATION',
+    gateway_config: '{system} GATEWAY CONFIGURATION',
     router_prod: 'Production',
     router_local_ssl: 'Local (SSL)',
     router_local_http: 'Local (HTTP)',

@@ -322,7 +322,7 @@ export default {
     "title": "{system} :: 访问",
     "disable_fireworks": "关闭烟花",
     "enable_fireworks": "开启烟花",
-    "gateway_config": "系统网关配置",
+    "gateway_config": "{system} 网关配置",
     "identity": "身份（用户名）",
     "credential": "凭证（密码）",
     "hide": "隐藏",

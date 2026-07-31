@@ -322,7 +322,7 @@ export default {
     "title": "{system} :: ACCESS",
     "disable_fireworks": "Disable Fireworks",
     "enable_fireworks": "Enable Fireworks",
-    "gateway_config": "SYSTEM GATEWAY CONFIGURATION",
+    "gateway_config": "{system} GATEWAY CONFIGURATION",
     "identity": "Identity (Username)",
     "credential": "Credential (Password)",
     "hide": "HIDE",

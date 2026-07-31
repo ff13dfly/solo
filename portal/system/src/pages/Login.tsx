@@ -138,7 +138,7 @@ export default function Login() {
         {/* Gateway Configuration */}
         <div className="mb-5 pb-4 border-b border-border">
           <label className="block text-xs mb-2 opacity-80 uppercase">
-            {t('login.gateway_config')}
+            {t('login.gateway_config', { system: SYSTEM_NAME })}
           </label>
           <select
             value={selectedRouterIndex}
