@@ -34,34 +34,7 @@ jest.mock('worker_threads', () => {
 const createAssetLogic = require('../logic/asset');
 const introspection = require('../handlers/introspection');
 const { checkReturn } = require('../../../library/contract');
-
-// fake redis — the string + sorted-set commands logic/asset.js exercises (asset-authz pattern).
-function makeFakeRedis() {
-    const kv = new Map();
-    const zsets = new Map();
-    return {
-        async get(key) { return kv.has(key) ? kv.get(key) : null; },
-        async set(key, val, opts = {}) {
-            if (opts.NX && kv.has(key)) return null;
-            kv.set(key, val);
-            return 'OK';
-        },
-        async del(key) { return kv.delete(key) ? 1 : 0; },
-        async zAdd(key, { score, value }) {
-            let m = zsets.get(key); if (!m) { m = new Map(); zsets.set(key, m); }
-            m.set(value, score); return 1;
-        },
-        async zRem(key, value) { const m = zsets.get(key); return m && m.delete(value) ? 1 : 0; },
-        async zCard(key) { return (zsets.get(key) || new Map()).size; },
-        async zRange(key, start, stop, opts = {}) {
-            const m = zsets.get(key) || new Map();
-            let entries = [...m.entries()].sort((a, b) => a[1] - b[1]).map(([v]) => v);
-            if (opts.REV) entries = entries.reverse();
-            const end = stop === -1 ? entries.length - 1 : stop;
-            return entries.slice(start, end + 1);
-        },
-    };
-}
+const { makeFakeRedis } = require('./utils/fake-redis');
 
 function makeFakeStore() {
     const objects = new Map();
@@ -83,6 +56,11 @@ const testConfig = {
         assetPrefix: 'STORAGE:ASSET:',
         sha256Prefix: 'STORAGE:SHA256:',
         assetIdSortedSet: 'STORAGE:ASSETS:SORTED',
+        assetByOwnerPrefix: 'STORAGE:ASSETS:BY_OWNER:',
+        assetPublicSortedSet: 'STORAGE:ASSETS:PUBLIC',
+        assetInternalSortedSet: 'STORAGE:ASSETS:INTERNAL',
+        assetVisibilityIndexReadyKey: 'STORAGE:ASSETS:VISIBILITY_INDEX_READY',
+        sha256RefcountPrefix: 'STORAGE:SHA256:REFCOUNT:',
     },
     storage: { thumbnails: { mode: 'off' }, defaultVisibility: 'internal' },
     thumbnails: { sizes: {} },

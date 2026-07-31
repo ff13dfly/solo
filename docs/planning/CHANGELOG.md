@@ -11,6 +11,18 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.1.x`）。
 
+### Fixed — storage.asset.list()/delete() 的同类"全量拉取"问题
+
+> entity.js 游标分页（v1.1.13）落地后顺着"lib 部分还有没有类似问题"查了一遍：`api/library/` 其余几处全量拉取（category/config 的分类与配置项）数据集本身设计上就有界，不算问题；`api/library/process.js` 的 `redis.keys()` 更差但零消费者、是颗没踩上的雷；真正活跃的同类问题在 `api/apps/storage/logic/asset.js`，而且比 entity.js 那个更容易踩上——非 admin 调用方（即普通用户列自己的文件）或任何带 keyword 的调用，都会 `zRange(key,0,-1)` 全量拉取 + 逐条 `Promise.all` 单独 `get`，`delete()` 的 sha256 引用计数检查也是顺序扫全量。
+
+- **`list()` 非 admin/无 keyword 路径**：新增按 owner 与可见性（public/internal）维护的 ZSET 索引（`upload()` 起自动双写），查询时用 `ZUNIONSTORE` 把"自己的 + 对这个调用方可见的"合并到一个临时 key（精确基数当场就是 `total`，无需二次计数），再有界 `ZRANGE ... LIMIT` 取那一页——耗时/内存从跟"仓库总文件数"成正比，变成跟"这个人能看到的量 + 页大小"成正比。**未跑迁移脚本时自动降级回原来的全量扫描**（不是 entity.js 那种直接拒绝——storage 这条是所有非 admin 调用方已经在用的默认路径，硬拒会让升级当场炸；降级只是没提速，结果永远正确）。
+- **`list()` 带 keyword 时**：字段值上没有二级索引这一根本限制没变（跟 `library/search.js` 文档写明的"仅适合小数据集"是同一个取舍，这次不解决，本期只按体量分块流式扫描——一次 `MGET` 200 条而不是逐条 `Promise.all`，峰值内存和往返次数不再跟总量成正比，但最坏情况（关键字命中率低）总工作量还是 O(仓库总量)，真正解决要接 RediSearch（`api/library/indexer.js` 已经有，只在 `api/sample/` 里演示过，未接入任何真实服务）。
+- **`delete()` 的 sha256 引用计数**：改成 `upload()` 时维护的计数器（`INCR`/`DECR`），O(1) 判断能不能真删字节，不再对每次删除都顺序扫全量找有没有别的记录引用同一份内容。同理，某个 sha256 还没建过计数器（迁移前的存量内容）时**安全降级**回原来的全量扫描，绝不会因为计数器缺失就误删仍被引用的字节。
+- 新增迁移脚本 `deploy/migrate-storage-index.js`（一次性、幂等，回填 owner/可见性索引 + sha256 引用计数）；已用真实 Redis 冒烟验证（跨 owner 共享内容的引用计数、缺 visibility 字段的存量行正确归类）。
+- 回归：`asset-authz.test.js` 新增 5 个用例（迁移后快路径与降级路径结果一致、跨 owner 引用计数删除、缺计数器的降级删除）；storage 两个 hermetic 测试文件共用的 fake redis 抽到 `tests/utils/fake-redis.js`（此前两处重复维护）。CI 白名单 122 套 / 1928 测试全绿；`autocheck --static` 对 storage 单独跑过，无新增警告。
+
+> 下游 action：**建议但不强制**——不跑迁移脚本，`list()`/`delete()` 行为跟今天完全一样（只是还没提速）；数据量已经大或预计会大的部署，跑一次 `node deploy/migrate-storage-index.js` 即可切到快路径，可反复跑。
+
 ---
 
 ## [v1.1.13] — 2026-07-31

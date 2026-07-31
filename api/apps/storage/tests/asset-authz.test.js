@@ -31,33 +31,7 @@ jest.mock('worker_threads', () => {
 });
 
 const createAssetLogic = require('../logic/asset');
-
-function makeFakeRedis() {
-    const kv = new Map();
-    const zsets = new Map();
-    return {
-        async get(key) { return kv.has(key) ? kv.get(key) : null; },
-        async set(key, val, opts = {}) {
-            if (opts.NX && kv.has(key)) return null;
-            kv.set(key, val);
-            return 'OK';
-        },
-        async del(key) { return kv.delete(key) ? 1 : 0; },
-        async zAdd(key, { score, value }) {
-            let m = zsets.get(key); if (!m) { m = new Map(); zsets.set(key, m); }
-            m.set(value, score); return 1;
-        },
-        async zRem(key, value) { const m = zsets.get(key); return m && m.delete(value) ? 1 : 0; },
-        async zCard(key) { return (zsets.get(key) || new Map()).size; },
-        async zRange(key, start, stop, opts = {}) {
-            const m = zsets.get(key) || new Map();
-            let entries = [...m.entries()].sort((a, b) => a[1] - b[1]).map(([v]) => v);
-            if (opts.REV) entries = entries.reverse();
-            const end = stop === -1 ? entries.length - 1 : stop;
-            return entries.slice(start, end + 1);
-        },
-    };
-}
+const { makeFakeRedis } = require('./utils/fake-redis');
 
 function makeFakeStore() {
     const objects = new Map();
@@ -79,6 +53,11 @@ const testConfig = {
         assetPrefix: 'STORAGE:ASSET:',
         sha256Prefix: 'STORAGE:SHA256:',
         assetIdSortedSet: 'STORAGE:ASSETS:SORTED',
+        assetByOwnerPrefix: 'STORAGE:ASSETS:BY_OWNER:',
+        assetPublicSortedSet: 'STORAGE:ASSETS:PUBLIC',
+        assetInternalSortedSet: 'STORAGE:ASSETS:INTERNAL',
+        assetVisibilityIndexReadyKey: 'STORAGE:ASSETS:VISIBILITY_INDEX_READY',
+        sha256RefcountPrefix: 'STORAGE:SHA256:REFCOUNT:',
     },
     storage: { thumbnails: { mode: 'off' }, defaultVisibility: 'internal' },
     thumbnails: { sizes: {} },
@@ -212,5 +191,91 @@ describe('§6.4 list — filtered to readable rows', () => {
 
         const asAdmin = await asset.list({}, ADMIN);
         expect(asAdmin.total).toBe(4);
+    });
+});
+
+// --- Similar-problem audit follow-up: bounded list()/delete() for large stores ---
+// list() previously scanned every asset for non-admin/keyword calls (`zRange(key,0,-1)` +
+// Promise.all-fetch-all); delete() scanned every asset for a matching sha256. Both are
+// replaced by bounded indexes below, with a fallback to the exact old behavior when a
+// deployment hasn't run deploy/migrate-storage-index.js yet (never wrong, just not fast).
+
+describe('visibility index — fast path (migrated) returns the same rows as the fallback', () => {
+    test('same total/visibility mix as the unmigrated "§6.4 list" case above', async () => {
+        const redis = makeFakeRedis();
+        const asset = createAssetLogic(redis, testConfig, makeFakeStore());
+        await asset.upload({ file: b64('a-private'), visibility: 'private' }, ALICE);
+        await asset.upload({ file: b64('a-internal') }, ALICE);
+        await asset.upload({ file: b64('a-public'), visibility: 'public' }, ALICE);
+        await asset.upload({ file: b64('b-private'), visibility: 'private' }, BOB);
+
+        await redis.set(testConfig.redis.assetVisibilityIndexReadyKey, '1'); // flips to the fast path
+
+        const asBob = await asset.list({}, BOB);
+        expect(asBob.total).toBe(3);
+        expect(asBob.items.map(i => i.visibility).sort()).toEqual(['internal', 'private', 'public']);
+
+        const asAnon = await asset.list({}, ANON);
+        expect(asAnon.total).toBe(1);
+        expect(asAnon.items[0].visibility).toBe('public');
+
+        const asAdmin = await asset.list({}, ADMIN);
+        expect(asAdmin.total).toBe(4);
+    });
+
+    test('pagination: newest-first, no overlap between pages', async () => {
+        const redis = makeFakeRedis();
+        const asset = createAssetLogic(redis, testConfig, makeFakeStore());
+        for (let i = 0; i < 5; i++) {
+            await asset.upload({ file: b64(`pub-${i}`), visibility: 'public' }, ALICE);
+        }
+        await redis.set(testConfig.redis.assetVisibilityIndexReadyKey, '1');
+
+        const p1 = await asset.list({ limit: 2, offset: 0 }, BOB);
+        const p2 = await asset.list({ limit: 2, offset: 2 }, BOB);
+        const p3 = await asset.list({ limit: 2, offset: 4 }, BOB);
+        expect(p1.total).toBe(5);
+        expect([p1, p2, p3].map(p => p.items.length)).toEqual([2, 2, 1]);
+        const seen = new Set();
+        for (const p of [p1, p2, p3]) for (const item of p.items) seen.add(item.id);
+        expect(seen.size).toBe(5); // every page distinct, all 5 accounted for
+    });
+
+    test('keyword search finds matches regardless of migration state, any role', async () => {
+        const asset = makeLogic();
+        await asset.upload({ file: b64('findme'), filename: 'invoice-2026.pdf', visibility: 'public' }, ALICE);
+        await asset.upload({ file: b64('other'), filename: 'photo.png', visibility: 'public' }, ALICE);
+
+        const res = await asset.list({ keyword: 'invoice' }, BOB);
+        expect(res.total).toBe(1);
+        expect(res.items[0].originalName).toBe('invoice-2026.pdf');
+    });
+});
+
+describe('sha256 refcount — delete() no longer scans every asset to decide byte purge', () => {
+    test('shared bytes across two owners: deleting one keeps the other readable', async () => {
+        const asset = makeLogic();
+        const a = await asset.upload({ file: b64('shared-content') }, ALICE);
+        const b = await asset.upload({ file: b64('shared-content'), visibility: 'private' }, BOB);
+        expect(b.sha256).toBe(a.sha256); // same bytes, separate owner-aware records
+
+        await expect(asset.delete({ id: a.id }, ALICE)).resolves.toEqual({ deleted: a.id });
+        // Bob's record is untouched and still resolvable — the shared bytes must survive
+        // Alice's delete because Bob's record still references them.
+        await expect(asset.get({ id: b.id }, BOB)).resolves.toMatchObject({ id: b.id });
+        await expect(asset.resolve({ id: b.id }, BOB)).resolves.toEqual({ url: expect.any(String) });
+
+        await expect(asset.delete({ id: b.id }, BOB)).resolves.toEqual({ deleted: b.id });
+    });
+
+    test('content with no refcount key yet (pre-fix data) still deletes safely via the scan fallback', async () => {
+        const redis = makeFakeRedis();
+        const asset = createAssetLogic(redis, testConfig, makeFakeStore());
+        const a = await asset.upload({ file: b64('legacy-content') }, ALICE);
+
+        // Simulate data written before the refcount counter existed.
+        await redis.del(`${testConfig.redis.sha256RefcountPrefix}${a.sha256}`);
+
+        await expect(asset.delete({ id: a.id }, ALICE)).resolves.toEqual({ deleted: a.id });
     });
 });

@@ -55,7 +55,23 @@ module.exports = {
     assetPrefix: 'STORAGE:ASSET:',         // Metadata hash
     sha256Prefix: 'STORAGE:SHA256:',       // Content-addressable dedup index
     assetIdSet: 'STORAGE:ASSETS',          // Legacy Set (kept for reference, no longer written)
-    assetIdSortedSet: 'STORAGE:ASSETS:SORTED'  // Sorted Set ordered by createdAt score
+    assetIdSortedSet: 'STORAGE:ASSETS:SORTED',  // Sorted Set ordered by createdAt score
+
+    // Visibility-scoped indexes — let list() answer "what can THIS caller see" with a
+    // bounded ZUNIONSTORE instead of scanning every asset in the store. Legacy assets
+    // (uploaded before these existed) aren't in them until deploy/migrate-storage-index.js
+    // runs once; list() falls back to the pre-existing full-scan behavior until then
+    // (see assetVisibilityIndexReadyKey) — never wrong, just not fast yet.
+    assetByOwnerPrefix: 'STORAGE:ASSETS:BY_OWNER:', // {prefix}{owner} -> ZSET, all of that owner's assets
+    assetPublicSortedSet: 'STORAGE:ASSETS:PUBLIC',   // ZSET, visibility === 'public'
+    assetInternalSortedSet: 'STORAGE:ASSETS:INTERNAL', // ZSET, visibility === 'internal'
+    assetVisibilityIndexReadyKey: 'STORAGE:ASSETS:VISIBILITY_INDEX_READY', // set only by the migration script
+
+    // Content-hash reference count — lets delete() decide "can I purge the underlying
+    // bytes" in O(1) instead of scanning every asset for a matching sha256. Same
+    // fallback story: absent for a given hash (pre-fix content) -> delete() falls back
+    // to the old full scan for that one hash, never wrongly deletes shared bytes.
+    sha256RefcountPrefix: 'STORAGE:SHA256:REFCOUNT:'
   },
 
   // Filesystem

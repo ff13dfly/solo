@@ -167,6 +167,121 @@ module.exports = (redisClient, config, store) => {
         if (!canRead(meta, ctx)) throw jsonrpc.FORBIDDEN(`No access to asset (visibility: ${meta.visibility || 'internal'})`);
     }
 
+    // --- list() helpers ---------------------------------------------------------
+    const decorate = (meta) => ({ ...meta, url: urlFor(meta), thumbnails: thumbnailsMapFor(meta.sha256, meta.mimeType) });
+
+    async function mgetMetas(ids) {
+        if (!ids.length) return [];
+        const raws = await redisClient.mGet(ids.map((id) => `${config.redis.assetPrefix}${id}`));
+        return raws.map((raw) => (raw ? JSON.parse(raw) : null));
+    }
+
+    async function mgetDecorate(ids) {
+        return (await mgetMetas(ids)).map((meta) => (meta ? decorate(meta) : null));
+    }
+
+    /**
+     * Legacy full-scan path — was list()'s only non-admin/keyword path before the
+     * visibility indexes below existed. Kept as the fallback for a deployment that
+     * hasn't run deploy/migrate-storage-index.js yet: correct, just O(store size)
+     * instead of O(page size).
+     */
+    async function legacyScanOwnedAndVisible(effOffset, effLimit, ctx) {
+        const allIds = await redisClient.zRange(config.redis.assetIdSortedSet, 0, -1, { REV: true }); // SAFE: pre-migration fallback only
+        const metas = await mgetMetas(allIds);
+        const visibleMetas = metas.filter((meta) => meta && canRead(meta, ctx));
+        return {
+            items: visibleMetas.slice(effOffset, effOffset + effLimit).map(decorate),
+            total: visibleMetas.length
+        };
+    }
+
+    /**
+     * Non-admin, no-keyword list() path.
+     *
+     * @why canRead is owner-or-visibility gated, and a plain Redis SET/ZSET has no
+     *      secondary index on field values — so "which assets can THIS caller see"
+     *      historically meant fetching every asset's metadata and checking each one.
+     *      Instead, upload() now also indexes each asset into a by-owner ZSET and a
+     *      public/internal visibility ZSET (see config.js); ZUNIONSTORE merges exactly
+     *      the sets relevant to this ctx (own + public [+ internal if authenticated])
+     *      into a throwaway key whose cardinality IS the exact total, then one bounded
+     *      ZRANGE gets the page. Total work is now O(page size), not O(store size).
+     * @attention Falls back to legacyScanOwnedAndVisible until the migration script has
+     *      run (assetVisibilityIndexReadyKey unset) — never returns wrong results for
+     *      an unmigrated deployment, just doesn't get the speedup yet.
+     */
+    async function listOwnedAndVisible(effOffset, effLimit, ctx) {
+        const ready = await redisClient.exists(config.redis.assetVisibilityIndexReadyKey);
+        if (!ready) return legacyScanOwnedAndVisible(effOffset, effLimit, ctx);
+
+        const keys = [config.redis.assetPublicSortedSet];
+        if (ctx && ctx.user) {
+            keys.push(config.redis.assetInternalSortedSet, `${config.redis.assetByOwnerPrefix}${ctx.user}`);
+        }
+
+        const tmpKey = `STORAGE:ASSETS:TMP:${generator.generateId(12)}`;
+        const total = await redisClient.zUnionStore(tmpKey, keys, { AGGREGATE: 'MAX' });
+        await redisClient.expire(tmpKey, 30); // safety net if the del in `finally` never runs
+        try {
+            const pageIds = await redisClient.zRange(tmpKey, '+inf', '-inf', {
+                BY: 'SCORE', REV: true, LIMIT: { offset: effOffset, count: effLimit }
+            });
+            // canRead re-check is defense in depth (query construction already restricts
+            // to sets this ctx can see) — cheap, and guards against a future key added
+            // to `keys` without updating this filter to match.
+            const items = (await mgetDecorate(pageIds)).filter((v) => v && canRead(v, ctx));
+            return { items, total };
+        } finally {
+            await redisClient.del(tmpKey);
+        }
+    }
+
+    /**
+     * Keyword search — id / originalName / sha256, any caller (admin included).
+     *
+     * @why No secondary index on field VALUES (only on owner/visibility, which are
+     *      coarse categories, not arbitrary text) — same limitation library/search.js
+     *      documents. This still walks the full sorted set, but in bounded chunks
+     *      (one MGET per chunk instead of one GET per asset via Promise.all), so peak
+     *      memory and round-trips no longer scale with store size — total work still
+     *      does in the worst case (rare/no keyword hits). A real fix needs RediSearch
+     *      (api/library/indexer.js already exists, wired only into api/sample/ so far)
+     *      — intentionally deferred; see CHANGELOG.
+     */
+    async function keywordSearch(kw, effOffset, effLimit, ctx) {
+        const CHUNK = 200;
+        const globalKey = config.redis.assetIdSortedSet;
+        const visibleMetas = [];
+        let upperBound = '+inf';
+
+        while (true) {
+            const chunkIds = await redisClient.zRange(globalKey, upperBound, '-inf', {
+                BY: 'SCORE', REV: true, LIMIT: { offset: 0, count: CHUNK }
+            });
+            if (!chunkIds.length) break;
+
+            const metas = await mgetMetas(chunkIds);
+            for (const meta of metas) {
+                if (meta && canRead(meta, ctx)) visibleMetas.push(meta);
+            }
+
+            if (chunkIds.length < CHUNK) break; // exhausted the set
+            const lastScore = await redisClient.zScore(globalKey, chunkIds[chunkIds.length - 1]);
+            upperBound = `(${lastScore}`;
+        }
+
+        const { items, total } = applySearch(visibleMetas, {
+            keyword: kw,
+            searchFields: ['id', 'originalName', 'sha256'],
+            sortBy: 'createdAt',
+            sortDir: 'desc',
+            limit: effLimit,
+            offset: effOffset,
+        });
+        return { items: items.map(decorate), total };
+    }
+
     // --- URL / key helpers ---
     const extOf = (meta) => path.extname(meta.originalName || '');
     // Back-compat: legacy Redis records have `path` (= the relative object path) but no `key`.
@@ -285,59 +400,50 @@ module.exports = (redisClient, config, store) => {
 
             // 6. Persist metadata + indexes
             await redisClient.set(`${assetPrefix}${assetId}`, JSON.stringify(metadata));
-            await redisClient.zAdd(config.redis.assetIdSortedSet, {
-                score: new Date(metadata.createdAt).getTime(),
-                value: assetId
-            });
+            const createdAtMs = new Date(metadata.createdAt).getTime();
+            await redisClient.zAdd(config.redis.assetIdSortedSet, { score: createdAtMs, value: assetId });
             await redisClient.set(`${config.redis.sha256Prefix}${sha256}`, assetId);
+
+            // Visibility-scoped indexes (list()'s fast path below) — maintained
+            // unconditionally for every new upload; legacy assets get these via
+            // deploy/migrate-storage-index.js.
+            if (owner) {
+                await redisClient.zAdd(`${config.redis.assetByOwnerPrefix}${owner}`, { score: createdAtMs, value: assetId });
+            }
+            if (vis === 'public') {
+                await redisClient.zAdd(config.redis.assetPublicSortedSet, { score: createdAtMs, value: assetId });
+            } else if (vis === 'internal') {
+                await redisClient.zAdd(config.redis.assetInternalSortedSet, { score: createdAtMs, value: assetId });
+            }
+            // Content-hash refcount — delete()'s O(1) "can I purge the bytes" check.
+            await redisClient.incr(`${config.redis.sha256RefcountPrefix}${sha256}`);
 
             return { ...metadata, url: urlFor(metadata), thumbnails: thumbnailsMapFor(sha256, metadata.mimeType) };
         },
 
         /**
-         * list — keyword (id / originalName / sha256) + pagination.
+         * list — keyword (id / originalName / sha256) + pagination. See the
+         * keywordSearch / listOwnedAndVisible helpers above for the per-path why.
          */
         async list({ page = 1, pageSize = 20, keyword, offset, limit } = {}, ctx) {
             const effLimit  = limit  ?? pageSize;
             const effOffset = offset ?? (page - 1) * pageSize;
             const kw = (keyword || '').trim();
+            const isAdmin = ctx === undefined || (ctx && ctx.permit === 'admin');
 
-            const decorate = (meta) => ({ ...meta, url: urlFor(meta), thumbnails: thumbnailsMapFor(meta.sha256, meta.mimeType) });
-            // toFix §6.4 — listing shows only what the caller could read anyway.
-            const visible = (meta) => canRead(meta, ctx);
+            if (kw) {
+                return keywordSearch(kw, effOffset, effLimit, ctx);
+            }
 
-            if (!kw && (ctx === undefined || (ctx && ctx.permit === 'admin'))) {
-                // Fast path (no row filter needed): admin / internal callers.
+            if (isAdmin) {
+                // Fast path: admin / internal callers, bounded by-rank read.
                 const total = await redisClient.zCard(config.redis.assetIdSortedSet);
-                const pageIds = await redisClient.zRange(config.redis.assetIdSortedSet, effOffset, effOffset + effLimit - 1, { REV: true }); // SAFE: small
-                const items = (await Promise.all(pageIds.map(async (id) => { // SAFE: small
-                    const raw = await redisClient.get(`${config.redis.assetPrefix}${id}`);
-                    if (!raw) return null;
-                    return decorate(JSON.parse(raw));
-                }))).filter(Boolean);
+                const pageIds = await redisClient.zRange(config.redis.assetIdSortedSet, effOffset, effOffset + effLimit - 1, { REV: true });
+                const items = (await mgetDecorate(pageIds)).filter(Boolean);
                 return { items, total };
             }
 
-            const allIds = await redisClient.zRange(config.redis.assetIdSortedSet, 0, -1, { REV: true }); // SAFE: small
-            const allItems = (await Promise.all(allIds.map(async (id) => { // SAFE: small
-                const raw = await redisClient.get(`${config.redis.assetPrefix}${id}`);
-                if (!raw) return null;
-                const meta = JSON.parse(raw);
-                return visible(meta) ? decorate(meta) : null;
-            }))).filter(Boolean);
-
-            if (!kw) {
-                return { items: allItems.slice(effOffset, effOffset + effLimit), total: allItems.length };
-            }
-
-            return applySearch(allItems, {
-                keyword: kw,
-                searchFields: ['id', 'originalName', 'sha256'],
-                sortBy: 'createdAt',
-                sortDir: 'desc',
-                limit: effLimit,
-                offset: effOffset,
-            });
+            return listOwnedAndVisible(effOffset, effLimit, ctx);
         },
 
         /**
@@ -373,16 +479,28 @@ module.exports = (redisClient, config, store) => {
 
             await redisClient.del(`${config.redis.assetPrefix}${id}`);
             await redisClient.zRem(config.redis.assetIdSortedSet, id);
+            if (meta.owner) await redisClient.zRem(`${config.redis.assetByOwnerPrefix}${meta.owner}`, id);
+            if (meta.visibility === 'public') await redisClient.zRem(config.redis.assetPublicSortedSet, id);
+            else if (meta.visibility === 'internal') await redisClient.zRem(config.redis.assetInternalSortedSet, id);
 
             try {
-                const remaining = await redisClient.zRange(config.redis.assetIdSortedSet, 0, -1); // SAFE: small
-                let refCount = 0;
-                for (const aid of remaining) {
-                    const raw = await redisClient.get(`${config.redis.assetPrefix}${aid}`);
-                    if (!raw) continue;
-                    if (JSON.parse(raw).sha256 === meta.sha256) { refCount++; break; }
+                const refcountKey = `${config.redis.sha256RefcountPrefix}${meta.sha256}`;
+                let purge;
+                if (await redisClient.exists(refcountKey)) {
+                    // Fast path: O(1). Every asset created after this fix incremented this
+                    // counter at upload time; deploy/migrate-storage-index.js backfills it
+                    // for content that predates the counter.
+                    purge = (await redisClient.decr(refcountKey)) <= 0;
+                    if (purge) await redisClient.del(refcountKey);
+                } else {
+                    // No counter for this hash yet (pre-migration content) — fall back to
+                    // the full scan rather than assume refcount 0, which could delete bytes
+                    // another asset record still references.
+                    const remaining = await redisClient.zRange(config.redis.assetIdSortedSet, 0, -1); // SAFE: pre-migration fallback only
+                    const metas = await mgetMetas(remaining);
+                    purge = !metas.some((m) => m && m.sha256 === meta.sha256);
                 }
-                if (refCount === 0) {
+                if (purge) {
                     const keys = [objectKeyOf(meta), ...thumbLabels().map((l) => thumbKeyFor(meta.sha256, l))];
                     await store.deleteMany(keys);
                     RECENT_UPLOADS.delete(meta.sha256);
