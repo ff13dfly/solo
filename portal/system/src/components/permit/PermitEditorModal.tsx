@@ -49,7 +49,16 @@ export default function PermitEditorModal({
   title,
 }: PermitEditorModalProps) {
   const { toast } = useUI();
-  const [permit, setPermit] = useState<Permit>(initialPermit || { allow_all: false, services: {} });
+  // Normalize `services` at the source: some stored permits predate always-present
+  // `services` (e.g. hand-edited `{ allow_all: true }` with no `services` key at all).
+  // Without this, toggling "Administrator Access" off reveals the service-permissions
+  // UI with `permit.services` still undefined, and unguarded reads (e.g. the ADD SERVICE
+  // dropdown's `permit.services[s.id]`) throw — with no error boundary in this app, that
+  // crash unmounts the whole tree (blank screen), not just this modal.
+  const [permit, setPermit] = useState<Permit>(() => {
+    const base = initialPermit || { allow_all: false, services: {} };
+    return { ...base, services: base.services || {} };
+  });
   const [isSaving, setIsSaving] = useState(false);
 
   // 数据级字段约束:用行编辑,保存时合进 permit。

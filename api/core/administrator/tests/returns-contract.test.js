@@ -51,6 +51,10 @@ function makeFakeRedis() {
             const end = stop === -1 ? arr.length : stop + 1;
             return arr.slice(start, end);
         },
+        async lLen(k) {
+            const arr = lists.get(k);
+            return arr ? arr.length : 0;
+        },
         async keys(pattern) {
             // only the trailing-'*' prefix form is used by the error logic
             const prefix = pattern.endsWith('*') ? pattern.slice(0, -1) : pattern;

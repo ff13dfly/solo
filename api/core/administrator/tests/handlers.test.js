@@ -4,6 +4,7 @@ const ErrorLogic = require('../logic/error');
 // Mock Redis
 const mockRedisClient = {
     lRange: jest.fn(),
+    lLen: jest.fn(),
     del: jest.fn(),
     keys: jest.fn()
 };
@@ -16,15 +17,18 @@ describe('Administrator System Handlers', () => {
     });
 
     describe('errorList', () => {
-        test('should list errors for service', async () => {
+        test('should list errors for service, newest first', async () => {
+            // Stored oldest-to-newest (index 0 = 'err1', as rPush would append them).
             const logs = [JSON.stringify({ msg: 'err1' }), JSON.stringify({ msg: 'err2' })];
+            mockRedisClient.lLen.mockResolvedValue(logs.length);
             mockRedisClient.lRange.mockResolvedValue(logs);
 
             const res = await ErrorLogic.list(mockRedisClient, { service: 'router' });
-            
+
             expect(res.service).toBe('router');
             expect(res.logs).toHaveLength(2);
-            expect(res.logs[0].msg).toBe('err1');
+            // fetchLatest reverses the fetched slice, so the newest ('err2') comes first.
+            expect(res.logs[0].msg).toBe('err2');
         });
 
         test('should list all errors if service name is missing', async () => {

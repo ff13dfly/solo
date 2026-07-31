@@ -2,17 +2,33 @@ const jsonrpc = require('../handlers/jsonrpc');
 const config = require('../config');
 
 /**
+ * Errors are rPush'd (appended to the tail) by library/logger.js, so index 0 is the
+ * OLDEST entry and the queue has no cap/TTL — it only grows. Fetch by position from
+ * the tail and reverse, so "offset 0" always means "most recent", regardless of how
+ * long the queue has grown; a plain lRange(key, offset, offset+limit-1) would instead
+ * return the oldest `limit` entries forever, which is never what a triage view wants.
+ */
+async function fetchLatest(redisClient, key, offset, limit) {
+    const total = await redisClient.lLen(key);
+    const end = total - offset - 1;
+    if (total === 0 || end < 0) return [];
+    const start = Math.max(end - limit + 1, 0);
+    const logs = await redisClient.lRange(key, start, end);
+    return logs.reverse();
+}
+
+/**
  * Error Logic Handler
  * Handles system-wide error log retrieval and management from Redis queues.
  */
 const ErrorLogic = {
     /**
      * List error logs for a specific service or all services.
-     * 
-     * @why Centralized error monitoring allows the Router and Admin portal to 
+     *
+     * @why Centralized error monitoring allows the Router and Admin portal to
      *      diagnose cross-service failures without direct SSH access to nodes.
-     * @attention 
-     *   1. Implements a "transitional" key check (lowercase vs capitalized) to remain 
+     * @attention
+     *   1. Implements a "transitional" key check (lowercase vs capitalized) to remain
      *      compatible with older service logging versions.
      *   2. Output is limited by `limit` to prevent OOM when a service is crash-looping.
      * @side_effects None (Read-only operation).
@@ -25,10 +41,10 @@ const ErrorLogic = {
         const key = `${config.redis.errorQueuePrefix}${sName}`;
         try {
             // Also try capitalized if lowercase is empty (transitional)
-            let logs = await redisClient.lRange(key, offset, offset + limit - 1);
+            let logs = await fetchLatest(redisClient, key, offset, limit);
             if (logs.length === 0) {
                 const altKey = `${config.redis.errorQueuePrefix}${sName.charAt(0).toUpperCase() + sName.slice(1)}`;
-                logs = await redisClient.lRange(altKey, offset, offset + limit - 1);
+                logs = await fetchLatest(redisClient, altKey, offset, limit);
             }
             return { service: sName, logs: logs.map(l => {
                 const parsed = JSON.parse(l);
@@ -42,12 +58,15 @@ const ErrorLogic = {
 
     /**
      * Internal helper to scan Redis for all error logs.
-     * 
+     *
      * @why Used when the UI needs a "global view" of system health across all microservices.
-     * @attention 
-     *   1. Uses `SCAN` approach (implied by keys*) which might be slow if Redis has 
+     * @attention
+     *   1. Uses `SCAN` approach (implied by keys*) which might be slow if Redis has
      *      millions of keys. Ensure error queue prefixes are unique.
      *   2. Automatically filters out malformed JSON strings to prevent API crashes.
+     *   3. Per-key fetch is newest-first (see fetchLatest); the merged cross-service
+     *      list is then re-sorted by `stamp` so the aggregate view is chronological
+     *      too, not just newest-first within each service's own block.
      * @side_effects High Redis CPU usage if key space is large.
      */
     async listAll(redisClient, params) {
@@ -59,8 +78,8 @@ const ErrorLogic = {
 
             for (const key of keys) {
                 const sName = key.split(':')[2].toLowerCase(); // Extract service name from key
-                
-                const logs = await redisClient.lRange(key, 0, limit - 1);
+
+                const logs = await fetchLatest(redisClient, key, 0, limit);
                 allLogs.push(...logs.map(l => {
                     try {
                         const parsed = JSON.parse(l);
@@ -69,6 +88,7 @@ const ErrorLogic = {
                 }).filter(x => x));
             }
 
+            allLogs.sort((a, b) => new Date(b.stamp) - new Date(a.stamp));
             return { logs: allLogs };
         } catch (err) {
             console.error(err);
