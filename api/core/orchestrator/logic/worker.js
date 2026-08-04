@@ -3,6 +3,15 @@ const { createLogger } = require('../../../library/logger');
 const config = require('../config');
 const { NeedsGrantError } = require('./NeedsGrantError');
 
+// DEADLETTER hard cap — mirrors notification/logic/worker.js's DLQ_MAXLEN. Without this,
+// ORCHESTRATOR:RUNQ:DEADLETTER only grows (rPush/lPush with no trim = unbounded poison
+// accumulation); every run entity's full audit trail already lives in the run doc itself
+// (RedisJSON), so trimming this list loses nothing but old retry-handle copies.
+const RUNQ_DLQ_MAXLEN = (() => {
+    const n = parseInt(process.env.ORCHESTRATOR_DLQ_MAXLEN, 10);
+    return Number.isFinite(n) && n > 0 ? n : 1000;
+})();
+
 /**
  * Async run-queue worker (event.md §5).
  *
@@ -326,6 +335,11 @@ module.exports = (redis, { relay, runner, run = null, control = null } = {}) => 
             });
             await client.lPush(R.runQueueDeadletter,
                 JSON.stringify({ ...cmd, lastError: err.message, lastCode: err.code }));
+            // 0..MAXLEN-1, NOT notification's -MAXLEN..-1: this queue is lPush'd (newest at
+            // head/index 0), while notification's DLQ is rPush'd (newest at tail) — the trim
+            // window has to match whichever end "newest" actually lands on, or it keeps the
+            // oldest entries and drops the newest ones instead.
+            await client.lTrim(R.runQueueDeadletter, 0, RUNQ_DLQ_MAXLEN - 1);
             // Close out the run entity too. processOne created it (RUNNING) BEFORE the
             // gate rejection, so without this it lingers RUNNING until the stall scanner
             // flips it STALLED and pages ops with a false "worker died mid-run" story.
@@ -347,6 +361,11 @@ module.exports = (redis, { relay, runner, run = null, control = null } = {}) => 
             });
             await client.lPush(R.runQueueDeadletter,
                 JSON.stringify({ ...cmd, attempts, lastError: err.message }));
+            // 0..MAXLEN-1, NOT notification's -MAXLEN..-1: this queue is lPush'd (newest at
+            // head/index 0), while notification's DLQ is rPush'd (newest at tail) — the trim
+            // window has to match whichever end "newest" actually lands on, or it keeps the
+            // oldest entries and drops the newest ones instead.
+            await client.lTrim(R.runQueueDeadletter, 0, RUNQ_DLQ_MAXLEN - 1);
             // Same run-entity closeout as the permanent path — retries are exhausted,
             // nobody is coming back for this run doc.
             if (run && cmd.runId) {

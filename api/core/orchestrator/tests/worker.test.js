@@ -30,6 +30,12 @@ function makeFakeRedis() {
         duplicate() { return api; },
         async connect() {},
         async lPush(key, val) { (lists[key] ||= []).unshift(val); return lists[key].length; },
+        async lTrim(key, start, stop) {
+            const a = lists[key] || [];
+            const end = stop === -1 ? a.length : stop + 1;
+            lists[key] = a.slice(start < 0 ? Math.max(0, a.length + start) : start, end);
+            return 'OK';
+        },
         async rPop(key) { const a = lists[key] || []; return a.length ? a.pop() : null; },
         async blPop(key /*, timeout */) {
             const a = lists[key] || [];

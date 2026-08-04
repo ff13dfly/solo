@@ -9,7 +9,38 @@ const { optimisticUpdate } = require('../../../library/optimistic');
  * User Business Logic
  * @why Implements core account lifecycle, identity verification, and permission management.
  */
-module.exports = (redisClient, config) => ({
+module.exports = (redisClient, config) => {
+    const CHUNK = 200;
+
+    // Non-blocking id enumeration — SSCAN instead of SMEMBERS. SMEMBERS returns the whole
+    // set in one reply and blocks Redis for it; SSCAN walks it in bounded, cursor-resumable
+    // batches. Same total ids returned, just never holds Redis hostage for one giant set.
+    async function scanAllUserIds() {
+        const ids = [];
+        // node-redis v4 yields one member per iteration; v5 yields a whole SCAN batch
+        // (array) per iteration — normalize both (see core/nexus/logic/events.js).
+        for await (const batch of redisClient.sScanIterator(config.redis.userIdSet, { COUNT: CHUNK })) {
+            if (Array.isArray(batch)) ids.push(...batch); else ids.push(batch);
+        }
+        return ids;
+    }
+
+    // Batched hydration — one MGET per CHUNK ids instead of a GET-per-id loop (was true
+    // N+1: every list()/stats() call paid one Redis round trip per user in the system).
+    async function hydrateUsers(ids) {
+        const users = [];
+        for (let i = 0; i < ids.length; i += CHUNK) {
+            const chunk = ids.slice(i, i + CHUNK);
+            const raws = await redisClient.mGet(chunk.map((uid) => `${config.redis.userPrefix}${uid}`));
+            raws.forEach((raw, j) => {
+                if (!raw) return;
+                users.push({ id: chunk[j], data: JSON.parse(raw) });
+            });
+        }
+        return users;
+    }
+
+    return {
     // --- USER REGISTRATION ---
     /**
      * register
@@ -313,40 +344,44 @@ module.exports = (redisClient, config) => ({
      * list
      * @why Provides a paginated list of users with optional keyword searching.
      * @process
-     *   1. Perform fuzzy search via KEYS (if keyword present) or fetch full ID Set.
-     *   2. Hydrate user objects from Redis.
+     *   1. Fuzzy search (if keyword present): SCAN the name-key pattern (non-blocking,
+     *      cursor-based — was the blocking KEYS command) + one batched MGET to resolve
+     *      matches to uids (was a GET-per-match loop). Standard list: SSCAN the id set
+     *      (was blocking SMEMBERS).
+     *   2. Hydrate user objects from Redis via batched MGET (was a GET-per-user loop —
+     *      every call used to cost one Redis round trip per registered user).
      *   3. Filter by deletion status.
      *   4. Sort by creation date (Newest first).
      *   5. Paginate and return results with metadata.
+     * @attention No secondary index on name substrings exists (same limitation
+     *      library/search.js documents for field-value search), so a keyword search still
+     *      has to look at every name key — SCAN just makes doing so non-blocking, it
+     *      doesn't make it O(page). A real fix needs RediSearch; deferred (see CHANGELOG).
      */
     async list({ page = 1, limit = 12, keyword = '', includeDeleted = false } = {}) {
-        let ids = [];
+        const kw = (keyword || '').trim();
+        let ids;
 
-        if (keyword && keyword.trim().length > 0) {
-            // Fuzzy search using KEYS
-            const pattern = `${config.redis.userNamePrefix}*${keyword.trim()}*`;
-            const matchingKeys = await redisClient.keys(pattern);
-
-            for (const key of matchingKeys) {
-                const uid = await redisClient.get(key);
-                if (uid) ids.push(uid);
+        if (kw) {
+            const pattern = `${config.redis.userNamePrefix}*${kw}*`;
+            const matchedKeys = [];
+            // node-redis v4 yields one key per iteration; v5 yields a whole SCAN batch
+            // (array) per iteration — normalize both (see core/nexus/logic/events.js).
+            for await (const batch of redisClient.scanIterator({ MATCH: pattern, COUNT: CHUNK })) {
+                if (Array.isArray(batch)) matchedKeys.push(...batch); else matchedKeys.push(batch);
             }
+            ids = matchedKeys.length ? (await redisClient.mGet(matchedKeys)).filter(Boolean) : [];
         } else {
-            // Standard list
-            ids = await redisClient.sMembers(config.redis.userIdSet);
+            ids = await scanAllUserIds();
         }
 
         const users = [];
-        for (const uid of ids) {
-            const data = await redisClient.get(`${config.redis.userPrefix}${uid}`);
-            if (data) {
-                const user = JSON.parse(data);
-                if (includeDeleted || user.status !== STATUS.DELETED) {
-                    // SECURITY: Filter out sensitive cryptographic material
-                    const { salt, hash, ...safeUser } = user;
-                    safeUser.id = uid; // Ensure ID is present for legacy records
-                    users.push(safeUser);
-                }
+        for (const { id: uid, data: user } of await hydrateUsers(ids)) {
+            if (includeDeleted || user.status !== STATUS.DELETED) {
+                // SECURITY: Filter out sensitive cryptographic material
+                const { salt, hash, ...safeUser } = user;
+                safeUser.id = uid; // Ensure ID is present for legacy records
+                users.push(safeUser);
             }
         }
 
@@ -385,16 +420,10 @@ module.exports = (redisClient, config) => ({
      */
     async stats() {
         try {
-            const ids = await redisClient.sMembers(config.redis.userIdSet);
+            const ids = await scanAllUserIds();
             let active = 0;
-            for (const uid of ids) {
-                const data = await redisClient.get(`${config.redis.userPrefix}${uid}`);
-                if (data) {
-                    const user = JSON.parse(data);
-                    if (user.status !== STATUS.DELETED) {
-                        active++;
-                    }
-                }
+            for (const { data: user } of await hydrateUsers(ids)) {
+                if (user.status !== STATUS.DELETED) active++;
             }
             return { active, total: ids.length };
         } catch (e) {
@@ -559,4 +588,5 @@ module.exports = (redisClient, config) => ({
             throw jsonrpc.INTERNAL_ERROR('Internal error');
         }
     }
-});
+    };
+};

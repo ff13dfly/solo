@@ -444,7 +444,9 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             }
 
             const indexKey = getIndexKey();
-            const ids = await redis.sMembers(indexKey);
+            // 现有 offset 路径的既定行为：v1.1.13 起 list({cursor}) 是有界的快路径 opt-in，
+            // 这里保持不变正是为了不传 cursor 的调用方零变化（见 CHANGELOG v1.1.13）。
+            const ids = await redis.sMembers(indexKey); // SAFE: legacy path, cursor 是 opt-in 快路径
 
             if (!ids || ids.length === 0) return { items: [], total: 0 };
 
@@ -585,7 +587,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
         async migrateCursorIndex({ chunkSize = 2000 } = {}) {
             const indexKey = getIndexKey();
             const cursorIndexKey = getCursorIndexKey();
-            const ids = await redis.sMembers(indexKey);
+            const ids = await redis.sMembers(indexKey); // SAFE: 一次性迁移脚本，非热路径
 
             if (ids.length === 0) {
                 await redis.set(getCursorSeqKey(), '0');

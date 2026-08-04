@@ -129,7 +129,7 @@ function createConfig(redis, serviceName, localConfig) {
      * @returns {object} { key: rawStringValue, ... } or {} if no overrides
      */
     async function overrides() {
-        const all = await redis.hGetAll(redisKey);
+        const all = await redis.hGetAll(redisKey); // SAFE: small (一个服务支持的配置 key 数量有界)
         return all || {};
     }
 

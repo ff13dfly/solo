@@ -15,6 +15,7 @@ const createRun           = require('../logic/run');
 const createWorker        = require('../logic/worker');
 const config              = require('../config');
 const { createHarness }   = require('./utils/harness');
+const { scanBatches }     = require('../../../library/tests/utils/redis-scan-sim');
 
 const R = config.redis;
 const W = config.worker;
@@ -33,6 +34,7 @@ function makeFakeRedis() {
             async set(key, _path, value) { docs[key] = JSON.parse(JSON.stringify(value)); return 'OK'; },
             async get(key)               { return docs[key] !== undefined ? JSON.parse(JSON.stringify(docs[key])) : null; },
             async del(key)               { const had = key in docs; delete docs[key]; return had ? 1 : 0; },
+            async mGet(keys)             { return keys.map((k) => (docs[k] !== undefined ? [JSON.parse(JSON.stringify(docs[k]))] : null)); },
         },
         async keys(pattern) {
             const prefix = pattern.replace(/\*$/, '');
@@ -51,8 +53,15 @@ function makeFakeRedis() {
         },
         async sAdd(key, m)      { (sets[key] ||= new Set()).add(m); return 1; },
         async sMembers(key)     { return [...(sets[key] || [])]; },
+        async *sScanIterator(key, opts = {}) { yield* scanBatches([...(sets[key] || [])], opts); },
         async sRem(key, m)      { if (sets[key]) sets[key].delete(m); return 1; },
         async sIsMember(key, m) { return !!(sets[key] && sets[key].has(m)); },
+        async lTrim(key, start, stop) {
+            const a = lists[key] || [];
+            const end = stop === -1 ? a.length : stop + 1;
+            lists[key] = a.slice(start < 0 ? Math.max(0, a.length + start) : start, end);
+            return 'OK';
+        },
         _docs()              { return docs; },
         _list(key)           { return lists[key] || []; },
         _zset(key)           { return zsets[key] || new Map(); },

@@ -10,6 +10,8 @@
  * Internals are exposed (_docs / _kv / streams) so tests can assert on stored
  * state and emitted stream events.
  */
+const { scanBatches } = require('../../../../library/tests/utils/redis-scan-sim');
+
 function clone(v) {
     return v === undefined ? undefined : JSON.parse(JSON.stringify(v));
 }
@@ -49,6 +51,9 @@ function makeFakeRedis() {
             },
             async del(key) {
                 return docs.delete(key) ? 1 : 0;
+            },
+            async mGet(keys) {
+                return keys.map((k) => (docs.has(k) ? [clone(docs.get(k))] : null));
             },
         },
 
@@ -94,6 +99,9 @@ function makeFakeRedis() {
         },
         async sMembers(key) {
             return [...(sets.get(key) || [])];
+        },
+        async *sScanIterator(key, opts = {}) {
+            yield* scanBatches([...(sets.get(key) || [])], opts);
         },
         async sRem(key, member) {
             const s = sets.get(key);

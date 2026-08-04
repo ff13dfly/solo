@@ -27,6 +27,7 @@ const createKeyLogic = require('../logic/key');
 const config = require('../config');
 const introspection = require('../handlers/introspection');
 const { checkReturn } = require('../../../library/contract');
+const { scanBatches } = require('../../../library/tests/utils/redis-scan-sim');
 
 // Fake Redis — Map-backed, covers the string + set + hash + multi commands the user/bot/
 // role/passport/key logic actually touch. setEx/expire are no-ops on TTL (we don't assert
@@ -65,6 +66,12 @@ function makeFakeRedis() {
         async sRem(k, m) { return apply.sRem(k, m); },
         async sMembers(k) { return sets.has(k) ? [...sets.get(k)] : []; },
         async sCard(k) { return sets.has(k) ? sets.get(k).size : 0; },
+        async *sScanIterator(k, opts = {}) { yield* scanBatches([...(sets.get(k) || new Set())], opts); },
+        async *scanIterator(opts = {}) {
+            const pattern = (opts && opts.MATCH) || '*';
+            const re = new RegExp('^' + pattern.split('*').map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
+            yield* scanBatches([...kv.keys()].filter((k) => re.test(k)), opts);
+        },
         async zAdd(k, entry) { return apply.zAdd(k, entry); },
         async zRem(k, m) { return apply.zRem(k, m); },
         async zCard(k) { return zsets.has(k) ? zsets.get(k).size : 0; },
@@ -144,6 +151,23 @@ describe('user service — actual returns satisfy declared returns_schema', () =
         ok('user.account.list', res);
         expect(Array.isArray(res.users)).toBe(true);
         expect(res).not.toHaveProperty('items'); // the lie the audit caught
+    });
+
+    // 回归：scanAllUserIds() 的 sScanIterator 曾经（在 hermetic mock 修好之前）从没被
+    // 真实验证过会不会在多批次场景下丢用户——mock 一直是"单值 yield"的旧假设，跟
+    // 生产代码共享同一个错误前提，测试再多轮都测不出问题，只有 e2e 数据量凑巧过
+    // CHUNK 阈值才会暴露。现在 mock 换成了真正按 COUNT 切块的 scanBatches（见
+    // library/tests/utils/redis-scan-sim.js），这条用例把"超过一页也不丢用户"钉死
+    // 成确定性断言，不再指望运气。
+    test('user.account.list：用户数超过 scanAllUserIds 的 CHUNK（200）时，一个都不丢（多批次 SCAN 回归）', async () => {
+        const total = 205; // > CHUNK:200，逼 fake redis 至少产生 2 个 SCAN 批次
+        for (let i = 0; i < total; i++) await makeUser(`scan${i}`);
+
+        const res = await user.list({ limit: total });
+
+        expect(res.total).toBe(total);
+        expect(res.users.length).toBe(total);
+        expect(new Set(res.users.map((u) => u.id)).size).toBe(total); // 无重复
     });
 
     test('user.account.update → {success, uid, categories, meta}', async () => {

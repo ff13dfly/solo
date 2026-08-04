@@ -173,7 +173,11 @@ const methods = [
     },
     {
         name: 'orchestrator.run.list',
-        params: [{ name: 'status', type: 'string', required: false, maxLength: 64 }],
+        params: [
+            { name: 'status', type: 'string', required: false, maxLength: 64 },
+            { name: 'limit',  type: 'number', required: false },
+            { name: 'offset', type: 'number', required: false },
+        ],
         // NOTE: run.list returns a BARE ARRAY of run docs — not an object. The flat object-key
         // return dialect cannot express a top-level array, so no returns_schema is declared
         // (an object-key contract here would falsely fail every call). See codeBugsFlagged.

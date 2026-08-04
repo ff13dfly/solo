@@ -7,13 +7,15 @@ const fs = require('fs');
 const path = require('path');
 
 function check(servicePath, results) {
+    // 没有 logic/ 子目录时退化为直接扫 servicePath 自身（api/library 这类扁平库目录）。
     const logicDir = path.join(servicePath, 'logic');
-    if (!fs.existsSync(logicDir)) return;
-    
-    const logicFiles = fs.readdirSync(logicDir).filter(f => f.endsWith('.js'));
-    
+    const scanDir = fs.existsSync(logicDir) ? logicDir : servicePath;
+    if (!fs.existsSync(scanDir)) return;
+
+    const logicFiles = fs.readdirSync(scanDir).filter(f => f.endsWith('.js'));
+
     for (const file of logicFiles) {
-        const filePath = path.join(logicDir, file);
+        const filePath = path.join(scanDir, file);
         const content = fs.readFileSync(filePath, 'utf-8');
         
         // 检查是否有硬编码的 Redis key

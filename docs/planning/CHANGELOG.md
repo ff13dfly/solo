@@ -11,6 +11,38 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.1.x`）。
 
+---
+
+## [v1.1.14] — 2026-08-01
+
+> Redis 性能局限系统排查收尾:user/orchestrator/nexus 三个核心服务的 KEYS/全量拉取反模式修复 + 死信队列裁剪 + node-redis v5 SCAN 迭代器批次坑(顺带修了 storage 那轮审计后 e2e 才暴露的问题),以及针对这个批次坑本身的检测手段补齐(autocheck 新规则 + api/library 检查入口 + fake redis 共享 SCAN 批次原语 + 真实 Redis 契约测试 + 两条确定性回归用例)。全部只加不破,hermetic CI 123 套/1935 测试 + e2e full profile 66 套件/346 测试全绿。
+
+### Fixed — 四处活跃的 KEYS/全量拉取反模式（Redis 性能局限系统排查的后续）
+
+> 顺着 entity.js/storage 那轮审计继续排查"还有哪些已知 Redis 性能局限出现在现有代码里",这次覆盖 `redis.KEYS`(阻塞、扫的是整个 keyspace 不是只扫匹配项)、`SMEMBERS` 全量拉取 + 逐条 GET(N+1 往返)、以及死信队列无界增长三类。全部改动**接口/返回形状不变**,`orchestrator.run.list` 新增的 `limit`/`offset` 是纯加法(不传 = 原样返回全部,行为不变)。
+
+- **`user.account.list` 的用户名模糊搜索**(`core/user/logic/user.js`):原来是 `KEYS('user:name:*关键字*')`(两头通配符,KEYS 最坏情况)+ 逐条 `redis.get()` 顺序循环(真·N+1,一次搜索= 一次 Redis 往返每个用户)。改成 `SCAN`(非阻塞、游标式)+ 一次批量 `MGET` 解析匹配项。非关键字的标准列表路径同理,`SMEMBERS` 换成 `SSCAN`,逐条 GET 换成分块 `MGET`。`user.account.status`(stats)同步改造。
+- **`orchestrator.run.list`**(`core/orchestrator/logic/run.js`):原来 `SMEMBERS` 全量 run id + 逐条 `JSON.GET`(N+1)+ 内存排序,而且**函数签名压根没有分页参数**——调用方永远拿到全部 run 历史。run 是每次工作流执行都会新增的记录,是这几个例子里最活跃、最会无限增长的业务数据。改成 `SSCAN` + 分块批量 `JSON.MGET`,新增可选 `limit`/`offset`(不传 = 原样返回全部,现有调用方例如 stall scanner 的 `list({status:'RUNNING'})` 零变化)。
+- **`nexus.schedule.list`**(`core/nexus/logic/schedule.js`):`create()`/`update()`/`del()` 其实早就在维护一个按 `fire_at` 打分的 ZSET(`NEXUS:SCHEDULE`,调度器自己要用来找到期任务),但 `list()` 却单独用 `KEYS` 扫了一遍——直接复用这个已有的 ZSET 就够了,顺带把 `list()` 自己再排一次序的代码也省了(`ZRANGE` 已经是 `fire_at` 升序)。
+- **`ORCHESTRATOR:RUNQ:DEADLETTER` 无界增长**(`core/orchestrator/logic/worker.js`):`lPush` 写入从来没配对 `LTRIM`,工作流永久失败的记录会一直堆着。补了 `ORCHESTRATOR_DLQ_MAXLEN`(默认 1000,镜像 notification 的 `DLQ_MAXLEN`)。**注意方向**:orchestrator 这里是 `lPush`(新的在头部),不是 notification 的 `rPush`(新的在尾部)——`LTRIM` 的窗口是 `0..MAXLEN-1`,不是照抄 notification 的 `-MAXLEN..-1`,抄错了会把最新的记录丢掉、留下最老的。
+- **⚠️ 排查过程中发现的一个通用坑,记一笔**:node-redis v4 的 `scanIterator`/`sScanIterator` 逐条 `yield` 单个成员,但 v5(本项目在用)**逐批 `yield` 一整个 SCAN 批次(数组)**——`for await (const x of redis.sScanIterator(...))` 里的 `x` 在 v5 下是个数组,不是单个值。这个坑仓库里 `core/nexus/logic/events.js` 之前已经踩过并留了归一化写法(`Array.isArray(x) ? push(...x) : push(x)`),这次三处新写的 SCAN 代码起初都漏了这一步——**hermetic 单测全绿(因为自己写的 fake redis 想当然按"单值"实现,复现了同一个错误假设),只有跑真实 Redis 的 e2e 在数据量大到产生多个 SCAN 批次时才暴露**。已按 `events.js` 的写法统一改过来,e2e full profile 66 套件全绿后才确认。
+- 回归:hermetic CI 白名单 122 套/1928 测试全绿;e2e full profile(整栈 15 服务真实起,`E2E_PORT_OFFSET` 避开本机其他项目的端口占用后)**66 套件/346 测试全绿**(6 skipped,非 hermetic 的 agent LLM 用例)。
+
+> 下游 action:无(接口/返回形状均未变化,`orchestrator.run.list` 新增参数是可选加法)。
+
+### Added — 补上 SCAN 批次坑的检测与回归（上一条 Fixed 里那个"hermetic 全绿但 e2e 才暴露"的坑，这次把检测手段也补上）
+
+> 上一条 Fixed 里的 v5 批次坑修完之后，顺着复盘"这个坑为什么 hermetic 测试全程没报警"，发现三层防线都有缺口：静态检查扫不到 `api/library`、所有手写 fake redis 的 SCAN mock 都是错的、错的假设本身也从没被验证过跟真实 Redis 一致。三层都补了。
+
+- **autocheck 新增 `redis-scan-normalize` 规则**（`autocheck/static/redis-scan-normalize.js`）：检测 `for await (const x of redis.xScanIterator(...))` 循环体内是否有 `Array.isArray(x)` 归一化，正则风格跟已有的「内存击穿预警」（`pagination-safety.js`）一致。
+- **`checker.js` 新增 `--lib` 模式**（`node autocheck/checker.js library --lib`）：`api/library/` 没有 `index.js`/`handlers/`/`logic/` 服务脚手架，此前 `structure.check` 会把它当"纯文档/设计阶段服务"直接跳过——entity.js 的全量拉取反模式、这次的 SCAN 批次坑，都曾在这里潜伏而没被任何 CI 检查扫到（per-service 循环从没把 `api/library` 当参数传过）。`--lib` 跳过服务脚手架校验，只跑 redis 反模式规则子集，已接入 `.github/workflows/ci.yml` 的 static job。顺带给 `pagination-safety.js`/`redis-keys.js` 加了"没有 `logic/` 子目录时退化扫描目录自身"的兼容逻辑，并给 `api/library/category.js`/`config.js`/`entity.js` 里 4 处已经权衡过、之前没打豁免注释的 `sMembers`/`hGetAll` 全量拉取补上 `// SAFE:` 标注（有界配置数据 / entity.js 向后兼容旧路径 / 一次性迁移脚本，均非新问题，只是没消音）。
+- **6 处手写 fake redis 的 `sScanIterator`/`scanIterator` 全部是"单值 yield"的错误假设**（`core/user/tests/returns-contract.test.js`、`core/nexus/tests/events.test.js`+`returns-contract.test.js`、`core/orchestrator/tests/human-in-loop.test.js`+`returns-contract.test.js`+`tests/utils/fake-redis.js`）——包括上一条 Fixed 里"已经修好"的 orchestrator 共享 mock：它这轮只是补齐了之前缺失的 `sScanIterator` 方法，但补的还是单值语义。结果是消费方代码里的 `Array.isArray` 归一化分支，从没被任何 hermetic 测试真正走到过。新增共享生成器 `library/tests/utils/redis-scan-sim.js`（`scanBatches(items, {COUNT})`，按 COUNT 切块、逐批 yield 数组），6 处 mock 的 `xScanIterator` 方法体改成委托给它，其余方法不动（没有做整体 fake redis 对象合并——风险大、6 个 mock 各自还有很多领域特有方法，只抽了这次真正出问题的 SCAN 批次原语）。已抽取的 storage/approval/gateway 三个共享 mock 没有实现 scanIterator 系列，不在这次范围内。
+- **新增契约测试**（`library/tests/redis-scan-contract.test.js`，真实 Redis）：验证"node-redis v5 逐批 yield 数组"这个假设本身，而不是只信注释。**顺带发现一个反直觉的真实 Redis 行为**：集合成员数在 `set-max-listpack-entries`（默认 128）以内时是紧凑编码，`SSCAN` 会无视 `COUNT` 提示、一次性整坨返回——37 个成员 + `COUNT:5` 时 `yields.length` 恒为 1；超过阈值转 hashtable 编码后 `SCAN` 才是真正的增量游标扫描。这也解释了当初这个坑为什么连 e2e 都不容易稳定复现：数据量不够大根本触发不了多批次。
+- **两个确定性回归用例**：`core/orchestrator/tests/run.test.js`（run 数超过 `COUNT:200`）+ `core/user/tests/returns-contract.test.js`（用户数超过 `CHUNK:200`），把"多批次也不丢数据"从"靠 e2e 数据量凑巧撞上"变成钉死的断言。两条用例都验证过辨别力（临时去掉生产代码里的 `Array.isArray` 归一化，用例会红；改完立即还原）。
+- 回归:hermetic CI 白名单 **123 套/1935 测试**全绿（新增 `redis-scan-contract.test.js` + 2 个确定性回归用例）;`autocheck --static` 全服务 + 新 `--lib` 模式跑过，无新增警告。
+
+> 下游 action:无(全部是框架自身的测试基础设施 / CI 检查规则改动，不影响任何运行时接口或返回形状)。
+
 ### Fixed — storage.asset.list()/delete() 的同类"全量拉取"问题
 
 > entity.js 游标分页（v1.1.13）落地后顺着"lib 部分还有没有类似问题"查了一遍：`api/library/` 其余几处全量拉取（category/config 的分类与配置项）数据集本身设计上就有界，不算问题；`api/library/process.js` 的 `redis.keys()` 更差但零消费者、是颗没踩上的雷；真正活跃的同类问题在 `api/apps/storage/logic/asset.js`，而且比 entity.js 那个更容易踩上——非 admin 调用方（即普通用户列自己的文件）或任何带 keyword 的调用，都会 `zRange(key,0,-1)` 全量拉取 + 逐条 `Promise.all` 单独 `get`，`delete()` 的 sha256 引用计数检查也是顺序扫全量。

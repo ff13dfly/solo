@@ -149,5 +149,8 @@ module.exports = {
         '<rootDir>/library/tests/guide.test.js',
         // system.report 闭环增强：去重计数 + triage 状态 (2026-07-23)
         '<rootDir>/router/tests/report.test.js',
+        // fake-redis scanIterator 契约测试：锁定 node-redis v5 逐批 yield 数组的假设
+        // 本身，而不是靠 e2e 数据量凑巧撞上多批次才发现语义变了（2026-08-04）
+        '<rootDir>/library/tests/redis-scan-contract.test.js',
     ],
 };

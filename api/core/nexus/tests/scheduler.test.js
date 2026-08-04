@@ -42,6 +42,7 @@ function makeFakeRedis() {
             async set(key, _p, val) { docs[key] = JSON.parse(JSON.stringify(val)); },
             async get(key)          { return docs[key] !== undefined ? JSON.parse(JSON.stringify(docs[key])) : null; },
             async del(key)          { delete docs[key]; },
+            async mGet(keys)        { return keys.map((k) => (docs[k] !== undefined ? [JSON.parse(JSON.stringify(docs[k]))] : null)); },
         },
         async keys(pattern) {
             const prefix = pattern.replace(/\*$/, '');
@@ -55,6 +56,11 @@ function makeFakeRedis() {
         },
         async zRem(key, value) {
             return zset.delete(value) ? 1 : 0;
+        },
+        async zRange(key, start, stop) {
+            const entries = [...zset.entries()].sort(([, a], [, b]) => a - b).map(([v]) => v);
+            const end = stop === -1 ? entries.length - 1 : stop;
+            return entries.slice(start, end + 1);
         },
         // node-redis v5 split the two forms: zPopMin(key) → single {value,score}
         // (or undefined), zPopMinCount(key, count) → array. The scheduler uses the

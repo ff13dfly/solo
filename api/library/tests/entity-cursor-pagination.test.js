@@ -42,8 +42,12 @@ afterAll(async () => {
 
 describe('list({cursor}) — bounded pagination for entities created after the ZSET existed', () => {
     test('walks every page newest-first, nextCursor null on the last page', async () => {
-        const created = [];
-        for (let i = 0; i < 5; i++) created.push(await entity.create({ name: `item${i}` }));
+        // Explicit, distinct createdAt per item (like entity-list-order.test.js) — cursor
+        // order is insertion-sequence (always distinct, tested on its own merits below),
+        // but the "sanity" check against the offset path sorts by createdAt, which ties
+        // at the same millisecond for a tight creation loop; ties make sMembers' unordered
+        // fetch order leak through, which isn't what this test means to assert on.
+        for (let i = 0; i < 5; i++) await entity.create({ name: `item${i}`, createdAt: 1000 + i });
 
         const p1 = await entity.list({ cursor: null, limit: 2 });
         expect(p1.items.map((i) => i.name)).toEqual(['item4', 'item3']);

@@ -124,4 +124,22 @@ describe('run entity — checkpoint + requeue', () => {
         expect(doc.actor).toBeNull();
         expect(doc.actorSource).toBeNull();
     });
+
+    // 回归：list() 的 sScanIterator 曾经（在 hermetic mock 修好之前）从没被真实验证过
+    // 会不会在多批次场景下丢数据——mock 一直是"单值 yield"的旧假设，跟生产代码共享
+    // 同一个错误前提，测试再多轮都测不出问题，只有 e2e 数据量凑巧过 COUNT 阈值才会
+    // 暴露。现在 mock 换成了真正按 COUNT 切块的 scanBatches（见
+    // library/tests/utils/redis-scan-sim.js + 契约测试 library/tests/redis-scan-contract.
+    // test.js），这条用例把"超过一页也不丢 run"钉死成确定性断言，不再指望运气。
+    test('list()：run 数超过 sScanIterator 的 COUNT（200）时，一个都不丢（多批次 SCAN 回归）', async () => {
+        const total = 205; // > COUNT:200，逼 fake redis 至少产生 2 个 SCAN 批次
+        for (let i = 0; i < total; i++) {
+            await run.create({ runId: `rScan${i}`, workflowId: 'wf-scan-batch', triggerId: 't' });
+        }
+
+        const runs = await run.list();
+
+        expect(runs.length).toBe(total);
+        expect(new Set(runs.map((r) => r.id)).size).toBe(total); // 无重复
+    });
 });

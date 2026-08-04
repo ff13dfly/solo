@@ -256,16 +256,50 @@ module.exports = (redis) => {
         return redis.json.get(grantKey(id));
     }
 
-    // List run entities, optionally filtered by status.
-    // Uses the run id index (SMEMBERS) — O(runs), not O(keyspace) KEYS scan.
-    async function list({ status } = {}) {
-        const ids = await redis.sMembers(R.runIndex);
-        const runs = [];
-        for (const id of ids) {
-            const r = await redis.json.get(key(id));
-            if (r && (!status || r.status === status)) runs.push(r);
+    /**
+     * List run entities, optionally filtered by status and paginated.
+     *
+     * @why Run history only grows (one doc per workflow execution, never pruned), so this
+     *      used to be the same anti-pattern entity.js/storage's asset.list() had before
+     *      their fix: SMEMBERS the whole index, then GET every doc one at a time (N round
+     *      trips), then sort in memory. Replaced with SSCAN (non-blocking, cursor-based —
+     *      unlike SMEMBERS it never holds Redis for one giant response) and a batched
+     *      JSON.MGET per chunk (one round trip per 200 ids, not one per id).
+     * @attention `limit`/`offset` are optional and additive — omit both (as every existing
+     *      caller does today, e.g. the stall scanner's `list({status:'RUNNING'})`) and you
+     *      get the exact same "everything matching status, newest first" bare array as
+     *      before. Passing them slices that same array — it does NOT push filtering into
+     *      Redis (status still isn't indexed), so this doesn't turn "browse all history"
+     *      into O(page); it only bounds what crosses the RPC boundary. A real fix for that
+     *      would need a per-status secondary index (storage.asset's owner/visibility
+     *      ZSETs are the template) — deferred until run volume actually needs it.
+     */
+    async function list({ status, limit, offset } = {}) {
+        const ids = [];
+        // node-redis v4 yields one member per iteration; v5 yields a whole SCAN batch
+        // (array) per iteration — normalize both (see core/nexus/logic/events.js, which
+        // hit this first).
+        for await (const batch of redis.sScanIterator(R.runIndex, { COUNT: 200 })) {
+            if (Array.isArray(batch)) ids.push(...batch); else ids.push(batch);
         }
-        return runs.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+        if (!ids.length) return [];
+
+        const runs = [];
+        const CHUNK = 200;
+        for (let i = 0; i < ids.length; i += CHUNK) {
+            const chunk = ids.slice(i, i + CHUNK);
+            const raws = await redis.json.mGet(chunk.map(key), '$');
+            for (const raw of raws) {
+                const doc = raw ? raw[0] : null;
+                if (doc && (!status || doc.status === status)) runs.push(doc);
+            }
+        }
+        runs.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+
+        if (limit === undefined && offset === undefined) return runs;
+        const start = offset || 0;
+        const end = limit !== undefined ? start + limit : runs.length;
+        return runs.slice(start, end);
     }
 
     // One-time backfill of the run id index from existing docs (legacy). KEYS here

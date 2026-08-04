@@ -68,13 +68,14 @@ module.exports = (redis, { config }) => {
     }
 
     async function list() {
-        const keys = await redis.keys(`${R.scheduleDefPrefix}*`);
-        const defs = [];
-        for (const key of keys) {
-            const d = await redis.json.get(key);
-            if (d) defs.push(d);
-        }
-        return defs.sort((a, b) => a.fire_at - b.fire_at);
+        // create()/update()/del() already maintain R.scheduleZset (score=fire_at) for the
+        // scheduler's own due-lookup — reuse it as the id index instead of a blocking KEYS
+        // scan. Bonus: ZRANGE already returns ids in fire_at-ascending order, so the JS
+        // sort this used to need is gone too.
+        const ids = await redis.zRange(R.scheduleZset, 0, -1); // SAFE: small (schedule definitions, not executions)
+        if (!ids.length) return [];
+        const raws = await redis.json.mGet(ids.map(defKey), '$');
+        return raws.map((r) => (r ? r[0] : null)).filter(Boolean);
     }
 
     async function update(id, changes = {}) {

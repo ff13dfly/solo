@@ -54,13 +54,28 @@ function printReport() {
 async function main() {
     const args = process.argv.slice(2);
     const isStatic = args.includes('--static');
+    const isLib = args.includes('--lib');
     const targetPath = args.find(a => !a.startsWith('--')) || '.';
     const resolvedPath = path.resolve(targetPath);
 
     console.log('\n🔍 Solo Microservice Checker v4.0.0');
     console.log(`📁 Target: ${resolvedPath}`);
-    if (isStatic) console.log('⚡ Mode: static (runtime checks skipped)\n');
+    if (isLib) console.log('📚 Mode: lib (flat api/library/-style dir — redis 反模式规则子集，不套服务脚手架校验)\n');
+    else if (isStatic) console.log('⚡ Mode: static (runtime checks skipped)\n');
     else console.log('');
+
+    if (isLib) {
+        // api/library/ 等共享库没有 index.js/handlers/logic/ 服务脚手架，structure.check
+        // 会把它当"纯文档/设计阶段服务"跳过（或反过来对缺失的 logic/handlers 报一堆假错误）。
+        // entity.js 的全量拉取反模式、后来的 scanIterator v5 批次坑，都曾在 api/library 里
+        // 潜伏而没被 checker.js 扫到——因为 checker.js 从没被指向过这个目录。这里只跑
+        // 跟目录形状无关的 redis 反模式规则子集，不套用服务结构假设。
+        checks.redisKeys.check(resolvedPath, results);
+        checks.paginationSafety.check(resolvedPath, results);
+        checks.redisScanNormalize.check(resolvedPath, results);
+        printReport();
+        return;
+    }
 
     if (checks.structure.check(resolvedPath, results) === false) {
         printReport();
@@ -98,6 +113,7 @@ async function main() {
     checks.throwCheck.check(resolvedPath, results);
     checks.inlineErrors.check(resolvedPath, results);
     checks.paginationSafety.check(resolvedPath, results);
+    checks.redisScanNormalize.check(resolvedPath, results);
     checks.redisTransaction.check(resolvedPath, results);
     checks.floatingPromise.check(resolvedPath, results);
     checks.taskThrottleCheck.check(resolvedPath, results);

@@ -13,6 +13,7 @@ module.exports = {
     logging: require('./logging'),
     introspection: require('./introspection'),
     redisKeys: require('./redis-keys'),
+    redisScanNormalize: require('./redis-scan-normalize'),
     dependencies: require('./dependencies'),
     // 新增模块
     startup: require('./startup'),

@@ -27,6 +27,7 @@ const createCategory = require('../../../library/category');
 const introspection = require('../handlers/introspection');
 const config = require('../config');
 const { checkReturn } = require('../../../library/contract');
+const { scanBatches } = require('../../../library/tests/utils/redis-scan-sim');
 
 const R = config.redis;
 
@@ -50,6 +51,7 @@ function makeFakeRedis() {
             async set(key, _path, value) { docs[key] = JSON.parse(JSON.stringify(value)); return 'OK'; },
             async get(key) { return docs[key] !== undefined ? JSON.parse(JSON.stringify(docs[key])) : null; },
             async del(key) { const had = key in docs; delete docs[key]; return had ? 1 : 0; },
+            async mGet(keys) { return keys.map((k) => (docs[k] !== undefined ? [JSON.parse(JSON.stringify(docs[k]))] : null)); },
         },
         async get(key) { return key in kv ? kv[key] : null; },
         async set(key, val) { kv[key] = val; return 'OK'; },
@@ -63,9 +65,16 @@ function makeFakeRedis() {
         },
         async sAdd(key, m) { const s = (sets[key] ||= new Set()); const arr = Array.isArray(m) ? m : [m]; let n = 0; for (const x of arr) { if (!s.has(x)) { s.add(x); n++; } } return n; },
         async sMembers(key) { return [...(sets[key] || [])]; },
+        async *sScanIterator(key, opts = {}) { yield* scanBatches([...(sets[key] || [])], opts); },
         async sRem(key, m) { if (sets[key]) sets[key].delete(m); return 1; },
         async sIsMember(key, m) { return !!(sets[key] && sets[key].has(m)); },
         async lPush(key, val) { (lists[key] ||= []).unshift(val); return lists[key].length; },
+        async lTrim(key, start, stop) {
+            const a = lists[key] || [];
+            const end = stop === -1 ? a.length : stop + 1;
+            lists[key] = a.slice(start < 0 ? Math.max(0, a.length + start) : start, end);
+            return 'OK';
+        },
         async blPop(key) { const a = lists[key] || []; return a.length ? { key, element: a.shift() } : null; },
         async zAdd(key, { score, value }) { (zsets[key] ||= new Map()).set(value, score); return 1; },
         async zRem(key, value) { const m = zsets[key]; if (m && m.has(value)) { m.delete(value); return 1; } return 0; },

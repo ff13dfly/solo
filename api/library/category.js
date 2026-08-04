@@ -91,7 +91,7 @@ module.exports = (redis, { serviceName, routerUrl }) => {
 
         // List all categories for this service
         async list({ includeDeleted = false } = {}) {
-            const fullKeys = await redis.sMembers(IDX_KEY);
+            const fullKeys = await redis.sMembers(IDX_KEY); // SAFE: small (一个服务的分类数量有界，非用户数据)
             if (!fullKeys.length) return [];
 
             const values = await redis.mGet(fullKeys);

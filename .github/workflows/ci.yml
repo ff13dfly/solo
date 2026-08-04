@@ -8,6 +8,11 @@ name: CI
 #            ⚠️ Run it per service dir: pointed at the api root the structure
 #            check bails out ("纯文档/设计阶段") and the gate silently checks
 #            NOTHING — that hollow form is exactly how drift accumulated.
+#            Also runs `--lib` once against api/library/ (flat dir, no service
+#            scaffolding, invisible to the per-service loop above) for the redis
+#            anti-pattern rule subset — entity.js's full-scan pattern and the
+#            scanIterator v5 batch bug both went unchecked here for a release
+#            cycle before this was added.
 #   test   — jest against a Redis service. Runs the proven-green hermetic subset
 #            (allow-list in jest.ci.config.js — 61 suites / 790 tests as of
 #            2026-06-11). Excluded suites (external-API agent tests, script-style
@@ -68,6 +73,13 @@ jobs:
             echo "::endgroup::"
           done
           exit $fail
+      - name: autocheck --lib (api/library — flat dir, no service scaffolding)
+        run: |
+          # 服务侧的 logic/ 只是各服务自己的代码；api/library/ 是被所有服务共用的
+          # 契约库，entity.js 的全量拉取反模式、scanIterator v5 批次坑都曾在这里潜伏
+          # 而没被 per-service 循环扫到（结构检查会把它当"纯文档/设计阶段服务"跳过）。
+          # --lib 模式跳过服务脚手架假设，只跑 redis 反模式规则子集，WARN 级不阻断。
+          node autocheck/checker.js library --lib
       - name: doc-drift (CLAUDE.md §2 ↔ services.json)
         working-directory: .
         run: node deploy/check-doc-drift.js

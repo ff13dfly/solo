@@ -25,6 +25,7 @@ const createIdentity = require('../logic/identity');
 const config = require('../config');
 const { checkReturn } = require('../../../library/contract');
 const introspection = require('../handlers/introspection');
+const { scanBatches } = require('../../../library/tests/utils/redis-scan-sim');
 
 const byName = Object.fromEntries(introspection.map((m) => [m.name, m]));
 const method = (n) => byName[n];
@@ -38,16 +39,18 @@ function makeFakeRedis() {
     const streams = new Map(); // key -> [{ id, message }]
     const groups = [];
     const counters = new Map();
+    const zsets = new Map();   // key -> Map(member -> score) — schedule.js's fire_at zset
     let seq = 0;
     const getSet = (k) => (sets.has(k) ? sets.get(k) : sets.set(k, new Set()).get(k));
     const getStream = (k) => (streams.has(k) ? streams.get(k) : streams.set(k, []).get(k));
+    const getZset = (k) => (zsets.has(k) ? zsets.get(k) : zsets.set(k, new Map()).get(k));
     const apply = {
         set: (k, v, o) => { if (o && o.NX && kv.has(k)) return null; kv.set(k, v); return 'OK'; },
         del: (k) => { const had = kv.has(k); kv.delete(k); sets.delete(k); hashes.delete(k); return had ? 1 : 0; },
         sAdd: (k, m) => { const s = getSet(k); const had = s.has(m); s.add(m); return had ? 0 : 1; },
         sRem: (k, m) => { const s = sets.get(k); return s && s.delete(m) ? 1 : 0; },
-        zAdd: () => 1,
-        zRem: () => 1,
+        zAdd: (k, { score, value }) => { getZset(k).set(value, score); return 1; },
+        zRem: (k, m) => { const z = zsets.get(k); return z && z.delete(m) ? 1 : 0; },
     };
     return {
         async get(k) { return kv.has(k) ? kv.get(k) : null; },
@@ -62,9 +65,14 @@ function makeFakeRedis() {
         async hGetAll(k) { return hashes.has(k) ? { ...hashes.get(k) } : {}; },
         async xGroupCreate(stream) { groups.push(stream); return 'OK'; },
         async incr(k) { const n = (counters.get(k) || 0) + 1; counters.set(k, n); return n; },
-        async zAdd() { return 1; },
-        async zRem() { return 1; },
-        async zCard() { return 0; }, // no cursor-mode list() calls in this suite
+        async zAdd(k, entry) { return apply.zAdd(k, entry); },
+        async zRem(k, m) { return apply.zRem(k, m); },
+        async zCard(k) { return zsets.has(k) ? zsets.get(k).size : 0; },
+        async zRange(k, start, stop) {
+            const entries = [...getZset(k).entries()].sort((a, b) => a[1] - b[1]).map(([v]) => v);
+            const end = stop === -1 ? entries.length - 1 : stop;
+            return entries.slice(start, end + 1);
+        },
         async keys(pattern) {
             // only the `${prefix}*` form is used (schedule.list)
             const star = pattern.indexOf('*');
@@ -75,6 +83,7 @@ function makeFakeRedis() {
             async get(k) { return kv.has(k) ? kv.get(k) : null; },
             async set(k, _pathExpr, v) { kv.set(k, v); return 'OK'; },
             async del(k) { return apply.del(k); },
+            async mGet(keys) { return keys.map((k) => (kv.has(k) ? [kv.get(k)] : null)); },
         },
         async xAdd(stream, _star, fields) { const id = `${Date.now()}-${seq++}`; getStream(stream).push({ id, message: { ...fields } }); return id; },
         async xDel(stream, id) { const s = getStream(stream); const i = s.findIndex((e) => e.id === id); if (i >= 0) { s.splice(i, 1); return 1; } return 0; },
@@ -88,10 +97,11 @@ function makeFakeRedis() {
             const s = (streams.get(stream) || []).slice().reverse();
             return (COUNT ? s.slice(0, COUNT) : s).map((e) => ({ ...e }));
         },
-        async *scanIterator({ MATCH }) {
+        async *scanIterator(opts = {}) {
+            const { MATCH } = opts;
             const star = MATCH.indexOf('*');
             const prefix = star >= 0 ? MATCH.slice(0, star) : MATCH;
-            for (const k of streams.keys()) if (k.startsWith(prefix)) yield k;
+            yield* scanBatches([...streams.keys()].filter((k) => k.startsWith(prefix)), opts);
         },
         multi() {
             const ops = [];

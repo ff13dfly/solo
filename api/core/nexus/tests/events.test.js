@@ -4,14 +4,15 @@
  */
 const createEvents = require('../logic/events');
 const config = require('../config');
+const { scanBatches } = require('../../../library/tests/utils/redis-scan-sim');
 
 // Mock just the read surface events.js uses: scanIterator / xLen / xRevRange.
 function mockRedis(streams) {
     return {
-        async *scanIterator({ MATCH, TYPE }) {
-            expect(MATCH).toBe('EVENT:*');
-            expect(TYPE).toBe('stream');
-            for (const key of Object.keys(streams)) yield key;
+        async *scanIterator(opts = {}) {
+            expect(opts.MATCH).toBe('EVENT:*');
+            expect(opts.TYPE).toBe('stream');
+            yield* scanBatches(Object.keys(streams), opts);
         },
         async xLen(key) { return (streams[key] || []).length; },
         async xRevRange(key, _start, _end, { COUNT } = {}) {
