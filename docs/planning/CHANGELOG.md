@@ -13,9 +13,11 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
-## [v1.1.14] — 2026-08-01
+## [v1.1.14] — 2026-08-05
 
-> Redis 性能局限系统排查收尾:user/orchestrator/nexus 三个核心服务的 KEYS/全量拉取反模式修复 + 死信队列裁剪 + node-redis v5 SCAN 迭代器批次坑(顺带修了 storage 那轮审计后 e2e 才暴露的问题),以及针对这个批次坑本身的检测手段补齐(autocheck 新规则 + api/library 检查入口 + fake redis 共享 SCAN 批次原语 + 真实 Redis 契约测试 + 两条确定性回归用例)。全部只加不破,hermetic CI 123 套/1935 测试 + e2e full profile 66 套件/346 测试全绿。
+> 发布产物已按 runbook §3 从本版 build：`api/publish/solo.js`（5.3M）+ `portal/publish/{operator,system}.v1.1.14.tar.gz` + `client/publish/mobile.v1.1.14.tar.gz`（build 脚本自动清掉了之前滞留的 v1.1.12 tarball）。产物目录全部 gitignore、不随 tag 入库——消费者从归档取，或由 `upgrade.sh` 从 solo 工作树 cp，所以**本机要先 build 再 upgrade 派生项目**，否则 upgrade 报 `MISSING ... rerun with FRONTEND_BUILD=force`。
+
+> Redis 性能局限系统排查收尾:user/orchestrator/nexus 三个核心服务的 KEYS/全量拉取反模式修复 + 死信队列裁剪 + node-redis v5 SCAN 迭代器批次坑(顺带修了 storage 那轮审计后 e2e 才暴露的问题),以及针对这个批次坑本身的检测手段补齐(autocheck 新规则 + api/library 检查入口 + fake redis 共享 SCAN 批次原语 + 真实 Redis 契约测试 + 两条确定性回归用例)。**同批还有 scaffold `run.sh` 的两处启动期资源冲突 fail fast**（同机多栈撞 Redis / 前端端口的静默接管,来自派生项目实测反馈）。全部只加不破,hermetic CI 123 套/1935 测试 + e2e full profile 66 套件/346 测试全绿。
 
 ### Fixed — 四处活跃的 KEYS/全量拉取反模式（Redis 性能局限系统排查的后续）
 
@@ -54,6 +56,17 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 - 回归：`asset-authz.test.js` 新增 5 个用例（迁移后快路径与降级路径结果一致、跨 owner 引用计数删除、缺计数器的降级删除）；storage 两个 hermetic 测试文件共用的 fake redis 抽到 `tests/utils/fake-redis.js`（此前两处重复维护）。CI 白名单 122 套 / 1928 测试全绿；`autocheck --static` 对 storage 单独跑过，无新增警告。
 
 > 下游 action：**建议但不强制**——不跑迁移脚本，`list()`/`delete()` 行为跟今天完全一样（只是还没提速）；数据量已经大或预计会大的部署，跑一次 `node deploy/migrate-storage-index.js` 即可切到快路径，可反复跑。
+
+### Fixed — `deploy/scaffold/run.sh` 两处启动期资源冲突从"静默接管"改成 fail fast
+
+> 来源：派生项目实测反馈 `docs/feedback/redis-port-ownership.md`（overview / trend 同机并跑）。同一种病的两处形态：**启动期检查证明力不够，撞车时静默继续**。只改 scaffold 的 `run.sh`，bundle 与服务代码零改动。
+
+- **Redis 归属校验**（`else` 分支）：原判据 `redis-cli -p $PORT ping` 只能证明"这个端口上有个 redis 在应答"，证明不了它是谁起的。多个 Solo 栈同机并跑、端口撞车时，**后起的栈会静默挂到先起者的实例上**，数据写进人家的 `deploy/redis_data`；换个启动顺序就从另一个目录加载 rdb，上一轮的数据看起来"消失"了（其实还在原目录的 rdb 里）——**不是报错，是数据看着丢了**。而且 `ping` 对 `NOAUTH` 同样返回退出码 0（实测），带密码的别家实例也会被判成 "already running"，随后业务服务报鉴权错误，**看着像密码配错，不像端口撞车**。现在改用 `CONFIG GET dir` 校验归属（一次覆盖"不是我的目录"和"没权限读→返回空"两层），不匹配就打印占用方的绝对路径并 `exit 1`。⚠️ 校验 gate 在本机 host（`127.0.0.1`/`localhost`/`::1`/空）——判据一直只用 `-p`、把 URL 里的 host 丢了，不 gate 会让"用外部 redis"的部署因本地同号端口有人占（如 brew 的 redis-stack 占着 6379）而误报退出。
+- **前端端口冲突**（`serve_frontend`）：此前**没有任何端口检查**，而 `serve` 在端口被占时会自己换一个随机端口并报告成功（14.2.4 实测：占住 39117，日志里写的是 `Accepting connections at :51410`；源码是 listen 前 `isPortReachable` 探一下、可达就无条件 `startServer({port:0})`，`--no-port-switching` 只在 arg 表里声明、**代码里从没被消费**，是个死 flag）。叠上 `run.sh` 照旧打印配置的端口、dashboard 的 `lsof` 探到的是占用方的监听 → 三层假绿，前端连续数月没起来过也没人发现。现在 spawn 前 `lsof` 探端口、被占直接 `exit 1` 并报出占用方；spawn 后再确认监听者的 pid 就是我们那个子进程（覆盖竞态和 serve 自己起不来两种情形）。
+- 两处的 `x=$(cmd | tail -1)` 都带 `|| true`：`run.sh` 是 `set -euo pipefail`，`lsof` 在端口空闲时返回 1、pipefail 下会让赋值语句直接触发 `set -e`——正常路径反而静默退出（本轮 harness 实测抓到，已修）。
+- 验证：`bash -n` 通过；用抽取真实 `run.sh` 代码段的 harness 实跑 7 种情形全对——redis 4 种（本项目实例通过 / 别家目录拒绝 / 带密码无凭证拒绝 / 远端 host 跳过校验）+ 前端 3 种（端口空闲起来且 pid 匹配 / 端口被占 fail fast / serve 二进制缺失 fail fast）。
+
+> 下游 action：**改过 `deploy/run.sh` 的项目要手动 merge**。`upgrade.sh` 的 divergence 检测不会覆盖被定制的 `run.sh`，新 stock 落成 `deploy/run.sh.solo-<ver>.new` 并标 `DIVERGED`（`FORCE_SCRIPTS=1` 才强覆盖）。另：升级后启动会**更严**——本机多栈共用一个 Redis 端口的项目（数据实际写在别家 `redis_data` 里的那种）会在启动时 `exit 1` 而不再静默接管，**先换端口 + 迁数据再升级**；前端端口被别家占着的同理。迁移说明见 `docs/feedback/redis-port-ownership.md`「处理结论」。
 
 ---
 

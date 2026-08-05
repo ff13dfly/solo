@@ -124,6 +124,7 @@ fi
 SSL_PID=""
 REDIS_STARTED_BY_US=0
 REDIS_PORT=$(node -e "try{const u=new URL(process.env.REDIS_URL||'redis://127.0.0.1:6379');process.stdout.write(u.port||'6379')}catch(e){process.stdout.write('6379')}")
+REDIS_HOST=$(node -e "try{const u=new URL(process.env.REDIS_URL||'redis://127.0.0.1:6379');process.stdout.write(u.hostname||'127.0.0.1')}catch(e){process.stdout.write('127.0.0.1')}")
 
 # Redis auth (production hardening): REDIS_PASSWORD comes from .env (init.sh generates it;
 # older projects without the line keep running unauthenticated — only-add). The password
@@ -193,6 +194,30 @@ if ! redis-cli -p "$REDIS_PORT" ping &>/dev/null 2>&1; then
     log_info "Redis started on port $REDIS_PORT ($REDIS_BIN)"
     REDIS_STARTED_BY_US=1
 else
+    # `ping` 只能证明"这个端口上有个 redis 在应答",证明不了它是谁起的。本机同时跑多个
+    # Solo 栈时(各自 .env 独立、端口分配没有全局视角),撞车的后起者会静默挂到先起者的
+    # 实例上,数据写进人家的 deploy/redis_data;换个启动顺序就从另一个目录加载 rdb,
+    # 上一轮的数据看起来"消失"了(其实还在原目录的 rdb 里)。而且 `ping` 对 NOAUTH 同样
+    # 返回退出码 0,所以带密码的别家实例也会被判成 "already running",随后业务服务连接
+    # 失败报的是鉴权错误——看着像密码配错,不像端口撞车。
+    #
+    # `CONFIG GET dir` 一次覆盖这两层:不是本项目的目录 → 不匹配;没权限读 → 返回空
+    # → 同样不匹配。REDISCLI_AUTH 已在上面导出,redis-cli 会自动带上凭证。
+    # 只对本机实例校验:REDIS_URL 指向远端时 `-p` 探的本来就是本地端口,归属无从谈起。
+    # 背景与实测:solo/docs/feedback/redis-port-ownership.md
+    case "$REDIS_HOST" in
+        127.0.0.1|localhost|::1|"")
+            # `|| true`:同 serve_frontend,别让非零退出码撞上 set -e / pipefail。
+            _redis_dir=$(redis-cli -p "$REDIS_PORT" config get dir 2>/dev/null | tail -1 || true)
+            if [ "$_redis_dir" != "$SCRIPT_DIR/redis_data" ]; then
+                log_error "端口 $REDIS_PORT 上的 Redis 不是本项目的实例,拒绝接管"
+                log_error "  它的 dir:   ${_redis_dir:-<无权限或无应答>}"
+                log_error "  本项目期望: $SCRIPT_DIR/redis_data"
+                log_error "  改 .env 的 REDIS_URL 换端口,或先停掉那个实例。"
+                exit 1
+            fi
+            ;;
+    esac
     log_info "Redis already running on port $REDIS_PORT"
 fi
 
@@ -308,10 +333,44 @@ serve_frontend() {
     if [ -n "$SYSTEM_DESCRIPTION" ]; then
         printf 'window.__SOLO_SYSTEM_DESCRIPTION__ = "%s";\n' "${SYSTEM_DESCRIPTION//\"/\\\"}" >> "$serve_dir/config.js"
     fi
+    # 端口冲突必须在启动前拦下:`serve` 在端口被占时会**静默换一个随机端口并报告成功**
+    # (实测 serve 14.2.4:占住 39117 后日志里写的是 "Accepting connections at :51410";
+    # 源码 build/main.js 是 listen 前 isPortReachable 探一下、可达就无条件 startServer
+    # ({port:0}),而 --no-port-switching 只在 arg 表里声明、代码里从没被消费 = 死 flag,
+    # 所以不能靠它)。后果是 run.sh 照旧打印配置的端口,dashboard 的 lsof 探到的是占用方
+    # 的监听 → 一路假绿,前端其实几个月没起来过也没人发现。启动期的资源冲突一律 fail
+    # fast,不 warn。背景:solo/docs/feedback/redis-port-ownership.md §六
+    # `|| true`:端口空闲时 lsof 返回 1,配上 set -o pipefail 会让赋值语句直接触发 set -e。
+    local holder
+    holder=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1 || true)
+    if [ -n "$holder" ]; then
+        log_error "  $name: 端口 $port 已被占用,拒绝启动(否则 serve 会静默换随机端口)"
+        log_error "    占用方：$holder"
+        log_error "    改 .env 里 $name 的端口,或先停掉占用方。"
+        exit 1
+    fi
     local log_file="$DEBUG_DIR/fe_${name}.log"
     "$ROOT_DIR/node_modules/.bin/serve" "$serve_dir" -p "$port" -s \
         > "$log_file" 2>&1 &
-    CHILD_PIDS+=($!)
+    local pid=$!
+    CHILD_PIDS+=($pid)
+    # 再确认监听者确实是我们这个 pid——覆盖竞态(两个栈同时起)和 serve 自己起不来
+    # (bundle 解压坏、依赖缺失)两种情形。
+    local bound=0
+    for _ in $(seq 1 25); do
+        kill -0 "$pid" 2>/dev/null || break
+        if lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$pid"; then
+            bound=1; break
+        fi
+        sleep 0.2
+    done
+    if [ $bound -eq 0 ]; then
+        log_error "  $name: 前端没能在端口 $port 上起来"
+        holder=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1 || true)
+        [ -n "$holder" ] && log_error "    端口现在的占用方：$holder"
+        log_error "    serve 日志：$log_file"
+        exit 1
+    fi
     FE_NAMES+=("$name"); FE_PORTS+=("$port"); FE_LOGS+=("$log_file")
     log_info "  $name → http://localhost:$port"
 }
