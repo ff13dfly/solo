@@ -21,6 +21,11 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 - **`serve_frontend` 的 `$SYSTEM_DESCRIPTION` 裸引用**（v1.1.13 引入）：`set -u` 下 unbound variable，而 `init.sh` 生成的 `.env` 里没有这个变量——**全新派生项目跑 stock `run.sh` 起不来任何前端**（此前没暴露是因为在用的派生项目 run.sh 都定制过、走 DIVERGED 分支，新 stock 从没被真正执行过）。改 `${SYSTEM_DESCRIPTION:-}`；`init.sh` 的 `.env` 模板补上 `SYSTEM_DISPLAY_NAME`/`SYSTEM_DESCRIPTION` 注释位（原来这个 v1.1.13 能力对消费者基本隐形）。
 - **端口守卫抽成可复用函数** `fe_assert_port_free` / `fe_confirm_bound`：派生项目常有不走 `serve_frontend` 的自有前端（finance 两个 Vite 应用、trend 一个单页），此前它们仍是"serve 静默换随机口"的重灾区；抽成函数后在项目自己的启动段里调用即可获得同等保护（两个项目各自独立提出并已在本地落地同款改法）。
 
+### Added — `init.sh` 给三个前端端口补上自动避让（此前只有核心服务 + Redis 有）
+
+- `init.sh` 早就用 `lsof` 探测给 Solo 内部服务段（8400+）和 Redis 端口自动挑空闲值，唯独 `PORTAL_OPERATOR_PORT`/`PORTAL_SYSTEM_PORT`/`CLIENT_MOBILE_PORT` 三个前端端口是硬编码 `3600`/`3650`/`3700`——同机脚手架出两个新项目默认就撞车（真实踩过：多个派生项目共用 3650/3700，叠加 `run.sh` 升级前"端口被占只 warn 不报错"的旧行为，静默失效能拖几个月没人发现）。现补上同款探测：探测到冲突整个三元组一起 `+150` 重试（保留项目内部 operator/system/mobile 间隔 50 的既有约定，重试永不与上一次失败区间重叠）。本机实测：4 个常驻栈正占着 3600/3650/3700/3800/3850/3900/3950，新脚手架自动跳到 4050/4100/4150。
+- **仅影响 `init.sh`（新建项目）**，不改变 `upgrade.sh` 行为——`.env` 是 `[Project]` 所有，升级从不touch，存量项目端口不受影响。**局限未变**：`lsof` 只看"此刻正在跑的"，看不到"隔壁项目声明了但没启动"的情况；跨项目端口台账（如本机维护的 `overview/mind/ref/ports.md`）仍是唯一能兜住这条缝的地方，`init.sh` 这次只是把"两个全新项目默认值直接相撞"这个最常见的子情形也顺手挡掉。
+
 ### Fixed — scaffold `upgrade.sh`：它保证的是「产物就位」，不是「栈还能跑」——三个消费者侧盲点
 
 - **`docs/README.md` 改标记块覆盖**。原来与三份 authoring 契约一起整份无条件覆盖，但 README 是索引、天然被项目扩展，项目自己加的章节会被静默抹掉（trend 丢过一整节集成文档索引）。模板加 `<!-- solo:begin/end -->` 标记，升级只替换标记块内的 Solo 区、块外原样保留；无标记的存量 README（≤v1.1.14 模板或整个重写过的）不覆盖，新模板 staged 成 `docs/README.md.solo-<ver>.new` 等人合并（与 deploy 脚本 DIVERGED 策略一致）。三份 `authoring/*.md` 契约维持无条件整份覆盖不变——那是对的。
@@ -37,7 +42,7 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 - sample 的 mock 此前有 `incr`/`zAdd`/`zRem`/`zCard`/`sCard` 但缺 `zRange`/`zScore`——派生项目照新 sample 写 cursor 模式的 hermetic 测试仍会撞墙。补齐两者，`zRange` 按真 Redis 语义实现（REV 下入参 `(max,min)`、`+inf`/`-inf`/`"(n"` 开区间边界），并加 cursor 翻页用例钉住语义（假实现语义错了比没有更危险——hermetic 全绿、错误假设藏到真 Redis 才炸，同 v1.1.14 SCAN 批次坑的教训）。
 - mock 上方加显式提示：**命令集跟着 `api/library/entity.js` 的依赖走，抄出去之后每次升级要回来对一次差**。v1.1.13 的下游 action 原文「无强制」已补正为「运行时无强制，hermetic 测试有强制」（见该条目）。
 
-> 下游 action：**改过 `deploy/run.sh` 的项目要手动 merge 新 stock**（升级时按 DIVERGED 流程落 `.new`；finance/trend 已自行打过 pgid/unbound 补丁的，merge 时以新 stock 为准对齐）。**手写 fake redis 的服务测试补 `incr`/`zAdd`/`zRem`**（v1.1.13 起就需要，见该条目补正；照新版 `api/sample/tests/item.test.js` 对齐最快）。docs/README.md 无标记的项目首次升级会看到 staged 的 `.new`——把项目章节挪到其 `solo:end` 之后合并一次，之后升级只动标记块。operator 有 tarball 的项目每次升级后按自检 ACTION 重建/拷贝一次。
+> 下游 action：**改过 `deploy/run.sh` 的项目要手动 merge 新 stock**（升级时按 DIVERGED 流程落 `.new`；finance/trend 已自行打过 pgid/unbound 补丁的，merge 时以新 stock 为准对齐）。**手写 fake redis 的服务测试补 `incr`/`zAdd`/`zRem`**（v1.1.13 起就需要，见该条目补正；照新版 `api/sample/tests/item.test.js` 对齐最快）。docs/README.md 无标记的项目首次升级会看到 staged 的 `.new`——把项目章节挪到其 `solo:end` 之后合并一次，之后升级只动标记块。operator 有 tarball 的项目每次升级后按自检 ACTION 重建/拷贝一次。**`init.sh` 前端端口自动避让**对存量项目无动作——只影响新建脚手架，`.env` 是 `[Project]` 所有，`upgrade.sh` 从不改。
 
 ---
 

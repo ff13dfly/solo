@@ -311,6 +311,29 @@ log_info "Generated: deploy/solo-services.json (per-project port range, owned by
 
 # --- 10. .env ---
 
+# Frontend ports (operator/system/mobile): same self-avoidance as the Solo
+# internal service range above. Left hardcoded, two projects scaffolded on
+# the same machine land on identical defaults — a real collision (multiple
+# derived projects ended up sharing 3650/3700, and run.sh's pre-v1.1.14
+# "warn only" port handling let it go silently unnoticed for months). Each
+# project's own trio still keeps the documented 50-apart spacing
+# (operator/system/mobile); on conflict the whole trio shifts by 150 so a
+# retry never overlaps the failed one.
+FE_PORT_BASE=3600
+while :; do
+    _fe_conflict=0
+    for _off in 0 50 100; do
+        lsof -i:"$((FE_PORT_BASE + _off))" &>/dev/null 2>&1 && { _fe_conflict=1; break; }
+    done
+    [ $_fe_conflict -eq 0 ] && break
+    FE_PORT_BASE=$((FE_PORT_BASE + 150))
+    [ $FE_PORT_BASE -gt 5000 ] && log_error "No free frontend port trio found below 5000"
+done
+PORTAL_OPERATOR_PORT=$FE_PORT_BASE
+PORTAL_SYSTEM_PORT=$((FE_PORT_BASE + 50))
+CLIENT_MOBILE_PORT=$((FE_PORT_BASE + 100))
+log_info "Frontend ports: operator=$PORTAL_OPERATOR_PORT system=$PORTAL_SYSTEM_PORT mobile=$CLIENT_MOBILE_PORT (auto-selected, not currently in use)"
+
 # Find an available Redis port starting from 6380
 REDIS_PORT=6380
 while lsof -i:"$REDIS_PORT" &>/dev/null 2>&1; do
@@ -338,9 +361,9 @@ ROUTER_PUBLIC_KEY=$ROUTER_PUBLIC_KEY
 ENABLE_STATIC_ASSETS=false
 
 # Frontend servers (run.sh serves pre-built bundles from portal/publish & client/publish)
-PORTAL_OPERATOR_PORT=3600
-PORTAL_SYSTEM_PORT=3650
-CLIENT_MOBILE_PORT=3700
+PORTAL_OPERATOR_PORT=$PORTAL_OPERATOR_PORT
+PORTAL_SYSTEM_PORT=$PORTAL_SYSTEM_PORT
+CLIENT_MOBILE_PORT=$CLIENT_MOBILE_PORT
 
 # 门户品牌（可选，v1.1.13+）：system/operator 侧边栏与登录页标题、system Overview 说明卡。
 # 多实例同时打开时用来一眼分清是哪个部署；不配 = 显示通用文案。
