@@ -20,8 +20,19 @@ const createItemLogic = require('../logic/item');
 
 // ── fake redis ────────────────────────────────────────────────────────────────
 // 只实现 Entity Factory(string 存储路径)真正用到的命令:get/set(NX)/del/mGet、
-// 集合索引 sAdd/sMembers/sRem、以及 multi().set().sAdd().exec() 原子写。
+// 集合索引 sAdd/sMembers/sRem/sCard、游标索引 incr/zAdd/zRem/zCard/zRange/zScore、
+// 以及 multi().set().sAdd().exec() 原子写。
 // 没有 duplicate() —— library/optimistic.js 会自动退回普通 read-modify-write,单测够用。
+//
+// ⚠️ 这份 mock 的命令集跟着 api/library/entity.js 的依赖走。抄到自己服务里之后,
+//    每次升级 Solo 都要回来对一次差——v1.1.13 起 create()/delete() 无条件写游标
+//    ZSET(incr/zAdd/zRem),缺了它们测试会在升级后立刻 `TypeError: redis.incr is
+//    not a function`(生产不受影响,真 Redis 什么都有——正因如此只有测试能暴露它)。
+//
+// ⚠️ 补命令时语义要按真 Redis 写,不能"能跑就行":假实现的语义错了比没有假实现
+//    更危险——hermetic 全绿,错误假设一路藏到真 Redis 才炸。典型陷阱:zRange 在
+//    REV 下入参是 (max, min) 而不是 (min, max)。下面的 zRange 按真语义实现,并有
+//    cursor 用例钉住它。
 function makeFakeRedis() {
     const kv = new Map();    // key -> string
     const sets = new Map();  // key -> Set
@@ -53,6 +64,28 @@ function makeFakeRedis() {
         async zAdd(k, entry) { return apply.zAdd(k, entry); },
         async zRem(k, m) { return apply.zRem(k, m); },
         async zCard(k) { return zsets.has(k) ? zsets.get(k).size : 0; },
+        async zScore(k, m) { const z = zsets.get(k); return z && z.has(m) ? z.get(m) : null; },
+        // 只实现 _listByCursor 用到的 BYSCORE 路径,但边界/排序语义与真 Redis 对齐:
+        // REV 时 (start, stop) = (max, min);边界支持 +inf / -inf / "(n" 开区间。
+        async zRange(k, start, stop, opts = {}) {
+            if (opts.BY !== 'SCORE') throw new Error('fake zRange: only BY:"SCORE" is implemented');
+            const parse = (b) => {
+                if (b === '+inf') return { v: Infinity, excl: false };
+                if (b === '-inf') return { v: -Infinity, excl: false };
+                const s = String(b);
+                return s.startsWith('(') ? { v: Number(s.slice(1)), excl: true } : { v: Number(s), excl: false };
+            };
+            const a = parse(start); const b = parse(stop);
+            const max = opts.REV ? a : b; const min = opts.REV ? b : a;
+            const entries = [...(zsets.get(k) || new Map())]
+                .filter(([, score]) => (min.excl ? score > min.v : score >= min.v) &&
+                                       (max.excl ? score < max.v : score <= max.v))
+                .sort(([m1, s1], [m2, s2]) => (s1 - s2) || (m1 < m2 ? -1 : m1 > m2 ? 1 : 0));
+            if (opts.REV) entries.reverse();
+            const off = opts.LIMIT ? opts.LIMIT.offset : 0;
+            const cnt = opts.LIMIT ? opts.LIMIT.count : entries.length;
+            return entries.slice(off, off + cnt).map(([member]) => member);
+        },
         multi() {
             const ops = [];
             const chain = {
@@ -112,5 +145,26 @@ describe('sample item logic (hermetic — injected fake redis)', () => {
         await item.delete({ id: c.id });
         const after = await item.get({ id: c.id });
         expect(after.status).toBe('DELETED');                  // 软删:记录还在,状态翻成 DELETED
+    });
+
+    test('list({cursor}) → 有界翻页直到 nextCursor=null(钉住 mock 的 zRange/zScore 真语义)', async () => {
+        const created = [];
+        for (let i = 0; i < 5; i++) created.push(await item.create({ name: `it-${i}` }));
+
+        const page1 = await item.list({ cursor: null, limit: 2 });
+        expect(page1.items).toHaveLength(2);
+        expect(page1.items.map((x) => x.name)).toEqual(['it-4', 'it-3']); // 插入序倒排
+        expect(page1.nextCursor).toBeTruthy();
+
+        const page2 = await item.list({ cursor: page1.nextCursor, limit: 2 });
+        expect(page2.items.map((x) => x.name)).toEqual(['it-2', 'it-1']);
+
+        const page3 = await item.list({ cursor: page2.nextCursor, limit: 2 });
+        expect(page3.items.map((x) => x.name)).toEqual(['it-0']);
+        expect(page3.nextCursor).toBeNull();                   // 不足一页 = 走完了
+
+        // 三页拼起来恰好每条一次:mock 的 (max,min)+开区间边界写反任何一处都到不了这里
+        const walked = [...page1.items, ...page2.items, ...page3.items].map((x) => x.id);
+        expect(new Set(walked).size).toBe(5);
     });
 });

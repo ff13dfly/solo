@@ -11,6 +11,34 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.1.x`）。
 
+> 本批全部来自 2026-08-06 两个派生项目（finance、trend）升 v1.1.14 的同日实测反馈：
+> `docs/feedback/scaffold-startup-guards-fallout.md` + `patch-upgrade-consumer-gaps.md` + `autocheck-hardcoded-page-regex.md`。
+
+### Fixed — scaffold `run.sh`：v1.1.14 fail fast 的退出路径反咬一口（同机多栈误杀）+ 两处启动阻断
+
+- **`cleanup()` 端口清扫加进程组判据**。"保险起见"的端口清扫对两份 services.json 里所有端口无条件 `kill -9`，这在 v1.1.14 之前只在 Ctrl+C 时跑（杀的确实是自己）；v1.1.14 加了 fail fast 后，**每条 `exit 1` 路径都经 EXIT trap 走这段清扫**——端口撞车时"第二个实例没抢到任何东西，却把先起的栈连根拔了"（finance/trend 双双实测复现），恰好发生在守卫要保护的同机多栈场景。现清扫前比对 `pgid`，只杀自己这一支（子进程不 `setsid`，pgid 继承自 run.sh，判据成立；保留"抓自己 detach 掉的孙子进程"原意）。
+- **`cleanup()` 保留真实退出码**。原结尾无条件 `exit 0` 把 fail fast 的 `exit 1` 吃掉，`start-all.command` 这类按退出码判断的启动器会把"拒绝启动"读成"起好了"。顺带加了 trap 防重入。
+- **`serve_frontend` 的 `$SYSTEM_DESCRIPTION` 裸引用**（v1.1.13 引入）：`set -u` 下 unbound variable，而 `init.sh` 生成的 `.env` 里没有这个变量——**全新派生项目跑 stock `run.sh` 起不来任何前端**（此前没暴露是因为在用的派生项目 run.sh 都定制过、走 DIVERGED 分支，新 stock 从没被真正执行过）。改 `${SYSTEM_DESCRIPTION:-}`；`init.sh` 的 `.env` 模板补上 `SYSTEM_DISPLAY_NAME`/`SYSTEM_DESCRIPTION` 注释位（原来这个 v1.1.13 能力对消费者基本隐形）。
+- **端口守卫抽成可复用函数** `fe_assert_port_free` / `fe_confirm_bound`：派生项目常有不走 `serve_frontend` 的自有前端（finance 两个 Vite 应用、trend 一个单页），此前它们仍是"serve 静默换随机口"的重灾区；抽成函数后在项目自己的启动段里调用即可获得同等保护（两个项目各自独立提出并已在本地落地同款改法）。
+
+### Fixed — scaffold `upgrade.sh`：它保证的是「产物就位」，不是「栈还能跑」——三个消费者侧盲点
+
+- **`docs/README.md` 改标记块覆盖**。原来与三份 authoring 契约一起整份无条件覆盖，但 README 是索引、天然被项目扩展，项目自己加的章节会被静默抹掉（trend 丢过一整节集成文档索引）。模板加 `<!-- solo:begin/end -->` 标记，升级只替换标记块内的 Solo 区、块外原样保留；无标记的存量 README（≤v1.1.14 模板或整个重写过的）不覆盖，新模板 staged 成 `docs/README.md.solo-<ver>.new` 等人合并（与 deploy 脚本 DIVERGED 策略一致）。三份 `authoring/*.md` 契约维持无条件整份覆盖不变——那是对的。
+- **升级后自检补 operator 扫描**。`run.sh` 按 `.solo-version` 拼名找 `operator.v<ver>.tar.gz`，而 upgrade 明确不碰 operator（source-distributed，项目所有）——两条规则各自都对，叠起来 = **每次升级后 operator 门户静默掉线**（只在 run.sh 里留一行 warn），它恰恰还是自检唯一跳过的前端。现自检发现失配即标 ACTION 并附可直接复制的重建三行命令；**不做**"自动拷 Solo 的 tarball"（trend 逐文件 diff 出 7 个定制文件，自动拷会静默抹掉定制且 `git status` 干净、无从发现——两个项目一个零改动一个有改动，说明两种情况都常见，判定不了就不代做）。
+- **`Next:` 补「跑一遍项目自己的测试」**。升级后的常规验证（重启/health/看端口）对"产物就位但项目代码不兼容"（如 fake redis 缺新命令）全部会绿，只有项目自己的测试能兜住；runbook 里写了但实操走的是脚本结尾的 `Next:`。顺带修一处潜伏 crash：自检里 `ls ... | xargs` 流水线在 tarball 缺失时非零退出，`set -o pipefail` 下会让自检中途静默退出。
+
+### Fixed — autocheck「硬编码分页数字」正则少右边界，报出不存在的数字
+
+- `config-check.js` 的 `(\d{2,4})` 无右边界，`DEDUP_SCAN_LIMIT = 10000` 被匹配掉前 4 位报成「硬编码分页数字 1000」——报警指向**不存在的数字**，排查者得读完代码才能确认是误报（trend 三个服务 7 处全是这种）。两个捕获组补 `(?!\d)`；实测右边界后真警告（`LIMIT = 100`）仍命中。
+- 加 `// SAFE:` 单行豁免，与同目录 `pagination-safety.js` 既有约定一致——「确实是大数字、但确实不是分页」（全量扫描上限等）从此有正规消音方式，不必改常量名迁就检查器。
+
+### Changed — `api/sample` fake redis 补齐游标读路径 + 声明为"随版本更新的模板"
+
+- sample 的 mock 此前有 `incr`/`zAdd`/`zRem`/`zCard`/`sCard` 但缺 `zRange`/`zScore`——派生项目照新 sample 写 cursor 模式的 hermetic 测试仍会撞墙。补齐两者，`zRange` 按真 Redis 语义实现（REV 下入参 `(max,min)`、`+inf`/`-inf`/`"(n"` 开区间边界），并加 cursor 翻页用例钉住语义（假实现语义错了比没有更危险——hermetic 全绿、错误假设藏到真 Redis 才炸，同 v1.1.14 SCAN 批次坑的教训）。
+- mock 上方加显式提示：**命令集跟着 `api/library/entity.js` 的依赖走，抄出去之后每次升级要回来对一次差**。v1.1.13 的下游 action 原文「无强制」已补正为「运行时无强制，hermetic 测试有强制」（见该条目）。
+
+> 下游 action：**改过 `deploy/run.sh` 的项目要手动 merge 新 stock**（升级时按 DIVERGED 流程落 `.new`；finance/trend 已自行打过 pgid/unbound 补丁的，merge 时以新 stock 为准对齐）。**手写 fake redis 的服务测试补 `incr`/`zAdd`/`zRem`**（v1.1.13 起就需要，见该条目补正；照新版 `api/sample/tests/item.test.js` 对齐最快）。docs/README.md 无标记的项目首次升级会看到 staged 的 `.new`——把项目章节挪到其 `solo:end` 之后合并一次，之后升级只动标记块。operator 有 tarball 的项目每次升级后按自检 ACTION 重建/拷贝一次。
+
 ---
 
 ## [v1.1.14] — 2026-08-05
@@ -81,7 +109,8 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 - **存量数据需要迁移**：cursor 模式要求排序 ZSET 与旧 SET 索引条目数一致，不一致直接 `INVALID_PARAMS`（不做静默降级到慢路径——那样"cursor 到底有没有真的变快"会完全不可见）。新增一次性、幂等的迁移入口：每个 entity 实例的 `migrateCursorIndex()` 方法，以及可直接跑的 CLI `deploy/migrate-cursor-index.js <serviceName> <entityName> [json]`。全新服务/全新实体不需要迁移（`create()` 已自动双写两个索引）。
 - 回归：`entity-cursor-pagination.test.js`（9 用例，真实 Redis）+ 全 CI 白名单 122 套/1923 测试绿（新增两个 Redis 命令依赖后，approval/collection/gateway 等服务的 hermetic fake redis 补了 `incr`/`zAdd`/`zRem`）。
 
-> 下游 action：**无强制**（不传 `cursor` 行为完全不变，`migrateCursorIndex()` 不跑也不影响现有 offset 调用）。想在数据量大的实体上用 cursor 分页：① 跑一次 `node deploy/migrate-cursor-index.js <service> <entity>`（RedisJSON 实体加第三个参数 `json`）补历史索引；② 调用侧把 `{limit,offset}` 换成 `{cursor}` 循环取 `nextCursor` 直到为 `null`；③ 若 UI 依赖"第 X 页共 Y 页"，cursor 模式没有这个数字，需要改造成"加载更多"。
+> 下游 action：**运行时无强制**（不传 `cursor` 行为完全不变，`migrateCursorIndex()` 不跑也不影响现有 offset 调用）。**但 hermetic 测试有强制**：`create()`/`delete()` 现在**无条件**双写游标 ZSET（跟调用方传不传 `cursor` 无关），任何手写 fake redis 的服务测试必须补 `incr` / `zAdd` / `zRem`，否则升级后第一次跑测试就是 `TypeError: redis.incr is not a function`——照抄过 `api/sample/tests/item.test.js` 旧版 mock 的项目全部受影响（生产不受影响，真 Redis 什么都有；正因如此只有项目自己的测试能暴露它，升级后务必跑一遍）。要写 cursor 模式的测试还需 `zRange`（注意 REV 下入参是 `(max, min)`）与 `zScore`，对齐新版 sample mock 即可。*（此段 2026-08-06 补正：原文只写「无强制」，trend 升级实测 6 套件/39 测试当场红，见 `docs/feedback/patch-upgrade-consumer-gaps.md` §一。）*
+> 想在数据量大的实体上用 cursor 分页：① 跑一次 `node deploy/migrate-cursor-index.js <service> <entity>`（RedisJSON 实体加第三个参数 `json`）补历史索引；② 调用侧把 `{limit,offset}` 换成 `{cursor}` 循环取 `nextCursor` 直到为 `null`；③ 若 UI 依赖"第 X 页共 Y 页"，cursor 模式没有这个数字，需要改造成"加载更多"。
 
 ### Added — portal 品牌名 / 系统说明可从 `.env` 配置
 

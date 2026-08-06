@@ -150,17 +150,55 @@ done
 #     {{PROJECT_NAME}} substitution (package.json name, else dir basename).
 PROJECT_NAME="$(node -e "try{process.stdout.write(String(require('$PROJ/package.json').name||''))}catch(e){}" 2>/dev/null || true)"
 [ -z "$PROJECT_NAME" ] && PROJECT_NAME="$(basename "$PROJ")"
+
+# README 与三份 authoring 契约不同:契约陈旧即错误,整份重下发是对的;README 是**索引**,
+# 天然会被项目扩展(集成文档表、架构决策、运维手册),整份覆盖会把项目自己的章节静默抹掉
+# (trend 实测丢过一整节)。改为标记块覆盖:只替换 solo:begin..solo:end 之间的 Solo 区,
+# 块外内容原样保留;无标记的存量 README(≤v1.1.14 模板,或项目整个重写过)不覆盖,
+# 新模板 staged 成 .new 等人合并——与 deploy 脚本的 DIVERGED 策略一致。
+# 背景:solo/docs/feedback/patch-upgrade-consumer-gaps.md §二
+README_STAGED=0
+_readme_tmp="$(mktemp)"
+sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" -e "s|{{SOLO_VERSION}}|$SOLO_VERSION|g" \
+    "$SCRIPT_DIR/docs/README.md" > "$_readme_tmp"
+if [ ! -f "$PROJ/docs/README.md" ]; then
+    if [ $DRY -eq 0 ]; then mkdir -p "$PROJ/docs"; cp "$_readme_tmp" "$PROJ/docs/README.md"; fi
+    REPORT+=("authoring   + docs/README.md  (was missing — added, with solo:begin/end markers)")
+elif grep -qxF '<!-- solo:begin -->' "$PROJ/docs/README.md" && grep -qxF '<!-- solo:end -->' "$PROJ/docs/README.md"; then
+    # 标记匹配必须整行精确(-x / awk ==):模板的说明注释、项目正文里都可能出现
+    # "solo:end" 字样,子串匹配会在说明文字处提前判定块结束,把过期的 Solo 块
+    # 原样留下、还报告成"已重下发"(本轮合成项目实测踩到后改为精确匹配)。
+    if [ $DRY -eq 0 ]; then
+        _readme_out="$(mktemp)"
+        awk -v tmpl="$_readme_tmp" '
+            $0 == "<!-- solo:begin -->" && !done {
+                while ((getline tline < tmpl) > 0) { print tline; if (tline == "<!-- solo:end -->") break }
+                close(tmpl); skipping = 1; done = 1; next
+            }
+            skipping { if ($0 == "<!-- solo:end -->") skipping = 0; next }
+            { print }
+        ' "$PROJ/docs/README.md" > "$_readme_out"
+        mv "$_readme_out" "$PROJ/docs/README.md"
+    fi
+    REPORT+=("authoring   → docs/README.md  (solo block re-synced; project sections outside markers kept)")
+elif cmp -s "$_readme_tmp" "$PROJ/docs/README.md"; then
+    REPORT+=("authoring   = docs/README.md  (already current)")
+else
+    if [ $DRY -eq 0 ]; then cp "$_readme_tmp" "$PROJ/docs/README.md.solo-${NEW_VER}.new"; fi
+    REPORT+=("authoring   ! docs/README.md  (no solo markers (≤v1.1.14 template or fully custom) — NOT overwritten; new template staged as docs/README.md.solo-${NEW_VER}.new)")
+    README_STAGED=1
+fi
+rm -f "$_readme_tmp"
+
 if [ $DRY -eq 0 ]; then
     mkdir -p "$PROJ/docs/authoring/workflow-examples"
-    sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" -e "s|{{SOLO_VERSION}}|$SOLO_VERSION|g" \
-        "$SCRIPT_DIR/docs/README.md" > "$PROJ/docs/README.md"
     for _doc in service.md events.md workflows.md; do
         sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" -e "s|{{SOLO_VERSION}}|$SOLO_VERSION|g" \
             "$SCRIPT_DIR/docs/authoring/$_doc" > "$PROJ/docs/authoring/$_doc"
     done
     cp "$SCRIPT_DIR/docs/authoring/workflow-examples/"*.json "$PROJ/docs/authoring/workflow-examples/"
 fi
-REPORT+=("authoring   → docs/ (README + authoring/{service,events,workflows}.md + examples)  (version-pinned)")
+REPORT+=("authoring   → docs/authoring/{service,events,workflows}.md + examples  (version-pinned contracts, whole-file re-sync)")
 
 # 3d-migrate. Pre-docs/ projects shipped these Solo-owned authoring files at api/AUTHORING.*.md
 #     and workflows/. Now consolidated under docs/ (above), so upgrade would otherwise leave the
@@ -247,7 +285,7 @@ if [ $DRY -eq 0 ]; then
     # frontend version consistency: the only system/mobile tarball present must match .solo-version
     for pair in "portal/publish:system" "client/publish:mobile"; do
         d="${pair%%:*}"; n="${pair##*:}"
-        got=$(ls "$PROJ/$d/${n}.v"*.tar.gz 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ')
+        got=$(ls "$PROJ/$d/${n}.v"*.tar.gz 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ' || true)
         if [ -z "$got" ]; then
             log_warn "$n: no tarball present (run.sh will skip/serve nothing for it)"
         elif [ "$got" = "${n}.v${SOLO_VERSION}.tar.gz " ]; then
@@ -256,6 +294,26 @@ if [ $DRY -eq 0 ]; then
             log_warn "$n: version mismatch / stale present → [$got] (expected only ${n}.v${SOLO_VERSION}.tar.gz)"; fail=1
         fi
     done
+    # operator 是 [Project] 所有(source-distributed),upgrade 从不下发它的 tarball;
+    # 但 run.sh 严格按 .solo-version 拼名找 operator.v{ver}.tar.gz。两条规则各自都对,
+    # 叠起来 = 每次升级后 operator 门户静默掉线(run.sh 里只剩一行 warn),直到项目侧
+    # 重建 tarball——它恰恰此前是自检唯一跳过的那个。这里把失配放大成 ACTION,并附
+    # 可直接复制的重建命令(「知道该重建」和「知道怎么重建」之间隔着一次翻源码)。
+    # 背景:solo/docs/feedback/scaffold-startup-guards-fallout.md §③ + patch-upgrade-consumer-gaps.md §三
+    _op_port=$(grep -E '^[[:space:]]*PORTAL_OPERATOR_PORT=' "$PROJ/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
+    _op_tars=$(ls "$PROJ/portal/publish/operator.v"*.tar.gz 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ' || true)
+    if [ -f "$PROJ/portal/publish/operator.v${SOLO_VERSION}.tar.gz" ]; then
+        log_info "operator: operator.v${SOLO_VERSION}.tar.gz (matches .solo-version)"
+    elif [ -n "$_op_tars" ] || [ -n "$_op_port" ]; then
+        fail=1
+        log_warn "operator: WILL NOT be served after this upgrade — run.sh serves operator.v${SOLO_VERSION}.tar.gz by .solo-version; present: [${_op_tars:-none}]"
+        log_warn "  ACTION (project side, pick one):"
+        log_warn "  a) portal/operator/ NEVER customized (verify: file-by-file diff vs Solo at the matching tag) → copy Solo's operator.v${SOLO_VERSION}.tar.gz into portal/publish/"
+        log_warn "  b) customized (common — copying Solo's tarball would silently wipe it) → rebuild from the project's own source:"
+        log_warn "       (cd $PROJ/portal/operator && npm install && npx vite build --base /)"
+        log_warn "       rm -f $PROJ/portal/publish/operator.v*.tar.gz"
+        log_warn "       tar -czf $PROJ/portal/publish/operator.v${SOLO_VERSION}.tar.gz -C $PROJ/portal/operator/dist ."
+    fi
     [ $fail -eq 0 ] && log_info "Self-check passed" || log_warn "Self-check found issues (above)"
 fi
 
@@ -300,11 +358,22 @@ fi
 echo ""
 echo "Next:"
 echo "   1. Restart the project:  (cd $PROJ && bash deploy/run.sh)"
+# upgrade 保证的是「[Solo] 产物就位」,不是「这个栈还能跑」——产物就位但项目代码不
+# 兼容的缺口(如 hermetic fake redis 缺新命令)只有项目自己的测试能兜住,而升级后的
+# 常规验证(重启/health/看端口)全部会绿。trend 实测:v1.1.13 后 39 个测试红着,生产全绿。
+echo "   2. Run the project's OWN tests (e.g. cd $PROJ && npx jest api/apps) — upgrade guarantees"
+echo "      [Solo] artifacts are in place, NOT that your code still passes (see ACTION REQUIRED above, if any)"
 if [ $DIVERGED -eq 1 ] && [ $FORCE_SCRIPTS -eq 0 ]; then
-    echo "   2. Review diverged deploy scripts — diff each against its *.solo-${NEW_VER}.new and merge"
+    echo "   3. Review diverged deploy scripts — diff each against its *.solo-${NEW_VER}.new and merge"
     echo "      (e.g. the seed-registry wiring / frontend-serve logic from the new stock run.sh)"
 fi
-echo "   • portal/operator/ is source-distributed and was NOT touched — diff it manually vs Solo if you want the new operator UI"
+if [ "${README_STAGED:-0}" -eq 1 ]; then
+    echo "   • docs/README.md kept as-is (no solo markers) — merge your project sections below the"
+    echo "     solo:end marker of docs/README.md.solo-${NEW_VER}.new, then replace; future upgrades"
+    echo "     will only touch the marked solo block"
+fi
+echo "   • portal/operator/ is source-distributed and was NOT touched — if self-check flagged a stale"
+echo "     operator tarball above, rebuild/copy it or the operator portal will not be served"
 echo "   • v1.0→v1.1 first-time: ensure Redis is redis-stack-server (RedisJSON) — see docs/runbook/upgrade-v1.0-to-v1.1.md §2"
 [ $DRY -eq 1 ] && { echo ""; log_warn "DRY-RUN — nothing was written. Re-run without --dry-run to apply."; }
 log_info "Done."

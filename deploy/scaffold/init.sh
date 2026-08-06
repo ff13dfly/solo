@@ -342,6 +342,11 @@ PORTAL_OPERATOR_PORT=3600
 PORTAL_SYSTEM_PORT=3650
 CLIENT_MOBILE_PORT=3700
 
+# 门户品牌（可选，v1.1.13+）：system/operator 侧边栏与登录页标题、system Overview 说明卡。
+# 多实例同时打开时用来一眼分清是哪个部署；不配 = 显示通用文案。
+# SYSTEM_DISPLAY_NAME=$PROJECT_NAME
+# SYSTEM_DESCRIPTION=
+
 # --- Outbound gateway (gateway service) ---
 
 # 加密 SMTP 账号密码用（gateway.smtp.* 的前置条件，已随机生成）。

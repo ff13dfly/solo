@@ -93,7 +93,10 @@ function check(servicePath, results) {
         //   limit: 20      limit: 100
         //   LIMIT 20       pageSize = 20
         // 排除合理的小数字：0, 1, 2（常用于索引/布尔场景）
-        const hardcodedPagePattern = /(?:\.slice\s*\(\s*(?:offset\s*,\s*)?(\d{2,4})\s*\)|(?:limit|LIMIT|pageSize)\s*[=:]\s*(\d{2,4}))/g;
+        // (?!\d) 右边界必须有：没有它，`DEDUP_SCAN_LIMIT = 10000` 会被 \d{2,4} 匹配掉
+        // 前 4 位、报成不存在的「1000」——报警指向不存在的数字，排查者得读完代码才能
+        // 确认是误报（trend 实测 7 处，docs/feedback/autocheck-hardcoded-page-regex.md）。
+        const hardcodedPagePattern = /(?:\.slice\s*\(\s*(?:offset\s*,\s*)?(\d{2,4})(?!\d)\s*\)|(?:limit|LIMIT|pageSize)\s*[=:]\s*(\d{2,4})(?!\d))/g;
 
         for (const file of logicFiles) {
             const lContent = fs.readFileSync(path.join(logicDir, file), 'utf-8');
@@ -105,6 +108,10 @@ function check(servicePath, results) {
                 const lineIdx = lContent.slice(0, m.index).split('\n').length - 1;
                 const lineText = lContent.split('\n')[lineIdx] || '';
                 if (lineText.trimStart().startsWith('//') || lineText.trimStart().startsWith('*')) continue;
+                // 豁免：// SAFE: 单行标注——与同目录 pagination-safety.js 的既有约定一致。
+                // 「确实是个大数字、但确实不是分页」（全量扫描上限等）从此有正规消音方式，
+                // 不必改常量名迁就检查器。
+                if (lineText.includes('// SAFE:')) continue;
                 // 豁免：已引用 config.pageSize（说明当前行是做默认值对比）
                 if (lineText.includes('config.pageSize') || lineText.includes('pageSize')) continue;
                 // 豁免：测试/种子文件

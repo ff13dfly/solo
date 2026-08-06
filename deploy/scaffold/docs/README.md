@@ -1,3 +1,7 @@
+<!-- solo:begin -->
+<!-- ⚠️ 上面的标记到下方结束标记之间是 Solo 拥有的区域：upgrade.sh 升级时整块覆盖到新模板。
+     项目自己的章节（集成文档索引、架构决策、运维手册…）写在结束标记之后，升级时原样保留。
+     两个标记必须独占一行、逐字保留——改动它们会让升级退回「整份 staged 成 .new」的保守路径。 -->
 # {{PROJECT_NAME}} · 文档 / 契约手册
 
 > 这是 **{{PROJECT_NAME}}**（基于 Solo v{{SOLO_VERSION}} 脚手架）的唯一手册入口。
@@ -27,3 +31,6 @@
 
 > ⚠️ Solo 源码仓里有更宏大的 `docs/protocol/zh/*` 内部设计草案（含**未实现**的协议）。那是 SOLO 维护者视角、**不随脚手架下发**。
 > **{{PROJECT_NAME}} 这边以本 `docs/` + 代码（`api/sample/`、`api/library/`）为准。**
+<!-- solo:end -->
+
+<!-- ↓ 项目自己的章节从这里开始（upgrade.sh 不会动 solo:end 之后的内容） -->

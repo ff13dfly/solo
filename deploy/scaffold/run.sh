@@ -136,20 +136,34 @@ fi
 [ -n "$REDIS_PASSWORD" ] && export REDISCLI_AUTH="$REDIS_PASSWORD"
 
 cleanup() {
+    # 必须是第一条语句:接住触发 trap 的那条命令/exit 的退出码。fail fast 的 exit 1
+    # 曾被结尾的 `exit 0` 吃掉,start-all.command 这类按退出码判断的启动器会把
+    # "拒绝启动"读成"起好了"。
+    local rc=$?
+    trap - SIGINT SIGTERM EXIT   # 防重入:SIGINT 路径里 exit 会再触发 EXIT trap
     echo ""
     log_warn "Stopping all services..."
     for pid in "${CHILD_PIDS[@]}"; do
         [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
     done
     [ -n "$SSL_PID" ] && kill "$SSL_PID" 2>/dev/null || true
-    # Belt-and-suspenders: free ports in case any child detached
+    # Belt-and-suspenders: free ports in case any child detached — 但只杀自己进程组
+    # 的成员。这段清扫对两份 services.json 里的所有端口执行,而 v1.1.14 起每条
+    # fail fast 路径(端口冲突/Redis 归属不符)都会经 EXIT trap 走到这里:若不看
+    # 归属,同机另一个正在跑的栈(端口撞车时恰恰是它占着端口)会被连根杀掉——
+    # 第二个实例没抢到任何东西,却把第一个打死了。子进程不 setsid,pgid 天然继承
+    # 自本脚本,判据成立。背景:solo/docs/feedback/scaffold-startup-guards-fallout.md §①
+    local _our_pgid _pg l
+    _our_pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
     for port in "${SOLO_PORTS[@]}" "${SVC_PORTS[@]}"; do
-        l=$(lsof -ti:"$port" 2>/dev/null || true)
-        [ -n "$l" ] && kill -9 $l 2>/dev/null || true
+        for l in $(lsof -ti:"$port" 2>/dev/null || true); do
+            _pg=$(ps -o pgid= -p "$l" 2>/dev/null | tr -d ' ')
+            [ -n "$_our_pgid" ] && [ "$_pg" = "$_our_pgid" ] && kill -9 "$l" 2>/dev/null || true
+        done
     done
     [ "$REDIS_STARTED_BY_US" -eq 1 ] && redis-cli -p "$REDIS_PORT" shutdown nosave 2>/dev/null || true
     tput cnorm 2>/dev/null || true
-    exit 0
+    exit "$rc"
 }
 trap cleanup SIGINT SIGTERM EXIT
 
@@ -309,6 +323,45 @@ done
 
 declare -a FE_NAMES FE_PORTS FE_LOGS
 
+# ── 前端端口守卫(独立函数,供派生项目自有前端复用)────────────────────────
+# 派生项目常有不走 serve_frontend 的前端(自有 Vite 应用直接 serve dist/ 等)。
+# 抽成函数后它们在自己的启动段里调这两个,就能获得与 tarball 前端同等的保护;
+# 否则那些前端仍是"端口被占 → serve 静默换随机口"的重灾区(finance/trend 均实测)。
+
+# fe_assert_port_free <name> <port> — 启动前确认端口空闲,被占直接 fail fast。
+# `|| true`:端口空闲时 lsof 返回 1,配上 set -o pipefail 会让赋值语句直接触发 set -e。
+fe_assert_port_free() {
+    local name="$1" port="$2" holder
+    holder=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1 || true)
+    if [ -n "$holder" ]; then
+        log_error "  $name: 端口 $port 已被占用,拒绝启动(否则 serve 会静默换随机端口)"
+        log_error "    占用方：$holder"
+        log_error "    改 .env 里 $name 的端口,或先停掉占用方。"
+        exit 1
+    fi
+}
+
+# fe_confirm_bound <name> <port> <pid> <log_file> — 起动后确认监听者确实是我们
+# 这个 pid——覆盖竞态(两个栈同时起)和进程自己起不来(bundle 解压坏、依赖缺失)
+# 两种情形。
+fe_confirm_bound() {
+    local name="$1" port="$2" pid="$3" log_file="$4" bound=0 holder
+    for _ in $(seq 1 25); do
+        kill -0 "$pid" 2>/dev/null || break
+        if lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$pid"; then
+            bound=1; break
+        fi
+        sleep 0.2
+    done
+    if [ $bound -eq 0 ]; then
+        log_error "  $name: 前端没能在端口 $port 上起来"
+        holder=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1 || true)
+        [ -n "$holder" ] && log_error "    端口现在的占用方：$holder"
+        log_error "    serve 日志：$log_file"
+        exit 1
+    fi
+}
+
 serve_frontend() {
     local name="$1" tarball="$2" port="$3"
     [ -z "$port" ] && return
@@ -330,7 +383,9 @@ serve_frontend() {
     fi
     local sys_name="${SYSTEM_DISPLAY_NAME:-SYSTEM}"
     printf 'window.__SOLO_SYSTEM_NAME__ = "%s";\n' "${sys_name//\"/\\\"}" >> "$serve_dir/config.js"
-    if [ -n "$SYSTEM_DESCRIPTION" ]; then
+    # `:-` 兜底必须有:init.sh 生成的 .env 没有这个变量,set -u 下裸引用会让
+    # 全新项目在第一个前端这里直接死掉(unbound variable)。
+    if [ -n "${SYSTEM_DESCRIPTION:-}" ]; then
         printf 'window.__SOLO_SYSTEM_DESCRIPTION__ = "%s";\n' "${SYSTEM_DESCRIPTION//\"/\\\"}" >> "$serve_dir/config.js"
     fi
     # 端口冲突必须在启动前拦下:`serve` 在端口被占时会**静默换一个随机端口并报告成功**
@@ -340,37 +395,13 @@ serve_frontend() {
     # 所以不能靠它)。后果是 run.sh 照旧打印配置的端口,dashboard 的 lsof 探到的是占用方
     # 的监听 → 一路假绿,前端其实几个月没起来过也没人发现。启动期的资源冲突一律 fail
     # fast,不 warn。背景:solo/docs/feedback/redis-port-ownership.md §六
-    # `|| true`:端口空闲时 lsof 返回 1,配上 set -o pipefail 会让赋值语句直接触发 set -e。
-    local holder
-    holder=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1 || true)
-    if [ -n "$holder" ]; then
-        log_error "  $name: 端口 $port 已被占用,拒绝启动(否则 serve 会静默换随机端口)"
-        log_error "    占用方：$holder"
-        log_error "    改 .env 里 $name 的端口,或先停掉占用方。"
-        exit 1
-    fi
+    fe_assert_port_free "$name" "$port"
     local log_file="$DEBUG_DIR/fe_${name}.log"
     "$ROOT_DIR/node_modules/.bin/serve" "$serve_dir" -p "$port" -s \
         > "$log_file" 2>&1 &
     local pid=$!
     CHILD_PIDS+=($pid)
-    # 再确认监听者确实是我们这个 pid——覆盖竞态(两个栈同时起)和 serve 自己起不来
-    # (bundle 解压坏、依赖缺失)两种情形。
-    local bound=0
-    for _ in $(seq 1 25); do
-        kill -0 "$pid" 2>/dev/null || break
-        if lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$pid"; then
-            bound=1; break
-        fi
-        sleep 0.2
-    done
-    if [ $bound -eq 0 ]; then
-        log_error "  $name: 前端没能在端口 $port 上起来"
-        holder=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1 || true)
-        [ -n "$holder" ] && log_error "    端口现在的占用方：$holder"
-        log_error "    serve 日志：$log_file"
-        exit 1
-    fi
+    fe_confirm_bound "$name" "$port" "$pid" "$log_file"
     FE_NAMES+=("$name"); FE_PORTS+=("$port"); FE_LOGS+=("$log_file")
     log_info "  $name → http://localhost:$port"
 }
