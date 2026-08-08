@@ -44,10 +44,14 @@ const methods = [
     // Inbound delivery — PUBLIC (listener → Router → here). Auth is the per-source
     // API key in the forwarded Authorization header, validated inside ingress; not
     // permit-gated (public bypasses checkAccess). params = { request_id, data }.
-    // Returns `result.body` of ingest.handle — a UNION over 6 paths: only `ok`
-    // (boolean) is always present. `error` on reject paths (401/403/400/422); `request_id`
-    // on accept+duplicate; `stream` ONLY on accept; `duplicate:true` ONLY on dedup hit;
-    // `violations` ONLY on the 422 dataSchema-rejected path (held in the review queue).
+    // Returns `result.body` of ingest.handle — a UNION over 7 paths: only `ok`
+    // (boolean) is always present. `error` on reject paths (401/403/400/422/502); `request_id`
+    // on accept+duplicate+the 502 delivery-failed path; `stream` ONLY on accept;
+    // `duplicate:true` ONLY on dedup hit; `violations` ONLY on the 422 dataSchema-rejected
+    // path (held in the review queue). 502 = the RPC call to Router succeeded but the event
+    // never landed on the bus (commonly a ROUTER_URL leaked from a sibling stack silently
+    // pointing this call at the WRONG Router) — the dedup claim is released so a retry of
+    // the SAME request_id is treated as new, not as a duplicate of something that never arrived.
     { name: 'ingress.ingest', params: [{ name: 'request_id', type: 'string', required: true, maxLength: 64, pattern: 'id' }, { name: 'data', type: 'object' }], returns: ['ok'], returns_schema: [
         { name: 'ok',         type: 'boolean', required: true }, // true on accept/duplicate, false on reject
         { name: 'stream',     type: 'string' },   // accept path only
@@ -74,11 +78,13 @@ const methods = [
     { name: 'ingress.source.key.rotate', params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }], returns: ['id', 'apiKey'], returns_schema: [{ name: 'id', type: 'string', required: true }, { name: 'apiKey', type: 'string', required: true }], description: 'Rotate API key; returns new key once', ai: false },
     { name: 'ingress.source.delete',     params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }], returns: ['id'], returns_schema: [{ name: 'id', type: 'string', required: true }], description: 'Delete a source', ai: false },
     // test-fire (ingest.testFire): always { ok:true, stream, request_id } on success (throws NOT_FOUND otherwise).
-    { name: 'ingress.source.test',       params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }, { name: 'data', type: 'object' }], returns: ['ok', 'stream', 'request_id'], returns_schema: [
+    { name: 'ingress.source.test',       params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }, { name: 'data', type: 'object' }], returns: ['ok', 'stream', 'request_id', 'written', 'blocked'], returns_schema: [
         { name: 'ok',         type: 'boolean', required: true },
         { name: 'stream',     type: 'string',  required: true },
         { name: 'request_id', type: 'string',  required: true },
-    ], description: 'Fire a synthetic webhook.received event (skips dedup)', ai: false },
+        { name: 'written',    type: 'number',  required: true },  // Router's real event.emit stats — 0 means
+        { name: 'blocked',    type: 'number',  required: true },  // it never landed on the bus despite ok:true (e.g. wrong Router, unregistered stream)
+    ], description: 'Fire a synthetic webhook.received event (skips dedup); written/blocked surface Router\'s real delivery outcome for wiring diagnosis', ai: false },
 
     // Delivery audit log (admin) — daily jsonl, newest-first
     { name: 'ingress.log.recent', params: [{ name: 'limit', type: 'number' }, { name: 'source', type: 'string', maxLength: 64, pattern: 'id' }, { name: 'outcome', type: 'string', maxLength: 64 }, { name: 'days', type: 'number' }], returns: ['items', 'total'], returns_schema: [{ name: 'items', type: 'array', required: true }, { name: 'total', type: 'number', required: true }], description: 'Recent inbound delivery audit entries (admin)', ai: false },

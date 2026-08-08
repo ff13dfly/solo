@@ -26,12 +26,17 @@ function makeHarness(overrides = {}) {
     const fires = [];
     const notifies = [];
     const reviewPushes = [];
+    const releases = [];
     let claimResult = true;
+    // Mirrors Router's real event.emit RPC result shape (router/index.js
+    // 'event.emit' handler: { ok, count, written, blocked, deduped }).
+    let emitStats = { ok: true, count: 1, written: 1, blocked: 0, deduped: 0 };
 
     const relay = {
         call: async (method, params) => {
-            if (method === 'notification.send') notifies.push(params);
-            else emits.push({ method, params });
+            if (method === 'notification.send') { notifies.push(params); return { ok: true }; }
+            emits.push({ method, params });
+            return emitStats;
         },
     };
     const audit = { append: (line) => { audits.push(line); } };
@@ -46,14 +51,22 @@ function makeHarness(overrides = {}) {
             : null),
         ...overrides.source,
     };
-    const dedup = { claim: async () => claimResult, ...overrides.dedup };
+    const dedup = {
+        claim: async () => claimResult,
+        release: async (sourceName, requestId) => { releases.push({ sourceName, requestId }); },
+        ...overrides.dedup,
+    };
     const review = {
         push: async (entry) => { reviewPushes.push(entry); return 'rvw_test'; },
         ...overrides.review,
     };
 
     const ingest = createIngest({}, { config: CONFIG, relay, source, dedup, audit, review });
-    return { ingest, emits, audits, fires, notifies, reviewPushes, setClaim: (v) => { claimResult = v; } };
+    return {
+        ingest, emits, audits, fires, notifies, reviewPushes, releases,
+        setClaim: (v) => { claimResult = v; },
+        setEmitStats: (v) => { emitStats = v; },
+    };
 }
 
 describe('ingress ingest.handle — outcome paths', () => {
@@ -74,6 +87,28 @@ describe('ingress ingest.handle — outcome paths', () => {
         });
         expect(h.fires).toEqual([{ id: 'src-1', outcome: 'accepted' }]);
         expect(h.audits[0]).toMatchObject({ source: 'github', request_id: 'r1', outcome: 'accepted', status: 200 });
+    });
+
+    test('delivery_failed: event.emit RPC succeeds but Router blocks it (e.g. leaked ROUTER_URL pointed at a foreign stack) → 502, dedup released, NOT recorded as accepted', async () => {
+        const h = makeHarness();
+        h.setEmitStats({ ok: true, count: 1, written: 0, blocked: 1, deduped: 0 });
+        const res = await h.ingest.handle('good-key', { request_id: 'r1', data: { a: 1 } });
+
+        expect(res.status).toBe(502);
+        expect(res.body).toEqual({ ok: false, error: 'event not delivered', request_id: 'r1' });
+        expect(h.releases).toEqual([{ sourceName: 'github', requestId: 'r1' }]);
+        expect(h.fires).toHaveLength(0);   // hitCount must stay truthful — this was never a hit
+        expect(h.audits[0]).toMatchObject({ source: 'github', request_id: 'r1', outcome: 'delivery_failed', status: 502 });
+    });
+
+    test('delivery_failed: relay resolves with no stats at all (defensive) → treated as not delivered, not a crash', async () => {
+        const h = makeHarness();
+        h.setEmitStats(undefined);
+        const res = await h.ingest.handle('good-key', { request_id: 'r1', data: {} });
+
+        expect(res.status).toBe(502);
+        expect(res.body.ok).toBe(false);
+        expect(h.releases).toEqual([{ sourceName: 'github', requestId: 'r1' }]);
     });
 
     test('duplicate: dedup claim loses → no emit, 200 duplicate', async () => {
@@ -222,8 +257,20 @@ describe('ingress ingest.testFire — admin synthetic event', () => {
         expect(res.ok).toBe(true);
         expect(res.stream).toBe('EVENT:WEBHOOK:GITHUB');
         expect(res.request_id).toMatch(/^test_/);
+        expect(res.written).toBe(1);
+        expect(res.blocked).toBe(0);
         expect(h.emits).toHaveLength(1);
         expect(h.emits[0].params.payload).toEqual({ request_id: res.request_id, data: { x: 1 } });
+    });
+
+    test('surfaces Router blocked stats directly — the diagnostic this whole RPC exists for', async () => {
+        const h = makeHarness();
+        h.setEmitStats({ ok: true, count: 1, written: 0, blocked: 1, deduped: 0 });
+        const res = await h.ingest.testFire({ id: 'src-1', data: { x: 1 } });
+
+        expect(res.ok).toBe(true);   // the RPC call itself succeeded
+        expect(res.written).toBe(0); // but the admin can see it never landed
+        expect(res.blocked).toBe(1);
     });
 
     test('throws NOT_FOUND for a missing source', async () => {

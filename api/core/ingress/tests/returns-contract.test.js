@@ -91,9 +91,14 @@ function makeFakeRedis() {
 }
 
 // Fake relay: ingest/test-fire call relay.call('event.emit', ...) — record it, never network.
+// The stats shape mirrors Router's real event.emit response (router/index.js
+// 'event.emit' handler always returns numeric written/blocked/deduped, never
+// omits them) — ingest.js now REQUIRES a numeric `written` to treat a delivery
+// as accepted (inherited-router-url-silent-misdelivery.md), so a fake that
+// returned bare {ok:true} would make every ingest call here look undelivered.
 function makeFakeRelay() {
     const calls = [];
-    return { calls, async call(method, params) { calls.push({ method, params }); return { ok: true }; } };
+    return { calls, async call(method, params) { calls.push({ method, params }); return { ok: true, count: 1, written: 1, blocked: 0, deduped: 0 }; } };
 }
 
 const byName = Object.fromEntries(introspection.map((m) => [m.name, m]));

@@ -20,5 +20,14 @@ module.exports = (redis, { config }) => {
         return res === 'OK';
     }
 
-    return { claim };
+    // Undo a claim when the delivery that claimed it never actually made it onto
+    // the event bus (Router blocked/deduped it downstream of us). Without this,
+    // a recoverable failure becomes a PERMANENT loss: the external sender's retry
+    // finds the key still set and is told "duplicate" for something that in truth
+    // never landed anywhere.
+    async function release(sourceName, requestId) {
+        await redis.del(`${PREFIX}${sourceName}:${requestId}`);
+    }
+
+    return { claim, release };
 };

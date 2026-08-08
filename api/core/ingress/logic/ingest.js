@@ -81,8 +81,12 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
         }
     }
 
+    // Returns Router's event.emit stats ({ written, blocked, deduped }) so the
+    // caller can tell "RPC succeeded" apart from "the event actually landed on
+    // the bus" — Router reports blocked/deduped honestly (router/handlers/events.js),
+    // but that information is worthless if nobody reads it (see call sites below).
     async function emit(sourceName, requestId, data) {
-        await relay.call('event.emit', {
+        return relay.call('event.emit', {
             stream:  source.streamFor(sourceName),
             type:    C.eventType,
             actor:   `webhook:${sourceName}`,
@@ -140,7 +144,23 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
             data = extractDeclared(src.dataSchema, data);
         }
 
-        await emit(src.name, reqId, data);
+        const stats = await emit(src.name, reqId, data);
+        // Real Router (router/handlers/events.js) always returns a numeric `written`
+        // (initialized to 0, never omitted) — require the same here rather than
+        // trusting a bare truthy check, so a malformed/incomplete RPC result can't
+        // slip through as an accepted delivery by accident.
+        if (!stats || typeof stats.written !== 'number' || stats.written < 1) {
+            // RPC succeeded but Router didn't put it on the bus — most often a
+            // ROUTER_URL leaked from another shell/stack pointing this call at the
+            // WRONG Router (blocked: source unregistered there). Release the dedup
+            // claim so the sender's retry isn't told "duplicate" for something that
+            // never actually landed — recoverable ONLY if we don't paper over it
+            // with an accepted-looking 200. Do NOT call recordFire('accepted') here:
+            // hitCount is documented as "accepted deliveries", and this one wasn't.
+            await dedup.release(src.name, reqId);
+            logLine({ source: src.name, request_id: reqId, outcome: 'delivery_failed', status: 502, body: rawBody });
+            return { status: 502, body: { ok: false, error: 'event not delivered', request_id: reqId } };
+        }
         await source.recordFire(src.id, { outcome: 'accepted' });
         logLine({ source: src.name, request_id: reqId, outcome: 'accepted', status: 200, body: rawBody });
         return { status: 200, body: { ok: true, stream: source.streamFor(src.name), request_id: reqId } };
@@ -149,13 +169,20 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
     // Management test-fire (admin RPC): synthetic event, skips dedup + audit + dataSchema
     // (this IS the wiring test — a schema-violating test payload is useful signal to see
     // directly in the RPC response, not worth routing to human review for an admin's own probe).
+    // written/blocked surface Router's real emit stats directly in the RPC response —
+    // exactly what an admin debugging "events aren't showing up" needs to see without
+    // having to go find (possibly the WRONG project's) Router logs.
     async function testFire({ id, data } = {}) {
         const src = await source.get({ id });
         if (!src) throw require('../handlers/jsonrpc').NOT_FOUND('source');
         const requestId = 'test_' + crypto.randomBytes(6).toString('hex') + '_' + clock.now();
-        await emit(src.name, requestId, data || { _test: true });
+        const stats = await emit(src.name, requestId, data || { _test: true });
         await source.recordFire(src.id, { outcome: 'accepted' });
-        return { ok: true, stream: src.stream, request_id: requestId };
+        return {
+            ok: true, stream: src.stream, request_id: requestId,
+            written: (stats && typeof stats.written === 'number') ? stats.written : 0,
+            blocked: (stats && typeof stats.blocked === 'number') ? stats.blocked : 0,
+        };
     }
 
     return { handle, testFire };

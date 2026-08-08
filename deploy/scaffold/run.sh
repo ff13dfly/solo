@@ -59,6 +59,18 @@ if [ -f "$ROOT_DIR/.env" ]; then
     set +o allexport
 fi
 
+# Defense in depth (the real fix is in the bundle entry — deploy/gen-entry.js
+# deletes these before any service config.js loads): a shell that previously
+# `export`ed one of these for a DIFFERENT Solo stack, or ran another project's
+# run.sh, leaves them behind for this invocation. PORT/ROUTER_URL only have a
+# legitimate meaning for a standalone single-service process — section 9 below
+# sets them explicitly per private-app child anyway — so a leftover value here
+# can only cause harm (bundle services picking up a foreign Router or all
+# colliding on one port), never fix anything. Not in this project's .env
+# template, so this cannot clobber an intentional setting.
+# Background: docs/feedback/inherited-router-url-silent-misdelivery.md
+unset PORT ROUTER_URL ADMINISTRATOR_SERVICE_URL
+
 # --- 2. Ensure npm dependencies ---
 # Private apps require redis / @solana/web3.js / etc. via api/library. If
 # node_modules is missing or out of date, install before starting anything.

@@ -11,10 +11,22 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.1.x`）。
 
-> 本批全部来自 2026-08-06 两个派生项目（finance、trend）升 v1.1.14 的同日实测反馈：
-> `docs/feedback/scaffold-startup-guards-fallout.md` + `patch-upgrade-consumer-gaps.md` + `autocheck-hardcoded-page-regex.md`。
+### Fixed — bundle 内置服务吃继承的 `ROUTER_URL`/`PORT` → 事件误投给别家 Router、静默丢弃（🔴 数据丢失级）
+
+> 来源：trend/overview 同机并跑的实测 + 08-08 源码核实，`docs/feedback/inherited-router-url-silent-misdelivery.md`。两个正交缺陷，各自都足以致静默失败，这次一起修。
+
+- **根治**：`deploy/gen-entry.js` 在 `global.__SOLO_PORTS__` 填完、任何服务 `config.js` 加载前 `delete process.env.PORT; delete process.env.ROUTER_URL;`。bundle 是**一个进程托管多个服务**，这两个变量是"单进程单身份"语义（`PORT`=我自己的监听端口，`ROUTER_URL`=独立私有 app 进程该去哪找 Router），对 bundle 内置服务毫无意义、继承下来还很危险：14 个 core/apps 的 `config.js` 仍是 `process.env.ROUTER_URL || urlFor(...)`（环境变量优先，`ports.js` 头部注释明明写着 `urlFor` 刻意不读环境），一个从别的 Solo 栈残留 `export` 下来的 `ROUTER_URL`，会让本项目的事件全部悄悄投给别人的 Router——对方不认来源、`blocked` 丢弃，日志打在**对方**项目里，本项目从 HTTP 200 到审计 `accepted` 全程"正常"。`PORT` 泄漏更糟：`portFor()` 对 `process.env.PORT` 是有意优先（独立进程需要它钉住监听口），bundle 里十几个服务会全挤到同一个端口，只有第一个绑上的能用。**一处改动**（entry 是每次 build 都会重新生成的单一入口）保护全部现在和未来的 config.js，且不影响 `run.sh` 私有 app 段（它显式给每个子进程传这两个变量，语义合法、不受影响）。
+- **防御层**：`deploy/scaffold/run.sh` 加载 `.env` 后追加 `unset PORT ROUTER_URL ADMINISTRATOR_SERVICE_URL`——不能替代上面的根治（这里清理的是 shell 本身的继承源头，gen-entry.js 清理的是 bundle 进程实际读到的值），但双保险成本几乎为零。
+- **独立缺陷，价值不依赖上一条**：`core/ingress/logic/ingest.js` 的 `emit()` 此前把 `relay.call('event.emit', ...)` 的返回值直接丢了——Router 其实**如实**返回了 `{written, blocked, deduped}`（`router/handlers/events.js:228`，blocked 分支也确实打了日志），只是没人读。现在 `handle()` 检查 `stats.written`，非法/未交付时：**释放 dedup 声明**（否则外部发送方的重试会撞上"重复"，把一次可恢复的失败变成永久丢失）、记审计 `outcome:'delivery_failed'`、返回 `{ok:false}` + HTTP 语义 502（而不是无条件记 `accepted`、写 30 天去重键）。哪怕没有 ①的跨栈场景，只要本项目自己的 stream 忘了进 Router registry，同样的静默丢失照样会发生——①只是把它放大到了跨项目。
+- **顺带**：`ingress.source.test`（admin 手动测试 wiring 的 RPC）现在把 `written`/`blocked` 直接放进返回——管理员排查"事件怎么没显示"时，不用再去猜、去翻可能是别的项目的 Router 日志。
+- 回归：`core/ingress` 新增 3 个用例（Router 拒收后 502+释放去重键+不记 accepted；relay 返回值缺失时同样按未交付处理，做过失活测试——去掉检查后两个新用例当场红；test-fire 透出 blocked 统计）；`returns-contract.test.js` 的共享 fake relay 之前只返回 `{ok:true}`（没有 written 字段），按真实 Router 返回形状补全，否则新的强校验会把它也判成"未交付"——这正是假实现语义漂移的同一类陷阱，改完复核了它模拟的 4 个 ingest 路径依旧准确反映真实行为。`gen-entry.js` 改动用真实 `deploy/build.sh` 端到端跑过一次（5.3M 产物、生成的 entry 语法检查通过、`grep` 确认两处修复都落进了最终 bundle）。CI 白名单 123 套 / 1939 测试全绿。
+
+> 下游 action：**无强制**（bundle 内置服务的 `ROUTER_URL`/`PORT` 继承是从未被利用的能力，清理它不改变任何正常配置下的行为；`ingress.ingest` 新增的 502 路径是 additive 的失败态，此前这类请求会被误判为成功，现在会如实报告——**如果你的监控/告警只看 HTTP 200，升级后请确认它也认 `ok:false` 这个字段**，`ingress.ingest` 的传输层本来就一直是"HTTP 200 + 内部 `ok` 字段"而非用 HTTP 状态区分成败）。**改过 `deploy/run.sh` 的项目**：新增的 `unset` 一行随 DIVERGED 流程走，需要手动 merge。
 
 ### Fixed — scaffold `run.sh`：v1.1.14 fail fast 的退出路径反咬一口（同机多栈误杀）+ 两处启动阻断
+
+> 本节起，以下几节全部来自 2026-08-06 两个派生项目（finance、trend）升 v1.1.14 的同日实测反馈：
+> `docs/feedback/scaffold-startup-guards-fallout.md` + `patch-upgrade-consumer-gaps.md` + `autocheck-hardcoded-page-regex.md`。
 
 - **`cleanup()` 端口清扫加进程组判据**。"保险起见"的端口清扫对两份 services.json 里所有端口无条件 `kill -9`，这在 v1.1.14 之前只在 Ctrl+C 时跑（杀的确实是自己）；v1.1.14 加了 fail fast 后，**每条 `exit 1` 路径都经 EXIT trap 走这段清扫**——端口撞车时"第二个实例没抢到任何东西，却把先起的栈连根拔了"（finance/trend 双双实测复现），恰好发生在守卫要保护的同机多栈场景。现清扫前比对 `pgid`，只杀自己这一支（子进程不 `setsid`，pgid 继承自 run.sh，判据成立；保留"抓自己 detach 掉的孙子进程"原意）。
 - **`cleanup()` 保留真实退出码**。原结尾无条件 `exit 0` 把 fail fast 的 `exit 1` 吃掉，`start-all.command` 这类按退出码判断的启动器会把"拒绝启动"读成"起好了"。顺带加了 trap 防重入。

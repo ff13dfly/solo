@@ -97,6 +97,26 @@ global.__SOLO_PORTS__ = Object.fromEntries(
   cfg.filter(s => s.port != null).map(s => [s.name, Number(s.port)])
 );
 
+// The bundle is ONE process hosting MANY services. PORT and ROUTER_URL are
+// "single process, single identity" env vars — legitimate for a standalone
+// private-app process (run.sh's own private-app spawn sets them explicitly,
+// per-child), meaningless and dangerous here. 14 of this bundle's own
+// config.js files still read \`process.env.ROUTER_URL || urlFor('router', ...)\`
+// (the env wins) — a ROUTER_URL leaked from an earlier \`export\` in the same
+// shell, or from a differently-configured sibling Solo stack, silently
+// redirects every event this bundle emits to a FOREIGN Router. That Router
+// rejects it (unregistered source) and logs the rejection in ITS OWN project
+// — invisible here. A leaked PORT is worse: portFor() honors process.env.PORT
+// by design (a standalone process needs to pin its own listen port), so
+// every bundled service would try to bind the SAME port; only the first
+// one wins and the rest fail silently. Clearing both here — once, upstream
+// of every service's config.js — protects all of them without relying on
+// each one being written correctly, and without touching run.sh's private-app
+// spawn (a legitimately different, single-process consumer of these same names).
+// Background: docs/feedback/inherited-router-url-silent-misdelivery.md
+delete process.env.PORT;
+delete process.env.ROUTER_URL;
+
 for (const s of cfg) {
   const factory = REGISTRY[s.name];
   if (!factory) {
