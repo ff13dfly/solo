@@ -23,6 +23,22 @@
 
 ---
 
+## 0.5 发事件之前：通路怎么开通
+
+开箱状态下，你服务的 relay bot token 是**空的**——`init.sh` / `run.sh` 都不会自动配置它，
+`relay.call(...)`（含 §5 的 `event.emit` 路径）在这个状态下一律抛 `NO_TOKEN`。四步一步都不能少：
+
+```
+1. user.bot.create      { uid: 'system.<service>', permit: { allow_all: false, services: {...} } }
+2. user.bot.issue.token { uid: 'system.<service>' }  →  返回 { token, expiresAt }
+3. <service>.token.set  { token, expiresAt, sub: 'system.<service>' }   ← 调你自己服务的这个方法
+4. <service>.token.status 验证 hasToken:true
+```
+
+- `uid` 必须**恰好**是 `system.<serviceName>`（`library/relay.js` 的 `expectedSub` 这么拼），不匹配抛 `SUB_MISMATCH`。
+- 第 1 步的 `permit` 不能给 `allow_all:true`（`user.bot.create` 会拒绝——bot 权限必须显式枚举 `services.method`），按你的服务实际要调的 Router 方法（通常至少要有 `event.emit`）来写。
+- 全新 scaffold 出来的栈，Solo 自带的 nexus / orchestrator 这两个服务同样没有 token（它们的 `event.emit`/调度事件功能因此不可用），需要同样手工走一遍这四步——这条尚无自动化，见 `docs/feedback/relay-provisioning-and-event-registry.md`。
+
 ## 1. `_event` 信封：你给什么 vs Router 盖什么
 
 **(a) 你提供的**（`_event` 数组项，或 `event.emit` 的参数）：
@@ -64,6 +80,32 @@
     "ingress":          { "EVENT:WEBHOOK:*":     ["webhook.received"] } }   // 末尾 '*' 前缀通配
   ```
   匹配规则：先精确，再单个末尾 `*` 前缀通配（`EVENT:WEBHOOK:*` 覆盖运行时命名的 `EVENT:WEBHOOK:GITHUB`）。**你的服务发新事件前，先把它登记进 registry。**
+
+  🔴 **`SET SYSTEM:CONFIG:EVENT_REGISTRY` 是整体替换，不是与内置默认合并**（Router 读取逻辑见
+  `api/router/handlers/events.js` 的 `getRegistry()`）。写这个键之后，Router 只认你写进去的内容——
+  下面这 7 条内置默认（`orchestrator`/`system.orchestrator`/`system.nexus`/`system.ingress`/
+  `system.fulfillment`/`gateway`/`system.gateway`）会**全部失效**，且失效是静默的：被拦的事件只计入
+  返回值里的 `blocked` 计数，不抛错、不影响调用方的 RPC 返回，你的服务照常"工作正常"，只是这些
+  事件再也没人收到。**写这个键时必须把下面 7 条原样一起写进去**，只加你自己的一条：
+
+  ```jsonc
+  {
+    "orchestrator":        { "EVENT:WORKFLOW:STATUS": ["*"], "EVENT:WORKFLOW:RESULT": ["*"] },
+    "system.orchestrator": { "EVENT:WORKFLOW:NEEDS_GRANT": ["workflow.needs_grant"], "EVENT:WORKFLOW:STATUS": ["*"], "EVENT:WORKFLOW:RESULT": ["*"] },
+    "system.nexus":        { "EVENT:SENTINEL:*": ["*"] },
+    "system.ingress":      { "EVENT:WEBHOOK:*": ["webhook.received"] },
+    "system.fulfillment":  { "EVENT:FULFILLMENT:*": ["*"] },
+    "gateway":             { "EVENT:GATEWAY:DELIVERY": ["*"] },
+    "system.gateway":      { "EVENT:GATEWAY:DELIVERY": ["*"] },
+
+    "{{PROJECT_NAME}}": { "EVENT:ORDER:CREATED": ["order.paid", "order.refunded"] }
+  }
+  ```
+
+  这份清单校准到 solo v{{SOLO_VERSION}}；若怀疑已过期，去源码核对
+  `api/router/config.js` 的 `eventRegistry` 才是权威（这份 bundle 是单文件，找不到就 grep
+  `eventRegistry`）。这条目前只能靠手工核对——没有只读方法能返回"当前生效的合并结果"，
+  见 `docs/feedback/relay-provisioning-and-event-registry.md`。
 
 ---
 

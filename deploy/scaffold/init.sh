@@ -317,22 +317,31 @@ log_info "Generated: deploy/solo-services.json (per-project port range, owned by
 # derived projects ended up sharing 3650/3700, and run.sh's pre-v1.1.14
 # "warn only" port handling let it go silently unnoticed for months). Each
 # project's own trio still keeps the documented 50-apart spacing
-# (operator/system/mobile); on conflict the whole trio shifts by 150 so a
-# retry never overlaps the failed one.
-FE_PORT_BASE=3600
+# (operator/system/mobile).
+#
+# This probe only sees "is anyone listening right now" — it has no way to see
+# a sibling project's declared-but-not-yet-started port (its .env exists but
+# the stack isn't up). Port allocation across projects on one machine needs a
+# global view this script structurally can't have; the port ledger
+# (overview/mind/ref/ports.md) is that global view. So: allow the caller to
+# hand in the answer directly (FE_PORT_BASE=3640 bash init.sh ...), same
+# convention as FRONTEND_BUILD. And retry in steps of 10 rather than 150 — a
+# 150 stride only ever lands on 3600/3750/3900/4050/…, skipping every
+# in-between slot the ledger might actually have free (e.g. 3640/3690/3740).
+FE_PORT_BASE=${FE_PORT_BASE:-3600}
 while :; do
     _fe_conflict=0
     for _off in 0 50 100; do
         lsof -i:"$((FE_PORT_BASE + _off))" &>/dev/null 2>&1 && { _fe_conflict=1; break; }
     done
     [ $_fe_conflict -eq 0 ] && break
-    FE_PORT_BASE=$((FE_PORT_BASE + 150))
+    FE_PORT_BASE=$((FE_PORT_BASE + 10))
     [ $FE_PORT_BASE -gt 5000 ] && log_error "No free frontend port trio found below 5000"
 done
 PORTAL_OPERATOR_PORT=$FE_PORT_BASE
 PORTAL_SYSTEM_PORT=$((FE_PORT_BASE + 50))
 CLIENT_MOBILE_PORT=$((FE_PORT_BASE + 100))
-log_info "Frontend ports: operator=$PORTAL_OPERATOR_PORT system=$PORTAL_SYSTEM_PORT mobile=$CLIENT_MOBILE_PORT (auto-selected, not currently in use)"
+log_info "Frontend ports: operator=$PORTAL_OPERATOR_PORT system=$PORTAL_SYSTEM_PORT mobile=$CLIENT_MOBILE_PORT (auto-selected by runtime probe — does NOT check other projects' .env declarations; cross-check your port ledger, or pass FE_PORT_BASE=<n> to pick explicitly)"
 
 # Find an available Redis port starting from 6380
 REDIS_PORT=6380
@@ -341,6 +350,12 @@ while lsof -i:"$REDIS_PORT" &>/dev/null 2>&1; do
 done
 log_info "Redis port: $REDIS_PORT (auto-selected, not currently in use)"
 
+# This heredoc is intentionally unquoted (`<< EOF`, not `<< 'EOF'`) — it interpolates
+# $REDIS_PASSWORD/$JWT_SECRET/$ROUTER_PUBLIC_KEY/$PROJECT_NAME/the three frontend port
+# vars. That means any backtick or $(...) in the template body below gets executed as a
+# command substitution (silently — exit code stays 0, only stderr shows `command not
+# found`, and the substituted text quietly comes out empty). Escape backticks as \` and
+# don't write bare $(...) in comments.
 cat > "$NEW_DIR/.env" << EOF
 # Solo Core
 # Redis 带口令（run.sh 起 redis 时 --requirepass；改/删密码要与 redis_data 里已持久化的
@@ -406,7 +421,7 @@ GATEWAY_SECRET_KEY=$GATEWAY_SECRET_KEY
 # SMS_ALIYUN_SIGN_NAME=YourSignName
 # SMS_ALIYUN_ENDPOINT=https://dysmsapi.aliyuncs.com
 #
-# Twilio（providerCode = Content SID `HXxxxx`；模版实体建议同时声明 variableOrder，
+# Twilio（providerCode = Content SID \`HXxxxx\`；模版实体建议同时声明 variableOrder，
 #         否则命名变量无法映射成 Twilio 要求的位置键 {"1":…}）:
 # SMS_TWILIO_SID=ACxxxx
 # SMS_TWILIO_TOKEN=xxxx
@@ -478,12 +493,24 @@ git -C "$NEW_DIR" init -q
 git -C "$NEW_DIR" add \
   api/publish/ api/autocheck/ api/library/ api/sample/ api/apps/ \
   docs/ .claude/ \
-  deploy/run.sh deploy/precheck.sh deploy/admin-up.sh deploy/services.json deploy/solo-services.json deploy/seed.json \
+  deploy/ \
   portal/ client/ \
   e2e/ \
   package.json .solo-version .gitignore
 git -C "$NEW_DIR" commit -q -m "chore: init $PROJECT_NAME scaffold (Solo v$SOLO_VERSION)"
 log_info "Git repo initialized with initial commit"
+
+# Self-check: the deploy/ files this step just added are enumerated by hand at
+# copy-time (line ~277-279) and here separately — nothing guarantees the two
+# lists stay in sync (that's exactly how deploy/seed-registry.js went missing
+# for one release: copied but never added, so it worked on the scaffolding
+# machine and vanished on clone). Catch any future drift immediately instead
+# of silently shipping a broken clone.
+_untracked=$(git -C "$NEW_DIR" status --porcelain --untracked-files=all)
+if [ -n "$_untracked" ]; then
+    log_warn "Untracked files remain after initial commit (check if they should have been added):"
+    echo "$_untracked"
+fi
 
 # --- Done ---
 

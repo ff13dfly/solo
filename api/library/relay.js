@@ -46,7 +46,7 @@ class RelayError extends Error {
 }
 
 const ERR = {
-    NO_TOKEN:        () => new RelayError('NO_TOKEN', 'No service token configured. Admin must call setServiceToken.'),
+    NO_TOKEN:        (serviceName) => new RelayError('NO_TOKEN', `No service token configured for "${serviceName}". Admin must call ${serviceName}.token.set with a token from user.bot.issue.token (see docs/authoring/events.md §0.5).`),
     TOKEN_EXPIRED:   () => new RelayError('TOKEN_EXPIRED', 'Service token expired and refresh failed.'),
     REFRESH_FAILED:  (m) => new RelayError('REFRESH_FAILED', `Token refresh failed: ${m}`),
     SUB_MISMATCH:    (e, a) => new RelayError('SUB_MISMATCH', `Token sub "${a}" does not match service "${e}"`),
@@ -208,7 +208,7 @@ function createRelay(options) {
 
     async function getValidToken() {
         const state = await readState();
-        if (!state) throw ERR.NO_TOKEN();
+        if (!state) throw ERR.NO_TOKEN(serviceName);
         validateState(state);
         if (isExpired(state)) {
             await clearState();

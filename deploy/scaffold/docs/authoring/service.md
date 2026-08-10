@@ -41,7 +41,12 @@ SOLO 把"wire 兼容"做成了**可复用的 library factory**——auth 握手�
 
 ## 2. 接线（index.js / config.js 里的 require）
 
-逐行照 `api/sample`（注意路径深度：`index.js`/`config.js` 用 `../library/...`，`handlers/`·`logic/` 用 `../../library/...`）：
+逐行照 `api/sample`，但**注意路径深度**：`api/sample/` 直接在 `api/` 下，比你的服务实际位置 `api/apps/<svc>/` 少一层，所以深度不能照抄，要在此基础上再深一层：
+
+| 位置 | `api/sample/`（模板） | 你的服务 `api/apps/<svc>/`（实际要写的） |
+|------|----------------------|----------------------------------------|
+| `index.js` / `config.js` | `../library/...` | `../../library/...` |
+| `handlers/` / `logic/` | `../../library/...` | `../../../library/...` |
 
 ```js
 // index.js（服务根 → ../library）
@@ -183,8 +188,9 @@ const ITEM_ID  = { name: 'itemId',     type: 'string', required: true, maxLength
 - `required: true` = 缺失或 trim 后为空即拒。自由文本（description）只限长不加 pattern。
 - `returns`：扁平的顶层字段名数组，如 `['id','name','status','createdAt']`——**`ai:true` 的方法必须有**（让外部 AI 能链式调用）。
 - `returns_schema`：带类型的机器可校验契约（`library/contract.js` 方言，规则项同 params）。`required:true` 只给"每条非抛错路径都有且非 null"的键。**返回裸数组的方法不声明 `returns_schema`**（如 `category.list`）。`core/user/handlers/introspection.js` 是 `returns_schema` 的范本。
-- 系统方法每个服务都同款声明并注册：`ping`、`methods`、`entities`、`events`（+ 有索引时的 `{service}.index.rebuild`/`.schemas`）。
-- 第五个系统方法 `guide` **只注册、不进 introspection 声明**（服务侧 `BASE_PUBLIC_METHODS` 已放行，进声明反而触发 public-surface 白名单联动）。一行接线照 `api/sample/index.js`：`'guide': () => require('<depth>/library/guide').readGuide('<service>', __dirname)`，读服务目录 `GUIDE.md`（没有则明确返回 `available:false`，合法）。
+- 系统方法每个服务都同款声明并注册：`ping`、`methods`、`entities`（+ 有索引时的 `{service}.index.rebuild`/`.schemas`）。
+- `events` 与 `guide` 这两个系统方法**只注册、不进 introspection 声明**（RPC 命名检查的系统方法白名单只放行 `ping`/`methods`/`entities`，把 `events` 也声明进去会触发 `[RPC] 方法格式错误`）。`events` 一行接线照 `api/sample/index.js`：`'events': () => require('./handlers/events')`。
+- `guide`（服务侧 `BASE_PUBLIC_METHODS` 已放行，进声明反而触发 public-surface 白名单联动）。一行接线照 `api/sample/index.js`：`'guide': () => require('<depth>/library/guide').readGuide('<service>', __dirname)`，读服务目录 `GUIDE.md`（没有则明确返回 `available:false`，合法）。
 
 ---
 

@@ -4,6 +4,12 @@ const bs58 = require('bs58').default || require('bs58');
 
 // --- RPC FORWARDING LOGIC ---
 
+// Fallback forward timeout for everything outside the agent/gateway prefixes below.
+// Derived-project methods (e.g. `brand.event.tag`) can't opt into a longer window any
+// other way today (docs/feedback/router-forward-timeout-prefix-whitelist.md) — this at
+// least makes the one global default configurable instead of a hardcoded 10s.
+const DEFAULT_FORWARD_TIMEOUT_MS = Number(process.env.ROUTER_FORWARD_TIMEOUT_MS) || 10000;
+
 /**
  * Sign and forward a JSON-RPC request to a target microservice.
  * 
@@ -74,7 +80,7 @@ async function forwardRequest({
 
     // Execute upstream call
     // AI Agent calls take significantly longer (20-60s) for multimodal processing
-    const timeout = method.startsWith('agent') ? 90000 : method.startsWith('gateway') ? 60000 : 10000;
+    const timeout = method.startsWith('agent') ? 90000 : method.startsWith('gateway') ? 60000 : DEFAULT_FORWARD_TIMEOUT_MS;
     const serviceRes = await axios.post(targetService.url, enrichedBody, {
         headers,
         timeout: timeout

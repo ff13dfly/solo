@@ -64,11 +64,21 @@ async function getRegistry(redisClient) {
     const now = Date.now();
     if (CACHED_REGISTRY && now - LAST_FETCH < CACHE_TTL) return CACHED_REGISTRY;
 
+    const defaults = config.eventRegistry || {};
+
     if (redisClient && redisClient.isOpen) {
         try {
             const data = await redisClient.get(config.redis.eventRegistryKey);
             if (data) {
-                CACHED_REGISTRY = JSON.parse(data);
+                // Merge over the built-in defaults, keyed by source — NOT a replace.
+                // A derived project registering its own source (SET SYSTEM:CONFIG:
+                // EVENT_REGISTRY '{"myservice": {...}}') must only ever ADD to the
+                // registry, never silently revoke orchestrator/nexus/ingress/
+                // fulfillment/gateway's event permissions (docs/feedback/
+                // relay-provisioning-and-event-registry.md). A source present in
+                // both wins with the Redis value (lets an operator override a
+                // built-in source deliberately, e.g. to narrow it).
+                CACHED_REGISTRY = { ...defaults, ...JSON.parse(data) };
                 LAST_FETCH = now;
                 return CACHED_REGISTRY;
             }
@@ -77,7 +87,7 @@ async function getRegistry(redisClient) {
         }
     }
 
-    if (!CACHED_REGISTRY) CACHED_REGISTRY = config.eventRegistry || {};
+    if (!CACHED_REGISTRY) CACHED_REGISTRY = defaults;
     return CACHED_REGISTRY;
 }
 

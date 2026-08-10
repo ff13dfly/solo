@@ -291,7 +291,16 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
 
             // 3.1 Unknown Method Guard
             if (!resolved) {
-                const notFoundError = jsonrpc.METHOD_NOT_FOUND(method);
+                // A registered service's capability entry only appears in SERVICES[name].methods
+                // after updateCapabilityMap() introspects it (2s after boot, then every 60s —
+                // handlers/bootstrap.js). A brand-new/just-changed method on an already-registered
+                // service is indistinguishable from "method never existed" during that window —
+                // callers chase phantom naming/declaration bugs (docs/feedback/
+                // relay-provisioning-and-event-registry.md §三). Disambiguate when we can.
+                const svcPrefix = method.split('.')[0];
+                const notFoundError = Object.prototype.hasOwnProperty.call(SERVICES, svcPrefix)
+                    ? { code: -32601, message: `Method ${method} not found in capability map (service '${svcPrefix}' is registered; the map refreshes every 60s after a service restart — call system.service.add to force a re-handshake, or wait)` }
+                    : jsonrpc.METHOD_NOT_FOUND(method);
                 logInteraction(userId, method, params, { jsonrpc: '2.0', error: notFoundError, id }, sessionUser);
                 return jsonrpc.error(res, notFoundError, id);
             }

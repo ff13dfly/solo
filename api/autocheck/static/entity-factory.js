@@ -11,6 +11,20 @@
 const fs = require('fs');
 const path = require('path');
 
+const SINGLETON_MARKER = '// SAFE: singleton';
+
+// 剥掉整行注释与块注释再匹配 CRUD 关键字——否则一句解释这条规则本身的注释
+// （字面包含 'async function update' 之类）会把自己触发一遍。只剥"整行都是注释"
+// 的行（同 pagination-safety.js 的 `// SAFE:` 约定），不动行尾内联注释，够用且不会
+// 误伤字符串/URL 里的 `//`。
+function stripComments(content) {
+    return content
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split('\n')
+        .map(line => (line.trimStart().startsWith('//') ? '' : line))
+        .join('\n');
+}
+
 function check(servicePath, results) {
     const logicDir = path.join(servicePath, 'logic');
 
@@ -47,21 +61,30 @@ function check(servicePath, results) {
             continue;
         }
 
+        // 单例配置类文件（没有 id/没有软删除/永远只有一份）用不上 Entity Factory的
+        // ID 生成/索引/游标分页——正规豁免，别逼人靠改函数名绕过检查。
+        if (content.includes(SINGLETON_MARKER)) {
+            results.passed.push(`✅ [架构] logic/${file} 声明为单例配置（${SINGLETON_MARKER}），豁免 Entity Factory 检查`);
+            continue;
+        }
+
         // 如果没导入，检查是否像是 CRUD 模块
-        // 简单的启发式检查：看是否有 CRUD 关键字函数定义
+        // 简单的启发式检查：看是否有 CRUD 关键字函数定义（先剥注释，避免误伤，见上）
         const crudKeywords = ['async function create', 'async function update', 'async function delete',
             'exports.create', 'exports.update', 'exports.delete'];
 
-        const hasCrud = crudKeywords.some(k => content.includes(k));
+        const strippedContent = stripComments(content);
+        const hasCrud = crudKeywords.some(k => strippedContent.includes(k));
 
         if (hasCrud) {
             // 检查是否在 apps 目录下
             const isAppService = servicePath.includes(`${path.sep}apps${path.sep}`);
+            const hint = `若确为单例配置（无 id，永远只有一份），在文件任意位置加 \`${SINGLETON_MARKER}\` 豁免`;
 
             if (isAppService) {
-                results.errors.push(`❌ [架构] logic/${file} 实现了 CRUD 但未使用共享 Entity Factory (必须统一标准)`);
+                results.errors.push(`❌ [架构] logic/${file} 实现了 CRUD 但未使用共享 Entity Factory (必须统一标准；${hint})`);
             } else {
-                results.warnings.push(`⚠️ [架构] logic/${file} 似乎实现了 CRUD 但未使用共享 Entity Factory (建议重构)`);
+                results.warnings.push(`⚠️ [架构] logic/${file} 似乎实现了 CRUD 但未使用共享 Entity Factory (建议重构；${hint})`);
             }
         }
     }
