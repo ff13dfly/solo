@@ -74,8 +74,8 @@ async function getRegistry(redisClient) {
                 // A derived project registering its own source (SET SYSTEM:CONFIG:
                 // EVENT_REGISTRY '{"myservice": {...}}') must only ever ADD to the
                 // registry, never silently revoke orchestrator/nexus/ingress/
-                // fulfillment/gateway's event permissions (docs/feedback/
-                // relay-provisioning-and-event-registry.md). A source present in
+                // fulfillment/gateway's event permissions
+                // (docs/feedback/done/relay-provisioning-and-event-registry.md). A source present in
                 // both wins with the Redis value (lets an operator override a
                 // built-in source deliberately, e.g. to narrow it).
                 CACHED_REGISTRY = { ...defaults, ...JSON.parse(data) };

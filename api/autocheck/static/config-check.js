@@ -95,7 +95,7 @@ function check(servicePath, results) {
         // 排除合理的小数字：0, 1, 2（常用于索引/布尔场景）
         // (?!\d) 右边界必须有：没有它，`DEDUP_SCAN_LIMIT = 10000` 会被 \d{2,4} 匹配掉
         // 前 4 位、报成不存在的「1000」——报警指向不存在的数字，排查者得读完代码才能
-        // 确认是误报（trend 实测 7 处，docs/feedback/autocheck-hardcoded-page-regex.md）。
+        // 确认是误报（trend 实测 7 处，docs/feedback/done/autocheck-hardcoded-page-regex.md）。
         const hardcodedPagePattern = /(?:\.slice\s*\(\s*(?:offset\s*,\s*)?(\d{2,4})(?!\d)\s*\)|(?:limit|LIMIT|pageSize)\s*[=:]\s*(\d{2,4})(?!\d))/g;
 
         for (const file of logicFiles) {

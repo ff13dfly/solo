@@ -156,7 +156,7 @@ PROJECT_NAME="$(node -e "try{process.stdout.write(String(require('$PROJ/package.
 # (trend 实测丢过一整节)。改为标记块覆盖:只替换 solo:begin..solo:end 之间的 Solo 区,
 # 块外内容原样保留;无标记的存量 README(≤v1.1.14 模板,或项目整个重写过)不覆盖,
 # 新模板 staged 成 .new 等人合并——与 deploy 脚本的 DIVERGED 策略一致。
-# 背景:solo/docs/feedback/patch-upgrade-consumer-gaps.md §二
+# 背景:solo/docs/feedback/done/patch-upgrade-consumer-gaps.md §二
 README_STAGED=0
 _readme_tmp="$(mktemp)"
 sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" -e "s|{{SOLO_VERSION}}|$SOLO_VERSION|g" \
@@ -299,7 +299,7 @@ if [ $DRY -eq 0 ]; then
     # 叠起来 = 每次升级后 operator 门户静默掉线(run.sh 里只剩一行 warn),直到项目侧
     # 重建 tarball——它恰恰此前是自检唯一跳过的那个。这里把失配放大成 ACTION,并附
     # 可直接复制的重建命令(「知道该重建」和「知道怎么重建」之间隔着一次翻源码)。
-    # 背景:solo/docs/feedback/scaffold-startup-guards-fallout.md §③ + patch-upgrade-consumer-gaps.md §三
+    # 背景:solo/docs/feedback/done/scaffold-startup-guards-fallout.md §③ + patch-upgrade-consumer-gaps.md §三
     _op_port=$(grep -E '^[[:space:]]*PORTAL_OPERATOR_PORT=' "$PROJ/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
     _op_tars=$(ls "$PROJ/portal/publish/operator.v"*.tar.gz 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ' || true)
     if [ -f "$PROJ/portal/publish/operator.v${SOLO_VERSION}.tar.gz" ]; then

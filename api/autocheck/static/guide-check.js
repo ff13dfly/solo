@@ -13,7 +13,7 @@
  * 且历史上多数服务是"方法已接、GUIDE.md 未写"的状态，设成 ERROR 会一次炸一片。
  * autocheck 已挂 PostToolUse 钩子，WARN 也会每次改完呈现给作者，足以起提醒作用。
  *
- * 背景：docs/feedback/ai-agent-self-describing-api.md（AI 自描述 API），
+ * 背景：docs/feedback/done/ai-agent-self-describing-api.md（AI 自描述 API），
  * fleet-standard 系统方法 ping/methods/entities/events/guide（见项目 CLAUDE.md §5）。
  */
 

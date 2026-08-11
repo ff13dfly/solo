@@ -1,7 +1,7 @@
 /**
  * report.test.js — system.report 提报通道 hermetic 单测。
  *
- * 锁住 2026-07-23 的闭环增强（docs/feedback/ai-agent-self-describing-api.md 后续）：
+ * 锁住 2026-07-23 的闭环增强（docs/feedback/done/ai-agent-self-describing-api.md 后续）：
  *   - 指纹去重：同 type|method|message(规范化) 重复提交 → count+1，不新增条目
  *   - triage 状态：NEW → REVIEWED/RESOLVED（admin），非法状态拒
  *   - list 过滤：type / status

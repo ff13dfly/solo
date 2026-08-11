@@ -22,7 +22,7 @@ module.exports = {
     // Capability Discovery
     'system.capability.list': { internal: true, public: true, desc: 'Return capability map' },
 
-    // Self-Describing Bootstrap (docs/feedback/ai-agent-self-describing-api.md)
+    // Self-Describing Bootstrap (docs/feedback/done/ai-agent-self-describing-api.md)
     // Anonymous first hop for external AI agents: no params → router GUIDE.md
     // (envelope + auth flows + error codes); { service } → that service's guide
     // (auth required in production, mirroring the discovery gate in access.js).

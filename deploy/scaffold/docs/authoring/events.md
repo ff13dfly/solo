@@ -29,7 +29,7 @@
 `relay.call(...)`（含 §5 的 `event.emit` 路径）在这个状态下一律抛 `NO_TOKEN`。四步一步都不能少：
 
 ```
-1. user.bot.create      { uid: 'system.<service>', permit: { allow_all: false, services: {...} } }
+1. user.bot.create      { uid: 'system.<service>', permit: { allow_all: false, services: { user: ['user.token.refresh'], ... } } }
 2. user.bot.issue.token { uid: 'system.<service>' }  →  返回 { token, expiresAt }
 3. <service>.token.set  { token, expiresAt, sub: 'system.<service>' }   ← 调你自己服务的这个方法
 4. <service>.token.status 验证 hasToken:true
@@ -37,7 +37,8 @@
 
 - `uid` 必须**恰好**是 `system.<serviceName>`（`library/relay.js` 的 `expectedSub` 这么拼），不匹配抛 `SUB_MISMATCH`。
 - 第 1 步的 `permit` 不能给 `allow_all:true`（`user.bot.create` 会拒绝——bot 权限必须显式枚举 `services.method`），按你的服务实际要调的 Router 方法（通常至少要有 `event.emit`）来写。
-- 全新 scaffold 出来的栈，Solo 自带的 nexus / orchestrator 这两个服务同样没有 token（它们的 `event.emit`/调度事件功能因此不可用），需要同样手工走一遍这四步——这条尚无自动化，见 `docs/feedback/relay-provisioning-and-event-registry.md`。
+- 🔴 **`services` 里必须含 `user: ['user.token.refresh']`，不论你的服务实际要调什么方法**——这一条不是业务权限，是 `library/relay.js` 自身续期机制（`rotateBeforeMs` 默认到期前 2 小时）要用的，`event.emit` 本身虽然不查 permit，但 relay 每隔一段时间会自己去调 `user.token.refresh`，那次调用跟普通方法一样过权限检查。**漏了这条，token 到期前 2 小时开始悄悄轮转失败，24 小时后彻底失效，之后所有 `event.emit`/`relay.call` 都静默丢事件**——RPC 返回、日志、账本全部正常，只有事件消失，且要等满一个 token 生命周期才会暴露（colony 2026-08-10 实测踩过，丢了 3 条真实事件才发现，详见 `docs/feedback/done/relay-provisioning-and-event-registry.md` §五）。
+- 全新 scaffold 出来的栈，Solo 自带的 nexus / orchestrator 这两个服务同样没有 token（它们的 `event.emit`/调度事件功能因此不可用），需要同样手工走一遍这四步——这条尚无自动化，见 `docs/feedback/done/relay-provisioning-and-event-registry.md`。
 
 ## 1. `_event` 信封：你给什么 vs Router 盖什么
 
@@ -105,7 +106,7 @@
   这份清单校准到 solo v{{SOLO_VERSION}}；若怀疑已过期，去源码核对
   `api/router/config.js` 的 `eventRegistry` 才是权威（这份 bundle 是单文件，找不到就 grep
   `eventRegistry`）。这条目前只能靠手工核对——没有只读方法能返回"当前生效的合并结果"，
-  见 `docs/feedback/relay-provisioning-and-event-registry.md`。
+  见 `docs/feedback/done/relay-provisioning-and-event-registry.md`。
 
 ---
 

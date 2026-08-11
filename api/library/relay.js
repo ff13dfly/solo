@@ -196,6 +196,14 @@ function createRelay(options) {
             return await performRefresh(state.token);
         } catch (e) {
             audit('refresh_failed', { error: e.message });
+            // This is a foreseeable, escalating failure (rotateBeforeMs fires ~2h before
+            // expiry — every retry until then fails the same way) that otherwise has zero
+            // operator-visible signal: audit() is silent unless walLogger was wired (a WAL
+            // file, not a live log anyway), and the thrown error only reaches whichever
+            // caller's catch block happens to log it
+            // (docs/feedback/done/relay-provisioning-and-event-registry.md §五 — this exact
+            // silence hid a bot dying over 24h and losing real events). Always surface it.
+            console.error(`[relay:${serviceName}] token refresh failed (expires ${new Date(state.expiresAt).toISOString()}): ${e.message}`);
             if (e.code === 'TOKEN_EXPIRED' || (e.code === 'RPC_FAILED' && isExpired(state))) {
                 await clearState();
                 throw ERR.TOKEN_EXPIRED();

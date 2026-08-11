@@ -163,6 +163,64 @@ setInterval(updateCapabilityMap, 6e4);
 
 ---
 
+## 五、🔴 更正（2026-08-11）：第一节给的那个 `permit` 是错的，会让 bot 在 24h 后静默死掉
+
+**提交人自己踩了自己给的坑**，而且是在真实负载下跑满一天才显形的，务必在 `events.md` §0.5 里改掉。
+
+第一节写的 provisioning 步骤里给的是：
+
+```js
+user.bot.create { uid: 'system.ant', permit: { allow_all: false, services: {} } }
+```
+
+当时的理由是「`event.emit` 是 Router 内建方法、只认 session 不查 permit，所以 permit 可以给空」——
+**这个推理对 `event.emit` 本身成立，但漏了 relay 还要调另一个方法：`user.token.refresh`**。
+
+`library/relay.js` 的自动轮转（`rotateBeforeMs` 默认 2h）走的就是 `user.token.refresh`，
+而它跟任何普通方法一样过 `checkPermission`（bundle:44298-44307）。`services: {}` 意味着一条都不许调，
+于是**轮转必然失败**。
+
+### 实测到的故障链（colony，2026-08-10 20:29 注入 token，24h TTL）
+
+```
+08-11 17:24:07  最后一条成功的 position.opened 事件
+08-11 19:03:43  event.emit 失败 … RPC_FAILED: Forbidden          ← 到期前 2h，开始尝试轮转，被 permit 拒
+08-11 20:29:40  token 真的到期
+08-11 21:03:26  event.emit 失败 … TOKEN_EXPIRED: refresh failed
+08-11 22:31:35  event.emit 失败 … NO_TOKEN                        ← relay 已清空状态，RELAY:TOKEN:ant 键消失
+```
+
+后果：这段时间里 **2 条 position.opened + 1 条 position.closed 事件永久丢失**（按账本笔数与
+stream 长度对账得出：relay 可用后共 10 笔开仓 / 8 笔平仓，stream 里只有 8 / 7）。
+交易本身完全正常——账本、日志、RPC 返回全绿，只有事件没了。
+
+**要不是我在 `emit()` 的 catch 里留了一行 warn，这个故障没有任何迹象。**
+这恰好又是第四节说的那个形状，只不过这次是**延迟 24 小时才发作**的版本：provisioning 当天
+验证一切正常（`hasToken:true`、事件写入成功），第二天才悄悄断掉。
+
+### 正确的 permit
+
+```js
+permit: { allow_all: false, services: { user: ['user.token.refresh'] } }
+```
+
+已实测：补上后 `user.bot.update` → `user.bot.issue.token` → 用该 token 直接调
+`user.token.refresh` **成功返回新 token**（此前同样的调用是 `Forbidden`）。
+`allow_all: true` 仍然不行——`assertPermitSafe`（bundle:78086-78090）硬禁。
+
+### 追加建议
+
+1. **`events.md` §0.5 里的 permit 必须改成上面这个**，并注明「这一条是 relay 自动轮转的必需权限，
+   给空会让 bot 在 token 到期时静默失效」。这是本篇里唯一一条**照着做就会出事**的内容。
+2. `user.bot.create` 若发现 permit 不含 `user.token.refresh`，**在返回里带一条 warning**
+   （或直接默认注入该权限——任何 relay bot 都必然需要它，让每个使用者自己想起来是不合理的）。
+3. `relay.js` 轮转失败时，除了抛给调用方，**自己也记一条 error 级日志**。现在它完全依赖调用方
+   愿意打印 catch 到的错误；我是碰巧写了，换个人写成 `catch {}` 就彻底没声音了。
+4. 更根本的：`rotateBeforeMs` 那次失败是**可预知的致命信号**（2 小时后必然彻底失效），
+   值得比一次普通 RPC 失败更响——例如发一条 `EVENT:SYSTEM:*` 事件或进 DLQ，让它能被监控到。
+
+---
+
 ## 处理结论（solo 侧）
 
 三条实测属实。已修复两处、一处按提议做了文档级缓解、provisioning 脚本本身评估后判断不适合仓促自动化，说明如下（2026-08-10）：
@@ -203,3 +261,24 @@ setInterval(updateCapabilityMap, 6e4);
 
 四处改动（本文档 3/4 项 + forward.js 超时项）已合并跑过 `api/jest.ci.config.js` 全量白名单回归，
 详见 `router-forward-timeout-prefix-whitelist.md` 的处理结论。
+
+### 追加处理（针对五、2026-08-11 更正）
+
+提交人自己发现并实测确认的更正，权威性高（有故障时间线 + 事件丢失数量对账），当天处理：
+
+1. **`events.md` §0.5 的 permit 示例已改**：`services: {...}` 改成明确写出
+   `user: ['user.token.refresh']` 是必需项，并加粗警示——漏了这条会导致 bot 在 token 到期时
+   静默失效，而不是"仅仅缺了业务权限"。这是本篇里唯一一条"照着抄就会出事"的内容，优先级最高，
+   已确认修复。
+2. **`relay.js` 续期失败现在总会打一条 `console.error`**（不再依赖调用方是否传了 `walLogger`）：
+   `refreshIfNeeded()` 的 catch 块里 `audit()` 之外新增无条件的 `console.error`，带服务名 + 过期
+   时间 + 错误信息。对应追加建议 3。`api/library/tests/relay.test.js` 52 个测试无 console 断言，
+   跑过回归全绿，不受影响。
+3. **追加建议 2（`user.bot.create` 缺 `user.token.refresh` 时警告或自动注入）——评估后暂不做**：
+   `user.bot.create` 是通用 bot 账号入口，不是所有 bot 都经 `library/relay.js` 的自动续期路径
+   （例如纯粹的外部 MCP 客户端 token，续期方式不同）；自动注入等于替调用者做了一个它没显式要求
+   的权限决定，与 `assertPermitSafe` 本身"权限必须显式枚举"的设计初衷相悖。留给以后专门评估要不要
+   做成"仅警告，不注入"。
+4. **追加建议 4（可预知失败要有比普通 RPC 失败更强的信号，如进 DLQ/发事件）——未做**：本身是要新增
+   信号通道的设计决策，超出这轮 triage 范围；`console.error`（本轮已加）先把"完全没有信号"的问题
+   解决，是否需要更强的通道留待观察是否还有必要。

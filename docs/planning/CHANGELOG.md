@@ -22,7 +22,7 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ### Fixed — bundle 内置服务吃继承的 `ROUTER_URL`/`PORT` → 事件误投给别家 Router、静默丢弃（🔴 数据丢失级）
 
-> 来源：trend/overview 同机并跑的实测 + 08-08 源码核实，`docs/feedback/inherited-router-url-silent-misdelivery.md`。两个正交缺陷，各自都足以致静默失败，这次一起修。
+> 来源：trend/overview 同机并跑的实测 + 08-08 源码核实，`docs/feedback/done/inherited-router-url-silent-misdelivery.md`。两个正交缺陷，各自都足以致静默失败，这次一起修。
 
 - **根治**：`deploy/gen-entry.js` 在 `global.__SOLO_PORTS__` 填完、任何服务 `config.js` 加载前 `delete process.env.PORT; delete process.env.ROUTER_URL;`。bundle 是**一个进程托管多个服务**，这两个变量是"单进程单身份"语义（`PORT`=我自己的监听端口，`ROUTER_URL`=独立私有 app 进程该去哪找 Router），对 bundle 内置服务毫无意义、继承下来还很危险：14 个 core/apps 的 `config.js` 仍是 `process.env.ROUTER_URL || urlFor(...)`（环境变量优先，`ports.js` 头部注释明明写着 `urlFor` 刻意不读环境），一个从别的 Solo 栈残留 `export` 下来的 `ROUTER_URL`，会让本项目的事件全部悄悄投给别人的 Router——对方不认来源、`blocked` 丢弃，日志打在**对方**项目里，本项目从 HTTP 200 到审计 `accepted` 全程"正常"。`PORT` 泄漏更糟：`portFor()` 对 `process.env.PORT` 是有意优先（独立进程需要它钉住监听口），bundle 里十几个服务会全挤到同一个端口，只有第一个绑上的能用。**一处改动**（entry 是每次 build 都会重新生成的单一入口）保护全部现在和未来的 config.js，且不影响 `run.sh` 私有 app 段（它显式给每个子进程传这两个变量，语义合法、不受影响）。
 - **防御层**：`deploy/scaffold/run.sh` 加载 `.env` 后追加 `unset PORT ROUTER_URL ADMINISTRATOR_SERVICE_URL`——不能替代上面的根治（这里清理的是 shell 本身的继承源头，gen-entry.js 清理的是 bundle 进程实际读到的值），但双保险成本几乎为零。
@@ -35,7 +35,7 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 ### Fixed — scaffold `run.sh`：v1.1.14 fail fast 的退出路径反咬一口（同机多栈误杀）+ 两处启动阻断
 
 > 本节起，以下几节全部来自 2026-08-06 两个派生项目（finance、trend）升 v1.1.14 的同日实测反馈：
-> `docs/feedback/scaffold-startup-guards-fallout.md` + `patch-upgrade-consumer-gaps.md` + `autocheck-hardcoded-page-regex.md`。
+> `docs/feedback/done/scaffold-startup-guards-fallout.md` + `patch-upgrade-consumer-gaps.md` + `autocheck-hardcoded-page-regex.md`。
 
 - **`cleanup()` 端口清扫加进程组判据**。"保险起见"的端口清扫对两份 services.json 里所有端口无条件 `kill -9`，这在 v1.1.14 之前只在 Ctrl+C 时跑（杀的确实是自己）；v1.1.14 加了 fail fast 后，**每条 `exit 1` 路径都经 EXIT trap 走这段清扫**——端口撞车时"第二个实例没抢到任何东西，却把先起的栈连根拔了"（finance/trend 双双实测复现），恰好发生在守卫要保护的同机多栈场景。现清扫前比对 `pgid`，只杀自己这一支（子进程不 `setsid`，pgid 继承自 run.sh，判据成立；保留"抓自己 detach 掉的孙子进程"原意）。
 - **`cleanup()` 保留真实退出码**。原结尾无条件 `exit 0` 把 fail fast 的 `exit 1` 吃掉，`start-all.command` 这类按退出码判断的启动器会把"拒绝启动"读成"起好了"。顺带加了 trap 防重入。
@@ -113,14 +113,14 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ### Fixed — `deploy/scaffold/run.sh` 两处启动期资源冲突从"静默接管"改成 fail fast
 
-> 来源：派生项目实测反馈 `docs/feedback/redis-port-ownership.md`（overview / trend 同机并跑）。同一种病的两处形态：**启动期检查证明力不够，撞车时静默继续**。只改 scaffold 的 `run.sh`，bundle 与服务代码零改动。
+> 来源：派生项目实测反馈 `docs/feedback/done/redis-port-ownership.md`（overview / trend 同机并跑）。同一种病的两处形态：**启动期检查证明力不够，撞车时静默继续**。只改 scaffold 的 `run.sh`，bundle 与服务代码零改动。
 
 - **Redis 归属校验**（`else` 分支）：原判据 `redis-cli -p $PORT ping` 只能证明"这个端口上有个 redis 在应答"，证明不了它是谁起的。多个 Solo 栈同机并跑、端口撞车时，**后起的栈会静默挂到先起者的实例上**，数据写进人家的 `deploy/redis_data`；换个启动顺序就从另一个目录加载 rdb，上一轮的数据看起来"消失"了（其实还在原目录的 rdb 里）——**不是报错，是数据看着丢了**。而且 `ping` 对 `NOAUTH` 同样返回退出码 0（实测），带密码的别家实例也会被判成 "already running"，随后业务服务报鉴权错误，**看着像密码配错，不像端口撞车**。现在改用 `CONFIG GET dir` 校验归属（一次覆盖"不是我的目录"和"没权限读→返回空"两层），不匹配就打印占用方的绝对路径并 `exit 1`。⚠️ 校验 gate 在本机 host（`127.0.0.1`/`localhost`/`::1`/空）——判据一直只用 `-p`、把 URL 里的 host 丢了，不 gate 会让"用外部 redis"的部署因本地同号端口有人占（如 brew 的 redis-stack 占着 6379）而误报退出。
 - **前端端口冲突**（`serve_frontend`）：此前**没有任何端口检查**，而 `serve` 在端口被占时会自己换一个随机端口并报告成功（14.2.4 实测：占住 39117，日志里写的是 `Accepting connections at :51410`；源码是 listen 前 `isPortReachable` 探一下、可达就无条件 `startServer({port:0})`，`--no-port-switching` 只在 arg 表里声明、**代码里从没被消费**，是个死 flag）。叠上 `run.sh` 照旧打印配置的端口、dashboard 的 `lsof` 探到的是占用方的监听 → 三层假绿，前端连续数月没起来过也没人发现。现在 spawn 前 `lsof` 探端口、被占直接 `exit 1` 并报出占用方；spawn 后再确认监听者的 pid 就是我们那个子进程（覆盖竞态和 serve 自己起不来两种情形）。
 - 两处的 `x=$(cmd | tail -1)` 都带 `|| true`：`run.sh` 是 `set -euo pipefail`，`lsof` 在端口空闲时返回 1、pipefail 下会让赋值语句直接触发 `set -e`——正常路径反而静默退出（本轮 harness 实测抓到，已修）。
 - 验证：`bash -n` 通过；用抽取真实 `run.sh` 代码段的 harness 实跑 7 种情形全对——redis 4 种（本项目实例通过 / 别家目录拒绝 / 带密码无凭证拒绝 / 远端 host 跳过校验）+ 前端 3 种（端口空闲起来且 pid 匹配 / 端口被占 fail fast / serve 二进制缺失 fail fast）。
 
-> 下游 action：**改过 `deploy/run.sh` 的项目要手动 merge**。`upgrade.sh` 的 divergence 检测不会覆盖被定制的 `run.sh`，新 stock 落成 `deploy/run.sh.solo-<ver>.new` 并标 `DIVERGED`（`FORCE_SCRIPTS=1` 才强覆盖）。另：升级后启动会**更严**——本机多栈共用一个 Redis 端口的项目（数据实际写在别家 `redis_data` 里的那种）会在启动时 `exit 1` 而不再静默接管，**先换端口 + 迁数据再升级**；前端端口被别家占着的同理。迁移说明见 `docs/feedback/redis-port-ownership.md`「处理结论」。
+> 下游 action：**改过 `deploy/run.sh` 的项目要手动 merge**。`upgrade.sh` 的 divergence 检测不会覆盖被定制的 `run.sh`，新 stock 落成 `deploy/run.sh.solo-<ver>.new` 并标 `DIVERGED`（`FORCE_SCRIPTS=1` 才强覆盖）。另：升级后启动会**更严**——本机多栈共用一个 Redis 端口的项目（数据实际写在别家 `redis_data` 里的那种）会在启动时 `exit 1` 而不再静默接管，**先换端口 + 迁数据再升级**；前端端口被别家占着的同理。迁移说明见 `docs/feedback/done/redis-port-ownership.md`「处理结论」。
 
 ---
 
@@ -135,7 +135,7 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 - **存量数据需要迁移**：cursor 模式要求排序 ZSET 与旧 SET 索引条目数一致，不一致直接 `INVALID_PARAMS`（不做静默降级到慢路径——那样"cursor 到底有没有真的变快"会完全不可见）。新增一次性、幂等的迁移入口：每个 entity 实例的 `migrateCursorIndex()` 方法，以及可直接跑的 CLI `deploy/migrate-cursor-index.js <serviceName> <entityName> [json]`。全新服务/全新实体不需要迁移（`create()` 已自动双写两个索引）。
 - 回归：`entity-cursor-pagination.test.js`（9 用例，真实 Redis）+ 全 CI 白名单 122 套/1923 测试绿（新增两个 Redis 命令依赖后，approval/collection/gateway 等服务的 hermetic fake redis 补了 `incr`/`zAdd`/`zRem`）。
 
-> 下游 action：**运行时无强制**（不传 `cursor` 行为完全不变，`migrateCursorIndex()` 不跑也不影响现有 offset 调用）。**但 hermetic 测试有强制**：`create()`/`delete()` 现在**无条件**双写游标 ZSET（跟调用方传不传 `cursor` 无关），任何手写 fake redis 的服务测试必须补 `incr` / `zAdd` / `zRem`，否则升级后第一次跑测试就是 `TypeError: redis.incr is not a function`——照抄过 `api/sample/tests/item.test.js` 旧版 mock 的项目全部受影响（生产不受影响，真 Redis 什么都有；正因如此只有项目自己的测试能暴露它，升级后务必跑一遍）。要写 cursor 模式的测试还需 `zRange`（注意 REV 下入参是 `(max, min)`）与 `zScore`，对齐新版 sample mock 即可。*（此段 2026-08-06 补正：原文只写「无强制」，trend 升级实测 6 套件/39 测试当场红，见 `docs/feedback/patch-upgrade-consumer-gaps.md` §一。）*
+> 下游 action：**运行时无强制**（不传 `cursor` 行为完全不变，`migrateCursorIndex()` 不跑也不影响现有 offset 调用）。**但 hermetic 测试有强制**：`create()`/`delete()` 现在**无条件**双写游标 ZSET（跟调用方传不传 `cursor` 无关），任何手写 fake redis 的服务测试必须补 `incr` / `zAdd` / `zRem`，否则升级后第一次跑测试就是 `TypeError: redis.incr is not a function`——照抄过 `api/sample/tests/item.test.js` 旧版 mock 的项目全部受影响（生产不受影响，真 Redis 什么都有；正因如此只有项目自己的测试能暴露它，升级后务必跑一遍）。要写 cursor 模式的测试还需 `zRange`（注意 REV 下入参是 `(max, min)`）与 `zScore`，对齐新版 sample mock 即可。*（此段 2026-08-06 补正：原文只写「无强制」，trend 升级实测 6 套件/39 测试当场红，见 `docs/feedback/done/patch-upgrade-consumer-gaps.md` §一。）*
 > 想在数据量大的实体上用 cursor 分页：① 跑一次 `node deploy/migrate-cursor-index.js <service> <entity>`（RedisJSON 实体加第三个参数 `json`）补历史索引；② 调用侧把 `{limit,offset}` 换成 `{cursor}` 循环取 `nextCursor` 直到为 `null`；③ 若 UI 依赖"第 X 页共 Y 页"，cursor 模式没有这个数字，需要改造成"加载更多"。
 
 ### Added — portal 品牌名 / 系统说明可从 `.env` 配置

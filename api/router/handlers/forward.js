@@ -6,7 +6,7 @@ const bs58 = require('bs58').default || require('bs58');
 
 // Fallback forward timeout for everything outside the agent/gateway prefixes below.
 // Derived-project methods (e.g. `brand.event.tag`) can't opt into a longer window any
-// other way today (docs/feedback/router-forward-timeout-prefix-whitelist.md) — this at
+// other way today (docs/feedback/done/router-forward-timeout-prefix-whitelist.md) — this at
 // least makes the one global default configurable instead of a hardcoded 10s.
 const DEFAULT_FORWARD_TIMEOUT_MS = Number(process.env.ROUTER_FORWARD_TIMEOUT_MS) || 10000;
 

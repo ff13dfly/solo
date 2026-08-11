@@ -82,7 +82,7 @@ function createStorageProvider(storageConfig = {}, deps = {}) {
      *   via resolve/get). Byte-level protection is decided HERE by `access`, not by
      *   visibility — an `internal` asset's bytes are anonymously downloadable in public
      *   mode. Capability-URL model (same as S3 presign); the boot warning below makes the
-     *   combination explicit. See docs/feedback/storage-visibility-semantics.md.
+     *   combination explicit. See docs/feedback/done/storage-visibility-semantics.md.
      */
     driver.resolveUrl = (key, opts = {}) => {
         if (driver.access === 'public' && driver.capabilities().publicUrl) {

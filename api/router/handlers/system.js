@@ -42,7 +42,7 @@ function createSystemHandlers(addServiceFn, isAdmin, dirname, redisClient, SERVI
 
         /**
          * system.guide
-         * 自描述引导入口（docs/feedback/ai-agent-self-describing-api.md 落地）。
+         * 自描述引导入口（docs/feedback/done/ai-agent-self-describing-api.md 落地）。
          *
          * - 无参：返回 Router 自身的 GUIDE.md（JSON-RPC 信封、两条认证流程含参考
          *   代码、错误码约定、下一步指引）。匿名可读——这是外部 AI 代理唯一需要

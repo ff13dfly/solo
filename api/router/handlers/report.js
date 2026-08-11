@@ -12,7 +12,7 @@
  * system.report.list   — 管理员查看收集到的报告（支持 type/status 过滤）
  * system.report.update — 管理员标记 triage 状态（NEW → REVIEWED / RESOLVED）
  *
- * 去重（2026-07-23，docs/feedback/ai-agent-self-describing-api.md 后续）：
+ * 去重（2026-07-23，docs/feedback/done/ai-agent-self-describing-api.md 后续）：
  *   同一诉求（type|method|message 规范化后同指纹）重复提交 → count+1 而非新增条目。
  *   count 即「多少次任务撞过同一堵墙」——天然的优先级信号；措辞不同的相似诉求
  *   仍是独立条目，归并留给人工 triage（Portal → AI Reports）。

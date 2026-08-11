@@ -1,7 +1,7 @@
 /**
  * library/guide.js — fleet-standard `guide` 方法的统一实现
  *
- * 背景（docs/feedback/ai-agent-self-describing-api.md）：introspection 说得出
+ * 背景（docs/feedback/done/ai-agent-self-describing-api.md）：introspection 说得出
  * "有什么方法"，说不出"任务怎么做"（先传图拿 assetId 再 create 挂上，按 sku 幂等…）。
  * guide 是第四个 fleet-standard 系统方法，与 ping/methods/entities/events 并列，
  * 把服务目录下的 GUIDE.md 原样返回——内容与代码同目录、同一次 commit 修改，

@@ -68,7 +68,7 @@ fi
 # can only cause harm (bundle services picking up a foreign Router or all
 # colliding on one port), never fix anything. Not in this project's .env
 # template, so this cannot clobber an intentional setting.
-# Background: docs/feedback/inherited-router-url-silent-misdelivery.md
+# Background: docs/feedback/done/inherited-router-url-silent-misdelivery.md
 unset PORT ROUTER_URL ADMINISTRATOR_SERVICE_URL
 
 # --- 2. Ensure npm dependencies ---
@@ -164,7 +164,7 @@ cleanup() {
     # fail fast 路径(端口冲突/Redis 归属不符)都会经 EXIT trap 走到这里:若不看
     # 归属,同机另一个正在跑的栈(端口撞车时恰恰是它占着端口)会被连根杀掉——
     # 第二个实例没抢到任何东西,却把第一个打死了。子进程不 setsid,pgid 天然继承
-    # 自本脚本,判据成立。背景:solo/docs/feedback/scaffold-startup-guards-fallout.md §①
+    # 自本脚本,判据成立。背景:solo/docs/feedback/done/scaffold-startup-guards-fallout.md §①
     local _our_pgid _pg l
     _our_pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
     for port in "${SOLO_PORTS[@]}" "${SVC_PORTS[@]}"; do
@@ -230,7 +230,7 @@ else
     # `CONFIG GET dir` 一次覆盖这两层:不是本项目的目录 → 不匹配;没权限读 → 返回空
     # → 同样不匹配。REDISCLI_AUTH 已在上面导出,redis-cli 会自动带上凭证。
     # 只对本机实例校验:REDIS_URL 指向远端时 `-p` 探的本来就是本地端口,归属无从谈起。
-    # 背景与实测:solo/docs/feedback/redis-port-ownership.md
+    # 背景与实测:solo/docs/feedback/done/redis-port-ownership.md
     case "$REDIS_HOST" in
         127.0.0.1|localhost|::1|"")
             # `|| true`:同 serve_frontend,别让非零退出码撞上 set -e / pipefail。
@@ -406,7 +406,7 @@ serve_frontend() {
     # ({port:0}),而 --no-port-switching 只在 arg 表里声明、代码里从没被消费 = 死 flag,
     # 所以不能靠它)。后果是 run.sh 照旧打印配置的端口,dashboard 的 lsof 探到的是占用方
     # 的监听 → 一路假绿,前端其实几个月没起来过也没人发现。启动期的资源冲突一律 fail
-    # fast,不 warn。背景:solo/docs/feedback/redis-port-ownership.md §六
+    # fast,不 warn。背景:solo/docs/feedback/done/redis-port-ownership.md §六
     fe_assert_port_free "$name" "$port"
     local log_file="$DEBUG_DIR/fe_${name}.log"
     "$ROOT_DIR/node_modules/.bin/serve" "$serve_dir" -p "$port" -s \

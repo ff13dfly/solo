@@ -113,7 +113,7 @@ global.__SOLO_PORTS__ = Object.fromEntries(
 // of every service's config.js — protects all of them without relying on
 // each one being written correctly, and without touching run.sh's private-app
 // spawn (a legitimately different, single-process consumer of these same names).
-// Background: docs/feedback/inherited-router-url-silent-misdelivery.md
+// Background: docs/feedback/done/inherited-router-url-silent-misdelivery.md
 delete process.env.PORT;
 delete process.env.ROUTER_URL;
 
