@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { createLogger } = require('../../../library/logger');
+const { resolvePaging } = require('../../../library/pagination');
 const jsonrpc = require('../handlers/jsonrpc');
 const { validateContext } = require('./context');
 
@@ -202,7 +203,10 @@ module.exports = (redis, config, { relay, identity } = {}) => {
         return profile;
     }
 
-    async function list({ page = 1, pageSize = config.pageSize, status = null } = {}) {
+    // Accepts both paging dialects — see library/pagination.js.
+    async function list(params = {}) {
+        const { status = null } = params;
+        const { limit, offset } = resolvePaging(params, { defaultLimit: config.pageSize });
         const ids = await redis.sMembers(R.sentinelSet); // SAFE: small (bounded sentinel registry)
         if (ids.length === 0) return { items: [], total: 0 };
 
@@ -212,8 +216,7 @@ module.exports = (redis, config, { relay, identity } = {}) => {
 
         const total = items.length;
         items.sort((a, b) => b.createdAt - a.createdAt);
-        const offset = (Math.max(1, page) - 1) * pageSize;
-        items = items.slice(offset, offset + pageSize);
+        items = items.slice(offset, offset + limit);
 
         for (const it of items) {
             it.online = (await redis.exists(R.onlinePrefix + it.id)) === 1;

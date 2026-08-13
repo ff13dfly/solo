@@ -8,6 +8,7 @@
  * consumer picks it up fresh) and removes the DLQ entry. Admin-only (wired in index.js).
  */
 const jsonrpc = require('../handlers/jsonrpc');
+const { resolvePaging } = require('../../../library/pagination');
 
 module.exports = (redis, config) => {
     const DLQ = config.redis.dlqStream;
@@ -26,13 +27,14 @@ module.exports = (redis, config) => {
         };
     }
 
-    async function list({ page = 1, pageSize = 50 } = {}) {
+    // Accepts both paging dialects — see library/pagination.js.
+    async function list(params = {}) {
+        const { limit, offset } = resolvePaging(params, { defaultLimit: 50 });
         // DLQ is bounded operationally; read newest-first and paginate in memory.
         const entries = await redis.xRange(DLQ, '-', '+');
         const items = entries.map(shape).reverse();
         const total = items.length;
-        const offset = (Math.max(1, page) - 1) * pageSize;
-        return { items: items.slice(offset, offset + pageSize), total };
+        return { items: items.slice(offset, offset + limit), total };
     }
 
     async function retry({ id } = {}) {

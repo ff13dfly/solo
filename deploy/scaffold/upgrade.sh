@@ -30,7 +30,8 @@
 #   deploy/services.json  deploy/solo-services.json  deploy/seed.json  e2e/
 #   portal/publish/operator.*.tar.gz  (operator is source-distributed — team's)
 #
-# [Solo->Project] deploy scripts (run.sh precheck.sh admin-up.sh seed-registry.js):
+# [Solo->Project] deploy scripts (run.sh precheck.sh admin-up.sh seed-registry.js
+# migrate-cursor-index.js):
 #   DETECTED, not blindly overwritten. If the project's copy diverges from stock
 #   (i.e. the team customized it, like wavely's run.sh), the new stock is staged
 #   alongside as <name>.solo-{ver}.new for a manual diff — the live file is left
@@ -247,7 +248,7 @@ done
 
 # --- 4. [Solo->Project] deploy scripts: detect divergence, don't clobber ---
 log_step "Checking [Solo→Project] deploy scripts..."
-for s in run.sh precheck.sh admin-up.sh seed-registry.js; do
+for s in run.sh precheck.sh admin-up.sh seed-registry.js migrate-cursor-index.js; do
     stock="$SCRIPT_DIR/$s"; proj="$PROJ/deploy/$s"
     [ -f "$stock" ] || continue
     if [ ! -f "$proj" ]; then

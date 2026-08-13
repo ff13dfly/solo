@@ -3,6 +3,7 @@ const bs58 = require('bs58').default || require('bs58');
 const { generateId, validateId } = require('../../../library/generator');
 const jsonrpc = require('../handlers/jsonrpc');
 const { STATUS } = require('../../../library/constants');
+const { resolvePaging } = require('../../../library/pagination');
 const { optimisticUpdate } = require('../../../library/optimistic');
 
 /**
@@ -358,7 +359,13 @@ module.exports = (redisClient, config) => {
      *      has to look at every name key — SCAN just makes doing so non-blocking, it
      *      doesn't make it O(page). A real fix needs RediSearch; deferred (see CHANGELOG).
      */
-    async list({ page = 1, limit = 12, keyword = '', includeDeleted = false } = {}) {
+    // Accepts every paging dialect via library/pagination.js — this method's own was a third
+    // variant (page + limit, with the limit echoed back as `pageSize`), and none of page /
+    // limit / keyword were declared in introspection, so no caller could discover them.
+    // The RETURN shape is unchanged (portal/system's useUsers reads result.pageSize).
+    async list(params = {}) {
+        const { keyword = '', includeDeleted = false } = params;
+        const { limit, offset } = resolvePaging(params, { defaultLimit: 12 });
         const kw = (keyword || '').trim();
         let ids;
 
@@ -389,16 +396,13 @@ module.exports = (redisClient, config) => {
         users.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
         const total = users.length;
-        const p = parseInt(page);
-        const l = parseInt(limit);
-        const start = (p - 1) * l;
-        const slicedUsers = users.slice(start, start + l);
+        const slicedUsers = users.slice(offset, offset + limit);
 
         return {
             users: slicedUsers,
             total,
-            page: p,
-            pageSize: l
+            page: Math.floor(offset / limit) + 1,   // derived back for the legacy return contract
+            pageSize: limit
         };
     },
 

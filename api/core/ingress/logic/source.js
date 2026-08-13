@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const createEntity = require('../../../library/entity');
+const { resolvePaging } = require('../../../library/pagination');
 const clock = require('../../../library/clock');
 const jsonrpc = require('../handlers/jsonrpc');
 
@@ -97,10 +98,10 @@ module.exports = (redis, { config }) => {
         return present(await entity.get({ id }));
     }
 
-    async function list({ page = 1, pageSize = config.pageSize } = {}) {
-        // entity.list paginates by limit/offset.
-        const limit = Math.max(1, pageSize);
-        const offset = Math.max(0, (Math.max(1, page) - 1) * limit);
+    // Accepts both dialects: the fleet-standard limit/offset and the legacy page/pageSize
+    // this method shipped with (see library/pagination.js). entity.list reads the former.
+    async function list(params = {}) {
+        const { limit, offset } = resolvePaging(params, { defaultLimit: config.pageSize });
         const result = await entity.list({ limit, offset });
         result.items = (result.items || []).map(present);
         return result;

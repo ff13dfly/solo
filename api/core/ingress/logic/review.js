@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { resolvePaging } = require('../../../library/pagination');
 const clock = require('../../../library/clock');
 const jsonrpc = require('../handlers/jsonrpc');
 
@@ -28,10 +29,12 @@ module.exports = (redis, { config, relay, source }) => {
         return reviewId;
     }
 
-    async function list({ page = 1, pageSize = config.pageSize } = {}) {
+    // Accepts both dialects — see library/pagination.js. This one is a Redis LIST, so
+    // limit/offset map straight onto lRange's [start, stop] window.
+    async function list(params = {}) {
+        const { limit, offset } = resolvePaging(params, { defaultLimit: config.pageSize });
         const total = await redis.lLen(KEY);
-        const start = (Math.max(1, page) - 1) * pageSize;
-        const raw = await redis.lRange(KEY, start, start + pageSize - 1);
+        const raw = await redis.lRange(KEY, offset, offset + limit - 1);
         const items = raw.map((s) => { try { return JSON.parse(s); } catch { return { raw: s }; } });
         return { items, total };
     }

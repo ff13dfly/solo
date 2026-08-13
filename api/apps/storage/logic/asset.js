@@ -7,6 +7,7 @@ const jsonrpc = require('../handlers/jsonrpc');
 const generator = require('../../../library/generator');
 const { createConfig } = require('../../../library/config');
 const { applySearch } = require('../../../library/search');
+const { resolvePaging } = require('../../../library/pagination');
 const { createLogger } = require('../../../library/logger');
 const { keyFor, thumbKeyFor } = require('../oss/keying');
 
@@ -425,10 +426,11 @@ module.exports = (redisClient, config, store) => {
          * list — keyword (id / originalName / sha256) + pagination. See the
          * keywordSearch / listOwnedAndVisible helpers above for the per-path why.
          */
-        async list({ page = 1, pageSize = 20, keyword, offset, limit } = {}, ctx) {
-            const effLimit  = limit  ?? pageSize;
-            const effOffset = offset ?? (page - 1) * pageSize;
-            const kw = (keyword || '').trim();
+        async list(params = {}, ctx) {
+            // Both paging dialects, via the shared normalizer (this method hand-rolled the
+            // same ?? fallback before library/pagination.js existed).
+            const { limit: effLimit, offset: effOffset } = resolvePaging(params, { defaultLimit: 20 });
+            const kw = (params.keyword || '').trim();
             const isAdmin = ctx === undefined || (ctx && ctx.permit === 'admin');
 
             if (kw) {

@@ -16,16 +16,26 @@ const path = require('path');
 
 // 全队基建参数 → 唯一合法类型。只收"跨服务复用的基础设施参数",
 // 业务参数(amount/state/…)各服务自治,不在此列。
+//
+// 分页方言(2026-08-13 定): **标准是 limit / offset / cursor**,新方法一律用这三个。
+// page / pageSize 是早期服务的历史方言,仍在表里是因为存量方法(ingress / notification /
+// nexus / storage / market / collection)继续接受它、调用方(portal / e2e)还在传——它们的
+// logic 经 library/pagination.js 把两套折叠成一套,所以两边都合法、类型都要卡住。
+// 但**别再给新方法声明 page/pageSize**:底层 library/entity.js 的 list() 只认 limit/offset/
+// cursor,多一套方言就多一层各服务手抄的换算(那三行曾在五个服务里各抄一份)。
+// cursor 是 string:游标模式的首页用 cursor:null 请求,Router 的 validator 对 null 跳过
+// 类型校验(handlers/validator.js),所以声明成 string 不会拒掉合法的首页请求。
 const FLEET_PARAM_TYPES = {
     token:     'string',
     expiresAt: 'number',
     sub:       'string',
     id:        'string',
     uid:       'string',
-    page:      'number',
-    pageSize:  'number',
-    limit:     'number',
-    offset:    'number',
+    limit:     'number',   // ← 标准
+    offset:    'number',   // ← 标准
+    cursor:    'string',   // ← 标准(有界游标分页;首页传 null)
+    page:      'number',   // 历史方言,存量方法专用
+    pageSize:  'number',   // 历史方言,存量方法专用
     keyword:   'string',
 };
 

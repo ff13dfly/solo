@@ -23,6 +23,14 @@ const SOURCE      = { name: 'source', type: 'string', maxLength: 64 };          
 const CURRENCY    = { name: 'currency', type: 'string', maxLength: 64 };                                // enum-ish key (ISO code)
 const EXTERNAL_REF= { name: 'externalRef', type: 'string', maxLength: 512 };                            // opaque external reference
 const STATE_OPT   = { name: 'state', type: 'string', maxLength: 64 };                                   // business-state filter (RECEIVED|SETTLED|REFUNDED) — matches logic list({ state })
+// PAGING VOCABULARY — limit/offset is the fleet standard (autocheck/static/param-conventions.js
+// is the authoritative table); page/pageSize is the dialect this method shipped with and still
+// accepts, so existing callers (e2e suites) keep working. logic/ folds both through
+// library/pagination.js. New methods declare limit/offset (+ cursor if bounded paging is wired).
+const LIMIT            = { name: 'limit',    type: 'number' };      // page size (fleet-standard)
+const OFFSET           = { name: 'offset',   type: 'number' };      // rows to skip (fleet-standard)
+const PAGE_LEGACY      = { name: 'page',     type: 'number' };      // DEPRECATED legacy dialect — use offset
+const PAGE_SIZE_LEGACY = { name: 'pageSize', type: 'number' };      // DEPRECATED legacy dialect — use limit
 
 // --- RETURN CONTRACT VOCABULARY (returns_schema) ---
 //
@@ -73,7 +81,7 @@ const methods = [
     // that targets `collection-payment-{id}`. Verified via the Router (approval.record.get).
     { name: 'collection.payment.refund', params: [ID, { name: 'approvalId', type: 'string', required: true, maxLength: 64, pattern: 'id' }], returns: ['id', 'state', 'status', 'refundedAt'], returns_schema: PAYMENT_RETURN, description: 'Refund a payment — requires a confirmed, signed approval (approval.record DONE) targeting this payment', ai: true },
     { name: 'collection.payment.get',    params: [ID], returns: ['id', 'state', 'status', 'amount'], returns_schema: PAYMENT_RETURN, description: 'Get a payment', ai: true },
-    { name: 'collection.payment.list',   params: [STATE_OPT, { name: 'page', type: 'number' }, { name: 'pageSize', type: 'number' }], returns: ['items', 'total'], returns_schema: [{ name: 'items', type: 'array', required: true }, { name: 'total', type: 'number', required: true }], description: 'List payments', ai: true },
+    { name: 'collection.payment.list',   params: [STATE_OPT, LIMIT, OFFSET, PAGE_LEGACY, PAGE_SIZE_LEGACY], returns: ['items', 'total'], returns_schema: [{ name: 'items', type: 'array', required: true }, { name: 'total', type: 'number', required: true }], description: 'List payments (paginated — prefer limit/offset)', ai: true },
 
     // Admin-only relay token lifecycle (outbound approval.record.get for refund gating).
     { name: 'collection.token.set',    params: [{ name: 'token', type: 'string', required: true, maxLength: 512 }, { name: 'expiresAt', type: 'number' }, { name: 'sub', type: 'string', maxLength: 64 }], returns_schema: [{ name: 'ok', type: 'boolean', required: true }], description: 'Set relay bot token (admin)', ai: false },

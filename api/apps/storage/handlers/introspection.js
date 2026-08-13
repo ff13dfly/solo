@@ -118,16 +118,24 @@ module.exports = [
     },
     {
         name: 'storage.asset.list',
+        // limit/offset is the fleet standard (autocheck/static/param-conventions.js is the
+        // authoritative table); page/pageSize is the dialect this method shipped with and still
+        // accepts, so existing callers keep working. logic/asset.js folds both through
+        // library/pagination.js. `keyword` was accepted by the handler but never declared —
+        // undeclared params are invisible to introspection, so no caller could discover the search.
         params: [
-            { name: 'page', type: 'number', desc: 'Page number (1-based)' },
-            { name: 'pageSize', type: 'number', desc: 'Items per page' }
+            { name: 'limit',    type: 'number', desc: 'Page size (fleet-standard)' },
+            { name: 'offset',   type: 'number', desc: 'Rows to skip (fleet-standard)' },
+            { name: 'page',     type: 'number', desc: 'DEPRECATED legacy dialect — use offset' },
+            { name: 'pageSize', type: 'number', desc: 'DEPRECATED legacy dialect — use limit' },
+            { name: 'keyword',  type: 'string', maxLength: 256, desc: 'Search id / originalName / sha256' }
         ],
         returns: ['items', 'total'],
         returns_schema: [
             { name: 'items', type: 'array',  required: true },
             { name: 'total', type: 'number', required: true }
         ],
-        description: 'List all assets with pagination',
+        description: 'List all assets with pagination (prefer limit/offset) — optional keyword search',
         ai: false
     },
     {

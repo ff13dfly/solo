@@ -23,6 +23,15 @@
 // `lastFiredAt` is declared-but-nullable (null until first fire — present as a key, null value,
 // so NOT required: checkParams rejects null on a required key). `healthUrl` is fully optional
 // (only present when the source was created/updated with one).
+// PAGING VOCABULARY — limit/offset is the fleet standard (autocheck/static/param-conventions.js
+// is the authoritative table); page/pageSize is the dialect these two methods shipped with and
+// still accept, so existing callers (portal, e2e) keep working. logic/ folds both through
+// library/pagination.js. New methods declare limit/offset (+ cursor if bounded paging is wired).
+const LIMIT            = { name: 'limit',    type: 'number', description: 'Page size (fleet-standard)' };
+const OFFSET           = { name: 'offset',   type: 'number', description: 'Rows to skip (fleet-standard)' };
+const PAGE_LEGACY      = { name: 'page',     type: 'number', description: 'DEPRECATED legacy dialect — use offset' };
+const PAGE_SIZE_LEGACY = { name: 'pageSize', type: 'number', description: 'DEPRECATED legacy dialect — use limit' };
+
 const SOURCE_RETURN = [
     { name: 'id',          type: 'string',  required: true },
     { name: 'name',        type: 'string',  required: true },   // unique source name
@@ -71,7 +80,7 @@ const methods = [
         { name: 'apiKey', type: 'string', required: true }, // one-time plaintext key; only create + rotate return it
     ], description: 'Register an inbound source; returns one-time API key', ai: false },
     { name: 'ingress.source.get',        params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }], returns: ['id', 'name', 'enabled', 'stream'], returns_schema: SOURCE_RETURN, description: 'Get a source (API key never returned; throws NOT_FOUND when missing)', ai: false },
-    { name: 'ingress.source.list',       params: [{ name: 'page', type: 'number' }, { name: 'pageSize', type: 'number' }], returns: ['items', 'total'], returns_schema: [{ name: 'items', type: 'array', required: true }, { name: 'total', type: 'number', required: true }], description: 'List inbound sources', ai: false },
+    { name: 'ingress.source.list',       params: [LIMIT, OFFSET, PAGE_LEGACY, PAGE_SIZE_LEGACY], returns: ['items', 'total'], returns_schema: [{ name: 'items', type: 'array', required: true }, { name: 'total', type: 'number', required: true }], description: 'List inbound sources (paginated — prefer limit/offset)', ai: false },
     { name: 'ingress.source.update',     params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }, { name: 'dataSchema', type: 'array' }], returns: ['id', 'name', 'enabled'], returns_schema: SOURCE_RETURN, description: 'Update source fields (name / dedupTtlSec / enabled / healthUrl / dataSchema)', ai: false },
     { name: 'ingress.source.enable',     params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }], returns: ['id', 'enabled'], returns_schema: SOURCE_RETURN, description: 'Enable a source', ai: false },
     { name: 'ingress.source.disable',    params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }], returns: ['id', 'enabled'], returns_schema: SOURCE_RETURN, description: 'Disable a source (downstream unaffected)', ai: false },
@@ -92,7 +101,7 @@ const methods = [
     // dataSchema-rejected deliveries held for human review (admin) — bounded Redis
     // list, logic/review.js. Items: {reviewId, sourceId, source, requestId, data,
     // violations, rejectedAt} — untyped array here (same convention as log.recent).
-    { name: 'ingress.review.list', params: [{ name: 'page', type: 'number' }, { name: 'pageSize', type: 'number' }], returns: ['items', 'total'], returns_schema: [{ name: 'items', type: 'array', required: true }, { name: 'total', type: 'number', required: true }], description: 'List deliveries held for human review (dataSchema violations)', ai: false },
+    { name: 'ingress.review.list', params: [LIMIT, OFFSET, PAGE_LEGACY, PAGE_SIZE_LEGACY], returns: ['items', 'total'], returns_schema: [{ name: 'items', type: 'array', required: true }, { name: 'total', type: 'number', required: true }], description: 'List deliveries held for human review (dataSchema violations) (paginated — prefer limit/offset)', ai: false },
     { name: 'ingress.review.approve', params: [{ name: 'reviewId', type: 'string', required: true, maxLength: 32 }], returns: ['ok', 'stream', 'request_id'], returns_schema: [
         { name: 'ok',         type: 'boolean', required: true },
         { name: 'reviewId',   type: 'string',  required: true },

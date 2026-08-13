@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { createLogger } = require('../../../library/logger');
+const { resolvePaging } = require('../../../library/pagination');
 const jsonrpc = require('../handlers/jsonrpc');
 
 const logger = createLogger('notification');
@@ -61,14 +62,16 @@ module.exports = (redis, config) => {
         return { id, status: 'stored', queued: channels.length };
     }
 
-    async function inboxList({ targetId, unreadOnly = true, page = 1, pageSize = config.pageSize } = {}) {
+    // Accepts both paging dialects — see library/pagination.js.
+    async function inboxList(params = {}) {
+        const { targetId, unreadOnly = true } = params;
         if (!targetId) throw jsonrpc.MISSING_PARAM('targetId');
 
-        const offset = (Math.max(1, page) - 1) * pageSize;
+        const { limit, offset } = resolvePaging(params, { defaultLimit: config.pageSize });
         const ids = await redis.zRange(
             R.inboxPrefix + targetId,
             offset,
-            offset + pageSize - 1,
+            offset + limit - 1,
             { REV: true }
         );
 

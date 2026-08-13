@@ -328,7 +328,7 @@ module.exports = (redis, { serviceName, relay } = {}) => {
          *      it runs ONCE at startup, never on the hot path.
          */
         async rebuildIndex() {
-            const keys = await redis.keys(`${config.redis.workflowPrefix}*`);
+            const keys = await redis.keys(`${config.redis.workflowPrefix}*`); // SAFE: boot-only 一次性索引重建，非热路径（见上方注释）
             if (!keys.length) return 0;
             const ids = keys.map(k => k.slice(config.redis.workflowPrefix.length)).filter(Boolean);
             if (ids.length) await redis.sAdd(config.redis.workflowIndex, ids);

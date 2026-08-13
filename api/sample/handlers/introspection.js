@@ -32,6 +32,18 @@ const STATUS   = { name: 'status', type: 'string', required: true, maxLength: 32
 // Declaring categoryId/itemId here would lie to the Router and crash the lib with MISSING_PARAM('key').
 const KEY      = { name: 'key', type: 'string', required: true, maxLength: 64 };
 const LABEL    = { name: 'label', type: 'string', maxLength: 128 };
+// Pagination vocabulary — these are the exact names library/entity.js's list() reads.
+// Declaring them on an UNBOUNDED collection is NOT optional: entity.list() defaults to
+// `limit = 50`, so a list method declaring `params: []` silently truncates at 50 and gives
+// the caller no parameter to reach page 2 — an external AI reading `methods` believes it
+// has the whole collection. `total` tells the truth, but nobody diffs it against items.length.
+//   offset mode (limit + offset)  → { items, total }      — O(entire collection), see GUIDE.md
+//   cursor mode (limit + cursor)  → { items, nextCursor } — O(limit), the bounded fast path
+// `cursor` is declared `type: 'string'` but the FIRST page is requested with `cursor: null`;
+// the Router's validator skips type checks on null (handlers/validator.js), so null passes.
+const LIMIT    = { name: 'limit', type: 'number' };
+const OFFSET   = { name: 'offset', type: 'number' };
+const CURSOR   = { name: 'cursor', type: 'string', maxLength: 64 };
 
 // --- REGISTERED RPC METHODS ---
 
@@ -43,7 +55,11 @@ const methods = [
     { name: 'sample.item.delete', params: [ID], returns: ['id', 'deleted'], description: 'Soft delete item', ai: true },
     { name: 'sample.item.restore',params: [ID], returns: ['id', 'status'], description: 'Restore item', ai: true },
     { name: 'sample.item.status', params: [ID, STATUS], returns: ['id', 'status'], description: 'Set item status', ai: true },
-    { name: 'sample.item.list',   params: [], returns: ['items', 'total'], description: 'List all sample items', ai: true },
+    // `returns` lists BOTH pagination shapes because they're mutually exclusive per call:
+    // offset mode returns { items, total }, cursor mode returns { items, nextCursor }. No
+    // returns_schema — a flat object-key contract can't express "one or the other", and
+    // declaring `total` required would falsely fail every cursor-mode call.
+    { name: 'sample.item.list',   params: [LIMIT, OFFSET, CURSOR], returns: ['items', 'total', 'nextCursor'], description: 'List items — paginated. Omit cursor for offset mode ({items,total}); pass cursor:null then nextCursor for the bounded cursor mode ({items,nextCursor}). Default limit 50. See GUIDE.md §分页', ai: true },
     { name: 'sample.item.purgeable', params: [ID], description: 'Verify if item can be purged', ai: false },
     { name: 'sample.item.destroy',   params: [ID], description: 'Permanently purge item', ai: false },
 
@@ -54,7 +70,10 @@ const methods = [
     { name: 'sample.category.create',      params: [KEY], returns: ['key', 'type', 'scope', 'status'], description: 'Create category', ai: false },
     { name: 'sample.category.update',      params: [KEY], returns: ['key', 'type', 'scope', 'status'], description: 'Update category', ai: false },
     { name: 'sample.category.delete',      params: [KEY], returns: ['success'], description: 'Delete category', ai: false },
-    { name: 'sample.category.list',        params: [], description: 'List categories (returns a bare array)', ai: false },
+    // BOUNDED collection → `params: []` is correct here, and the description says so out loud.
+    // "No pagination params" and "the author forgot pagination" look identical on the wire;
+    // only the description can tell a caller which one it's looking at.
+    { name: 'sample.category.list',        params: [], description: 'List categories — bounded set (a service\'s categories are finite by design), intentionally NOT paginated; returns a bare array', ai: false },
     { name: 'sample.category.get',         params: [KEY], returns: ['key', 'type', 'scope', 'items', 'status'], description: 'Get category detail', ai: false },
     { name: 'sample.category.item.add',    params: [KEY, ID, LABEL], returns: ['id', 'label', 'createdAt'], description: 'Add item to category', ai: false },
     { name: 'sample.category.item.get',    params: [KEY, ID], returns: ['id', 'label', 'desc', 'parentId', 'meta', 'createdAt'], description: 'Get a single category item', ai: false },

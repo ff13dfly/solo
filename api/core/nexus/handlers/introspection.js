@@ -6,6 +6,15 @@
 // marks keys present on EVERY non-throwing path; nullable/conditional keys carry a type
 // but are NOT required.
 //
+// PAGING VOCABULARY — limit/offset is the fleet standard (autocheck/static/param-conventions.js
+// is the authoritative table); page/pageSize is the dialect these methods shipped with and still
+// accept, so existing callers (portal, e2e) keep working. logic/ folds both through
+// library/pagination.js. New methods declare limit/offset (+ cursor if bounded paging is wired).
+const LIMIT            = { name: 'limit',    type: 'number', optional: true, description: 'Page size (fleet-standard)' };
+const OFFSET           = { name: 'offset',   type: 'number', optional: true, description: 'Rows to skip (fleet-standard)' };
+const PAGE_LEGACY      = { name: 'page',     type: 'number', optional: true, description: 'DEPRECATED legacy dialect — use offset' };
+const PAGE_SIZE_LEGACY = { name: 'pageSize', type: 'number', optional: true, description: 'DEPRECATED legacy dialect — use limit' };
+
 // A Sentinel PROFILE (returned whole by update/get) — these keys are written on create
 // (defaulting to null where optional) and persist, so they're present on every profile
 // path. get() additionally decorates with online/identity/activity (below).
@@ -75,16 +84,15 @@ const methods = [
     {
         name: 'nexus.sentinel.list',
         params: [
-            { name: 'page',     type: 'number', optional: true },
-            { name: 'pageSize', type: 'number', optional: true },
-            { name: 'status',   type: 'string', optional: true, maxLength: 64 }
+            { name: 'status',   type: 'string', optional: true, maxLength: 64 },
+            LIMIT, OFFSET, PAGE_LEGACY, PAGE_SIZE_LEGACY
         ],
         returns: ['items', 'total'],
         returns_schema: [
             { name: 'items', type: 'array',  required: true },   // each item = profile + online/identity/activity
             { name: 'total', type: 'number', required: true },
         ],
-        description: 'List registered Sentinels',
+        description: 'List registered Sentinels (paginated — prefer limit/offset)',
         ai: true
     },
     {
@@ -346,16 +354,13 @@ const methods = [
     // context.md §7.3 — dead-letter queue for undeliverable events (admin).
     {
         name: 'nexus.dlq.list',
-        params: [
-            { name: 'page',     type: 'number', optional: true },
-            { name: 'pageSize', type: 'number', optional: true }
-        ],
+        params: [LIMIT, OFFSET, PAGE_LEGACY, PAGE_SIZE_LEGACY],
         returns: ['items', 'total'],
         returns_schema: [
             { name: 'items', type: 'array',  required: true },   // [{ id, sourceStream, sourceId, attempts, failedAt, event }]
             { name: 'total', type: 'number', required: true },
         ],
-        description: 'List dead-lettered events (undeliverable after maxDeliveries) — admin',
+        description: 'List dead-lettered events (undeliverable after maxDeliveries) — admin (paginated — prefer limit/offset)',
         ai: false
     },
     {

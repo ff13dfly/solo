@@ -38,6 +38,7 @@ Using a shared library in a microservices environment involves a deliberate stra
 | `optimistic.js` | Optimistic locking | Read-modify-write with version checks; auto-falls back to plain RMW when `duplicate()` is unavailable. |
 | `passport.js` | External-identity anchors | Account-less, anchor-bound device tokens for external users (see authority.md). |
 | `permit.js` | Permit helpers | `isAdmin` (`req.permit === 'admin'`), footprint precheck — the compressed-permit contract (§7). |
+| `pagination.js` | List paging normalization | `resolvePaging()` — folds the legacy `page`/`pageSize` dialect into the fleet-standard `limit`/`offset`/`cursor` that `entity.list()` reads. Use it in any `*.list` that must keep accepting both. |
 | `ports.js` | Service port resolution | `portFor()` with env override — keeps ports consistent with `services.json`. |
 | `process.js` | Process / worker helpers | Shared worker lifecycle / message correlation utilities. |
 | `relay.js` | Bot-token lifecycle | The ONLY place that mints/rotates relay bot tokens (security.md §7.7) — services must not reimplement. |

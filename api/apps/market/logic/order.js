@@ -1,4 +1,5 @@
 const createEntity = require('../../../library/entity');
+const { resolvePaging } = require('../../../library/pagination');
 const clock = require('../../../library/clock');
 const jsonrpc = require('../handlers/jsonrpc');
 
@@ -84,9 +85,10 @@ module.exports = (redis, { config }) => {
         return entity.get({ id });
     }
 
-    async function list({ state, page = 1, pageSize = config.pageSize } = {}) {
-        const limit = Math.max(1, pageSize);
-        const offset = Math.max(0, (Math.max(1, page) - 1) * limit);
+    // Accepts both paging dialects — see library/pagination.js.
+    async function list(params = {}) {
+        const { state } = params;
+        const { limit, offset } = resolvePaging(params, { defaultLimit: config.pageSize });
         const filter = state ? (item) => item.state === state : undefined;
         return entity.list({ limit, offset, filter });
     }

@@ -66,18 +66,27 @@ const ORDER_RETURN = [
     { name: 'updatedAt',   type: 'number' },
 ];
 
+// PAGING VOCABULARY — limit/offset is the fleet standard (autocheck/static/param-conventions.js
+// is the authoritative table); page/pageSize is the dialect these methods shipped with and still
+// accept, so existing callers (e2e suites) keep working. logic/ folds both through
+// library/pagination.js. New methods declare limit/offset (+ cursor if bounded paging is wired).
+const LIMIT            = { name: 'limit',    type: 'number' };      // page size (fleet-standard)
+const OFFSET           = { name: 'offset',   type: 'number' };      // rows to skip (fleet-standard)
+const PAGE_LEGACY      = { name: 'page',     type: 'number' };      // DEPRECATED legacy dialect — use offset
+const PAGE_SIZE_LEGACY = { name: 'pageSize', type: 'number' };      // DEPRECATED legacy dialect — use limit
+
 const methods = [
     { name: 'market.shipment.create', params: [{ name: 'orderId', type: 'string', maxLength: 64, pattern: 'id' }, { name: 'paymentId', type: 'string', maxLength: 64, pattern: 'id' }, { name: 'address', type: 'string', maxLength: 4000 }, { name: 'idempotency_key', type: 'string', maxLength: 128 }], returns: ['id', 'state', 'status'], returns_schema: SHIPMENT_RETURN, description: 'Create a shipment; emits EVENT:SHIPMENT:CREATED. Honors idempotency_key for safe _task replay.', ai: true },
     { name: 'market.shipment.ship',   params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }], returns: ['id', 'state', 'trackingNo'], returns_schema: SHIPMENT_RETURN, description: 'Ship a shipment; emits EVENT:SHIPMENT:SHIPPED', ai: true },
     { name: 'market.shipment.get',    params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }], returns: ['id', 'state', 'orderId', 'trackingNo'], returns_schema: SHIPMENT_RETURN, description: 'Get a shipment', ai: true },
-    { name: 'market.shipment.list',   params: [{ name: 'state', type: 'string', maxLength: 64 }, { name: 'page', type: 'number' }, { name: 'pageSize', type: 'number' }], returns: ['items', 'total'], returns_schema: [{ name: 'items', type: 'array', required: true }, { name: 'total', type: 'number', required: true }], description: 'List shipments', ai: true },
+    { name: 'market.shipment.list',   params: [{ name: 'state', type: 'string', maxLength: 64 }, LIMIT, OFFSET, PAGE_LEGACY, PAGE_SIZE_LEGACY], returns: ['items', 'total'], returns_schema: [{ name: 'items', type: 'array', required: true }, { name: 'total', type: 'number', required: true }], description: 'List shipments (paginated — prefer limit/offset)', ai: true },
 
     { name: 'market.order.create',  params: [{ name: 'orderRef', type: 'string', maxLength: 64 }, { name: 'amount', type: 'number' }, { name: 'currency', type: 'string', maxLength: 64 }, { name: 'idempotency_key', type: 'string', maxLength: 128 }], returns: ['id', 'state', 'status'], returns_schema: ORDER_RETURN, description: 'Place an order (state PLACED); must be paid + AML-cleared to advance. Honors idempotency_key for safe _task replay.', ai: true },
     { name: 'market.order.pay',     params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }, { name: 'idempotency_key', type: 'string', maxLength: 128 }], returns: ['id', 'state'], returns_schema: ORDER_RETURN, description: 'Advance a PLACED order to PAID (payment collected). Idempotent; no-op once past PLACED.', ai: true },
     { name: 'market.order.confirm', params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }, { name: 'idempotency_key', type: 'string', maxLength: 128 }], returns: ['id', 'state'], returns_schema: ORDER_RETURN, description: 'Confirm a PAID order (AML cleared) → CONFIRMED. Idempotent; errors if not PAID.', ai: true },
     { name: 'market.order.hold',    params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }, { name: 'reason', type: 'string', maxLength: 512 }, { name: 'idempotency_key', type: 'string', maxLength: 128 }], returns: ['id', 'state'], returns_schema: ORDER_RETURN, description: 'Hold a PAID order (AML flagged) → HELD. Idempotent; errors if not PAID.', ai: true },
     { name: 'market.order.get',     params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }], returns: ['id', 'state', 'amount'], returns_schema: ORDER_RETURN, description: 'Get an order', ai: true },
-    { name: 'market.order.list',    params: [{ name: 'state', type: 'string', maxLength: 64 }, { name: 'page', type: 'number' }, { name: 'pageSize', type: 'number' }], returns: ['items', 'total'], returns_schema: [{ name: 'items', type: 'array', required: true }, { name: 'total', type: 'number', required: true }], description: 'List orders', ai: true },
+    { name: 'market.order.list',    params: [{ name: 'state', type: 'string', maxLength: 64 }, LIMIT, OFFSET, PAGE_LEGACY, PAGE_SIZE_LEGACY], returns: ['items', 'total'], returns_schema: [{ name: 'items', type: 'array', required: true }, { name: 'total', type: 'number', required: true }], description: 'List orders (paginated — prefer limit/offset)', ai: true },
 
     { name: 'ping',     params: [], returns: ['status', 'version', 'uptime'], description: 'Health check', ai: true },
     { name: 'methods',  params: [], description: 'Get surface area definition', ai: false },

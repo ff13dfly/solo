@@ -6,6 +6,15 @@
 // ACTUAL handler output. required:true ONLY for keys present on EVERY non-throwing path;
 // conditional/branch keys carry a type but NOT required.
 
+// PAGING VOCABULARY — limit/offset is the fleet standard (autocheck/static/param-conventions.js
+// is the authoritative table); page/pageSize is the dialect these methods shipped with and still
+// accept, so existing callers (portal, e2e) keep working. logic/ folds both through
+// library/pagination.js. New methods declare limit/offset (+ cursor if bounded paging is wired).
+const LIMIT            = { name: 'limit',    type: 'number', optional: true, description: 'Page size (fleet-standard)' };
+const OFFSET           = { name: 'offset',   type: 'number', optional: true, description: 'Rows to skip (fleet-standard)' };
+const PAGE_LEGACY      = { name: 'page',     type: 'number', optional: true, description: 'DEPRECATED legacy dialect — use offset' };
+const PAGE_SIZE_LEGACY = { name: 'pageSize', type: 'number', optional: true, description: 'DEPRECATED legacy dialect — use limit' };
+
 // message.send (notification.send): BOTH the dedup early-return
 //   ({ id, status:'duplicate', queued:0 }) and the normal path ({ id, status:'stored',
 //   queued:N }) return all three keys — all always present.
@@ -48,15 +57,14 @@ const methods = [
         params: [
             { name: 'targetId',   type: 'string', required: true, maxLength: 64, pattern: 'id' },
             { name: 'unreadOnly', type: 'boolean', optional: true },
-            { name: 'page',       type: 'number',  optional: true },
-            { name: 'pageSize',   type: 'number',  optional: true }
+            LIMIT, OFFSET, PAGE_LEGACY, PAGE_SIZE_LEGACY
         ],
         returns: ['items', 'total'],
         returns_schema: [
             { name: 'items', type: 'array',  required: true },
             { name: 'total', type: 'number', required: true }
         ],
-        description: 'List inbox messages for a target',
+        description: 'List inbox messages for a target (paginated — prefer limit/offset)',
         ai: true
     },
     {
@@ -93,16 +101,13 @@ const methods = [
     // Dead-letter operations (admin-only): inspect and re-drive failed deliveries
     {
         name: 'notification.deadletter.list',
-        params: [
-            { name: 'page',     type: 'number', optional: true },
-            { name: 'pageSize', type: 'number', optional: true }
-        ],
+        params: [LIMIT, OFFSET, PAGE_LEGACY, PAGE_SIZE_LEGACY],
         returns: ['items', 'total'],
         returns_schema: [
             { name: 'items', type: 'array',  required: true },
             { name: 'total', type: 'number', required: true }
         ],
-        description: 'Admin: list failed-delivery tasks in the dead-letter queue',
+        description: 'Admin: list failed-delivery tasks in the dead-letter queue (paginated — prefer limit/offset)',
         ai: false
     },
     {

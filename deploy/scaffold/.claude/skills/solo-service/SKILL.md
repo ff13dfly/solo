@@ -64,6 +64,35 @@ Router capability catalog in Redis — you don't guess it. These docs supply the
 - **Entities go through the Entity Factory** (`api/library/entity.js`): it gives you CRUD + indexing
   + MULTI/EXEC + WAL for free. Declare `sensitiveFields` explicitly in `entities.js`. Implement
   logical soft-delete (`is_deleted`), never hard-delete. (autocheck `entity-factory` / `soft-delete-check`)
+- **Every `*.list` method declares its pagination — or declares that it has none.** The rule is a
+  fork, not a blanket "always paginate":
+  - **Unbounded collection** (user data, anything that grows with usage) → declare `limit` /
+    `offset` / `cursor` in `handlers/introspection.js` and document the paging loop in `GUIDE.md`.
+    Declaring `params: []` here is the single most common Solo bug: `entity.list()` defaults to
+    `limit = 50`, so the method **silently truncates at 50** and leaves the caller no parameter to
+    reach page 2. An external AI agent reads `methods`, sees no pagination, and reports the first
+    50 rows as the whole collection. Nothing errors; the data is just wrong.
+  - **Bounded collection** (categories, roles, configured models — finite by design) → `params: []`
+    is correct, but **say so in the description**: "bounded set, intentionally not paginated".
+    On the wire, "needs no pagination" and "author forgot pagination" look identical.
+  - The fleet-standard names are **`limit` / `offset` / `cursor`** — `param-conventions.js`'s
+    `FLEET_PARAM_TYPES` is the authoritative table. Solo's own older services also accept
+    `page` / `pageSize`; that dialect exists only so their existing callers keep working.
+    **Never declare it on a new method** — `entity.list()` doesn't read it, and every service
+    that accepts it needs a conversion layer (use `library/pagination.js`'s `resolvePaging()`
+    if you must accept both; don't hand-roll the arithmetic).
+  - Prefer the **cursor** mode (`{ limit, cursor }` → `{ items, nextCursor }`, cost O(limit)) over
+    the offset mode (`{ limit, offset }` → `{ items, total }`, which pulls the *entire* index into
+    memory and sorts it before slicing one page). Cursor mode needs `migrateCursorIndex()` to have
+    run once on pre-existing data — it throws rather than silently degrading. Copy the shape from
+    `api/sample/handlers/introspection.js` + `api/sample/GUIDE.md` §分页.
+- **Never scan the keyspace to build a list.** `redis.keys('PREFIX:*')` blocks Redis's single
+  thread across the whole keyspace — every service in the stack queues behind it. It's invisible in
+  dev and takes the stack down months later. `SCAN` is not the fix (it walks the same keyspace);
+  a maintained SET/ZSET index is, and the Entity Factory already keeps one for you. `KEYS` is
+  acceptable in exactly one place: a boot-time one-shot index rebuild, marked `// SAFE:` with the
+  reason on that line. (autocheck `pagination-safety` — also flags `sMembers` / `hGetAll` /
+  `zRange(k, 0, -1)`; don't silence those with a bare `// SAFE:` unless the set is genuinely bounded.)
 - **No scattered `Date.now()`** — use `api/library/clock.js` (injectable, freezable in tests).
 - **No `console.log`** — use the built-in logger from `api/library/logger.js`. (autocheck `logging`)
 - **Trust the X-Router-Token, parsed correctly.** The Router signs a *compressed* identity payload;

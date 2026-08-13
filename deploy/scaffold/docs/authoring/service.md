@@ -35,7 +35,7 @@ SOLO 把"wire 兼容"做成了**可复用的 library factory**——auth 握手�
 | `handlers/events.js` | `{ emits, subscribes }` 事件面（`events` RPC 返回）—— 见 `events.md` | 手写 |
 | `logic/index.js` | **logic 工厂**：`(redis, { config }) => ({ entityA, entityB, ... })`；聚合各 entity | 手写 |
 | `logic/<entity>.js` | 单个实体的业务逻辑，通常 `createEntity(redis, opts)` 背书；**绝不碰 express/res**，只返回值或 `throw jsonrpc.*` | 见 §3 |
-| `GUIDE.md`（可选） | **任务配方**：跨方法的操作顺序/幂等键/字段约定，introspection 说不出的那层。fleet-standard `guide` RPC 原样返回（外部经 `system.guide {service}` 读到）；与代码同 commit 更新 | 手写，模板见 `api/sample/GUIDE.md` |
+| `GUIDE.md`（可选） | **任务配方**：跨方法的操作顺序/幂等键/字段约定/**每个 list 的分页方式（§6.5）**，introspection 说不出的那层。fleet-standard `guide` RPC 原样返回（外部经 `system.guide {service}` 读到）；与代码同 commit 更新 | 手写，模板见 `api/sample/GUIDE.md` |
 
 ---
 
@@ -84,7 +84,7 @@ await walContext.run(
      return {
        create: (p) => entity.create({ ...p, name: normalizeString(p.name) }),
        get:    (p) => entity.get(p.id),
-       list:   (p) => entity.list(p),
+       list:   (p) => entity.list(p),   // 原样透传，分页参数才传得进去；声明见 §6.5（不是可选的）
        // ...
      };
    };
@@ -191,15 +191,74 @@ const ITEM_ID  = { name: 'itemId',     type: 'string', required: true, maxLength
 - 系统方法每个服务都同款声明并注册：`ping`、`methods`、`entities`（+ 有索引时的 `{service}.index.rebuild`/`.schemas`）。
 - `events` 与 `guide` 这两个系统方法**只注册、不进 introspection 声明**（RPC 命名检查的系统方法白名单只放行 `ping`/`methods`/`entities`，把 `events` 也声明进去会触发 `[RPC] 方法格式错误`）。`events` 一行接线照 `api/sample/index.js`：`'events': () => require('./handlers/events')`。
 - `guide`（服务侧 `BASE_PUBLIC_METHODS` 已放行，进声明反而触发 public-surface 白名单联动）。一行接线照 `api/sample/index.js`：`'guide': () => require('<depth>/library/guide').readGuide('<service>', __dirname)`，读服务目录 `GUIDE.md`（没有则明确返回 `available:false`，合法）。
+- **`*.list` 方法的分页参数见 §6.5**——那不是"可选的优化"，漏了会静默截断在 50 条。
 
 ---
 
-## 7. 写完自查（5 条最常踩）
+## 6.5 ★ 分页：每个 `*.list` 都要回答的问题
+
+**默认不分页 = 静默丢数据。** `library/entity.js` 的 `list()` 默认 `limit = 50`：一个声明
+`params: []` 的 list 方法**实际只返回 50 条**，而调用方（尤其是读 `methods` 自省的外部 AI）
+看不到任何翻页参数，会把这 50 条当成全集。不报错、不告警，`total` 字段虽然诚实但没人会去比对。
+这是下游项目最常犯的一个错，且要等数据长到 50 条以后才显形。
+
+规则是**二选一，不是"一律分页"**：
+
+> **全队标准是 `limit` / `offset` / `cursor` 这三个名字**（权威表在 `api/autocheck/static/param-conventions.js`
+> 的 `FLEET_PARAM_TYPES`，autocheck 卡类型）。你可能在框架的存量服务里见到 `page` / `pageSize`
+> ——那是早期方言，只为不破坏既有调用方而保留，**新方法一个字都别抄**。底层 `library/entity.js`
+> 只认标准那三个；多一套方言就多一层换算，那三行换算曾在五个服务里各抄了一份，现在收进了
+> `library/pagination.js` 的 `resolvePaging()`（要同时接受两套时 `require` 它，别再手抄）。
+
+**(a) 无界集合**（用户数据、随使用增长的实体）→ 必须声明分页参数：
+
+```js
+const LIMIT  = { name: 'limit',  type: 'number' };
+const OFFSET = { name: 'offset', type: 'number' };
+const CURSOR = { name: 'cursor', type: 'string', maxLength: 64 };   // 首页传 null，Router 对 null 跳过类型校验
+
+{ name: '{{PROJECT_NAME}}.widget.list', params: [LIMIT, OFFSET, CURSOR],
+  returns: ['items', 'total', 'nextCursor'],
+  description: 'List widgets — paginated（offset 模式返回 {items,total}；cursor 模式返回 {items,nextCursor}）, 默认 limit 50', ai: true },
+```
+
+`logic` 层**原样透传** `entity.list(p)`（别只挑几个键往下传，那等于把分页掐掉）。两种模式：
+
+| 模式 | 怎么调 | 返回 | 成本 |
+|------|--------|------|------|
+| offset | `{ limit, offset }`，**不带 `cursor` 键** | `{ items, total }` | O(集合全量)：把整个索引拉进内存、全排序、再切一页 |
+| cursor（推荐） | 首页 `{ limit, cursor: null }`，之后回传 `nextCursor` | `{ items, nextCursor }` | O(limit)：只读一个 ZRANGE 窗口 |
+
+cursor 模式三个前提，写进你的 `GUIDE.md`：① 没有 `total`（keyset 分页不知道共几页）；
+② 单页可能少于 `limit`（`status`/`filter` 在取回窗口**之后**才过滤），**只有 `nextCursor === null`
+才是结束信号**；③ 服务已有历史数据时要先迁移一次，否则直接抛 `INVALID_PARAMS`（有意不静默
+退回慢路径）——全新服务不需要。迁移脚本脚手架已带，每个实体跑一次、幂等可重跑：
+
+```bash
+REDIS_URL=$REDIS_URL node deploy/migrate-cursor-index.js {{PROJECT_NAME}} widget
+# 实体声明了 storageType: 'json' 就在末尾再加一个 json 参数
+```
+
+**(b) 有界集合**（分类、角色、配置项——设计期就有限）→ `params: []` 是对的，但**必须在
+description 里明说**"有界集合，有意不分页"。在 wire 上，"不需要分页"和"作者忘了分页"长得一模一样，
+只有描述能区分。`{{PROJECT_NAME}}.category.list`（§4）就属于这一类。
+
+**🔴 别用 `redis.keys('PREFIX:*')` 拼 list。** 它让 Redis 的**单线程**遍历整个 keyspace，
+期间全栈所有服务的请求一起排队；开发期数据少完全看不出来，上线几个月后突然拖垮整个栈。
+`SCAN` 也不是解药（一样要走遍 keyspace）——正解是**维护索引**，而 Entity Factory 已经替你
+维护好了。`KEYS` 只在一种场合合法：boot 期一次性重建索引，且必须在那一行写 `// SAFE:` + 理由。
+autocheck 的 `pagination-safety` 规则会拦 `keys` / `sMembers` / `hGetAll` / `zRange(k,0,-1)`。
+
+---
+
+## 7. 写完自查（6 条最常踩）
 
 1. **声明↔注册不同步** → `autocheck --static` 直接红。先跑它。
 2. **自己重写了 library 已有的东西**（category/entity/index/auth）→ 回 §0/§4 改成 `require` + 挂载。
 3. **把整个 token payload 当 `req.user`** → 只读 `req.user`(uid 串)/`req.permit`/`req.constraints`（§5）。
 4. **string 参数漏 `maxLength`** / 标识漏 `pattern` → autocheck 卡。
 5. **服务里直接 POST 另一个服务** → 禁止。走 Router：`relay.call(...)`（带 bot token），或返回 `_tasks` 让 Router 派发，或返回 `_event`（见 `events.md`）。
+6. **`*.list` 声明 `params: []`** → 无界集合会静默截断在 50 条；有界集合也要在 description 里
+   明说"有意不分页"（§6.5）。顺手确认没在 logic 里用 `redis.keys()` 扫 keyspace。
 
 > 跑通后：`node api/autocheck/checker.js api/apps/{{PROJECT_NAME}} --static` 必须 PASS；把服务加进 `deploy/solo-services.json` 或你的 services.json 才会被 Router 拉起。

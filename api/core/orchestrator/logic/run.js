@@ -305,7 +305,7 @@ module.exports = (redis) => {
     // One-time backfill of the run id index from existing docs (legacy). KEYS here
     // runs ONCE at boot, never on a hot path.
     async function rebuildIndex() {
-        const ks = await redis.keys(`${R.runPrefix}*`);
+        const ks = await redis.keys(`${R.runPrefix}*`); // SAFE: boot-only 一次性索引重建，非热路径（见上方注释）
         const ids = ks.filter(k => !k.endsWith(':GRANT')).map(k => k.slice(R.runPrefix.length)).filter(Boolean);
         if (ids.length) await redis.sAdd(R.runIndex, ids);
         return ids.length;

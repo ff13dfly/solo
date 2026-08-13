@@ -180,7 +180,12 @@ module.exports = [
 
     // --- Delivery Ledger ---
     { name: 'gateway.delivery.get',  params: ['id'], returns: ['id', 'status'], returns_schema: DELIVERY_RETURN, description: 'Get one delivery record by ID', ai: false },
-    { name: 'gateway.delivery.list', params: ['page', 'limit', 'search'], returns: ['items', 'total'], returns_schema: LIST_RETURN, description: 'List delivery records (what actually went out, newest first). deliveryStatus: SENT | MOCKED | FAILED | DELIVERED | BOUNCED | COMPLAINED', ai: false },
+    // Typed descriptors (rather than this file's bare-string style) because the previous
+    // declaration advertised params the handler never had: logic/delivery.js's list is a plain
+    // `entity.list(params)` passthrough, which reads limit/offset/keyword — `page` and `search`
+    // were silently ignored, so anyone paging by `page` got page 1 every time. keyword searches
+    // the entity's searchFields (target/channel/provider/status).
+    { name: 'gateway.delivery.list', params: [{ name: 'limit', type: 'number' }, { name: 'offset', type: 'number' }, { name: 'keyword', type: 'string', maxLength: 256 }], returns: ['items', 'total'], returns_schema: LIST_RETURN, description: 'List delivery records (what actually went out, newest first), paginated by limit/offset. deliveryStatus: SENT | MOCKED | FAILED | DELIVERED | BOUNCED | COMPLAINED', ai: false },
     {
         name: 'gateway.delivery.update',
         params: ['id', 'deliveryStatus', 'detail'],
