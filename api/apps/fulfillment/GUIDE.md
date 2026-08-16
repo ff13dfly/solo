@@ -45,6 +45,11 @@
 3. `fulfillment.profile.approve { id }` — 管理员审批，**审批人必须 ≠ 投稿人**（职责分离），
    PENDING_REVIEW → APPROVED，落 `approvedDigest`（绑定"批的是哪一版"）。此后 profile 才能被实例使用。
    驳回用 `fulfillment.profile.reject { id, reason? }`。
+4. 追溯治理（enroll）：`fulfillment.profile.submit { id, enroll: true }`（管理员）把一个**既有的
+   可信直建** profile 转入审核通道——重新 lint（结构坏的拒收、profile 原样保持可用）、置
+   PENDING_REVIEW、其实例立即被激活闸冻结，直到 approve。记 `enrolledBy/enrolledAt` 而非
+   `submittedBy`：enroll 不算内容投稿（定义早已存在），否则「审批人 ≠ 投稿人」会让单管理员
+   系统 enroll 之后无人能批。这是「先跑起来、后补治理」的唯一入口。
 
 **激活闸（关键）**：`fulfillment.instance.create` **和** `fulfillment.instance.transition` 都会拒绝 reviewState 存在且 ≠ APPROVED
 的 profile（FORBIDDEN）——新建和 in-flight 实例都拦。改一个已 APPROVED 模板的**可执行字段**
@@ -56,6 +61,9 @@
 - **两条生命周期轴别混**：instance 的业务态是 `state`（DRAFT→…，**无 `status` 键**）；profile 记录是
   `status`（ACTIVE/DELETED 软删轴，**无 `state` 键**）；profile 的审批轴是独立的 `reviewState`
   （PENDING_REVIEW/APPROVED/REJECTED，**直建的没有这个键**）。取错静默走错分支。
+- **`submit` 是在审核通道里创建新 profile，不是「提交已有 profile 进审核」**——撞已存在的 id
+  会明确报错并指向 enroll。可信直建的 profile 想事后补一道审核，只有
+  `submit { id, enroll: true }`（管理员）这一条路，转入即冻结其实例。
 - **profile 软删**：`delete` 是软删，返回**整条记录**（`status: DELETED`），不是 `{ success: true }`；
   `restore` 复活为 ACTIVE；`destroy` 才是真删、返回 `{ success: true }`。instance **不软删**。
 - **写方法对 AI 关闭**：只有 create/get/list 类是 `ai:true`（LLM 可自主调）；所有 transition/cancel/hold/

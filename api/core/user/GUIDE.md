@@ -30,6 +30,9 @@
 1. 定义角色模板：`user.role.set { role, services, ownerField?, scope? }` — 命名的 permit 模板。
    - `scope:'external'` 的角色**必须**给 `ownerField`（行隔离 `$owner`），否则 `-32602`。
    - `set` 是整体覆盖 `constraints`——更新外部角色时要**重新带上** `ownerField`，否则会静默丢掉隔离。
+   - **执行位置**：`$owner` 自 v1.1.16 起由 Entity Factory 在数据层自动执行（服务经
+     `requestContext(req)` 注入即生效）；绕过工厂的自定义数据路径仍须服务自行过滤。
+     v1.1.15 及更早只有"声明被强制"、没有执行——见 passport.md §3.6/§3.7。
 2. 物化到内部用户：`user.role.assign { uid, role }` — 把模板 permit **拷贝**进 `user.permit`。
    是物化不是运行时解析：**改了 role 模板，得对每个用户重新 assign 才生效**。
 3. 个别用户例外：`user.permit.update { uid, permit }` — `permit` 结构须 `{ allow_all:boolean, services:object }`，否则 `-32602`。

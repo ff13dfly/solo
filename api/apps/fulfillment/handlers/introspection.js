@@ -269,10 +269,13 @@ const methods = [
             { name: 'id',             type: 'string', required: false, maxLength: 64,  description: 'Optional explicit profile id' },
             { name: 'transitions',    type: 'array',  required: false, description: 'Transition rules' },
             { name: 'meta_fields',    type: 'array',  required: false, description: 'Sourced/metaUpdate fields' },
-            { name: 'allowedActions', type: 'array',  required: false, description: 'Optional action allow-list (policy/footprint pre-check)' }
+            { name: 'allowedActions', type: 'array',  required: false, description: 'Optional action allow-list (policy/footprint pre-check)' },
+            { name: 'enroll',         type: 'boolean', required: false, description: 'Admin only: move the EXISTING trusted profile {id} into the review lane (re-lints it; its instances freeze until approved) instead of creating a new one' }
         ],
-        // Submit a profile for review: lint-gated → PENDING_REVIEW (NOT usable until approved).
-        // ok=false ⇒ rejected at the lint gate (nothing stored); ok=true ⇒ queued for approval.
+        // Submit CREATES a new profile in the review lane: lint-gated → PENDING_REVIEW (NOT
+        // usable until approved). With enroll:true it instead flips an existing trusted
+        // direct-create profile into PENDING_REVIEW (retroactive governance).
+        // ok=false ⇒ rejected at the lint gate (nothing stored/changed); ok=true ⇒ queued for approval.
         returns: ['ok'],
         returns_schema: [
             { name: 'ok',          type: 'boolean', required: true },

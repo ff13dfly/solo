@@ -104,6 +104,33 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
     // (plain objects without xAdd) keep the legacy direct-to-file behavior.
     const canAtomicWal = typeof redis.multi === 'function' && typeof redis.xAdd === 'function';
 
+    // ── 行隔离 ($owner) 自动执行 ──────────────────────────────────────────────
+    // passport.md §3.7 在三处强制外部角色声明 ownerField（不声明就拒发会话），Router 把
+    // constraints.$owner 原样下发——但执行这一环此前不存在：服务不自己读，外部主体就能
+    // 看到全表（docs/feedback/passport-owner-isolation-declared-not-enforced.md）。
+    // 服务经 requestContext(req) 把 $owner 注入 walContext 后，工厂在数据层自动执行：
+    // create 盖章、get/update/delete/destroy 校验归属、list/multiGet 过滤。归属不符一律
+    // NOT_FOUND（与 collection 的手工实现同语义——不泄露"这条存在但不是你的"）。
+    // 内部/admin/bot 会话没有 $owner → ownerScope() 为 null → 行为与从前完全一致。
+    // 注意 fail-closed 方向：外部会话只能看到**盖了自己章**的行；enforcement 之前就存在
+    // 的行、或 admin 直建的行没有 owner 字段，对外部会话不可见——这是设计而非缺陷。
+    const ownerScope = () => {
+        const ctx = walContext.getStore();
+        const o = ctx && ctx.owner;
+        return (o && o.field && o.value !== undefined && o.value !== null) ? o : null;
+    };
+    const ownerFilter = (filter) => {
+        const o = ownerScope();
+        if (!o) return filter;
+        const pred = (item) => !!item && item[o.field] === o.value;
+        return filter ? (item) => pred(item) && filter(item) : pred;
+    };
+    const assertOwned = (data) => {
+        const o = ownerScope();
+        if (o && data && data[o.field] !== o.value) throw jsonrpc.NOT_FOUND(entityName);
+        return data;
+    };
+
     /**
      * Strip sensitive fields from data before writing to WAL log.
      */
@@ -228,6 +255,10 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
                 createdAt: params.createdAt !== undefined ? params.createdAt : now,
                 updatedAt: now
             };
+            // 行隔离盖章：owner-scoped 会话建的行归它所有。放在 params 展开之后 = 覆盖
+            // 客户端传入的同名字段（防伪造归属），且先于 WAL 快照（账本记录的是终值）。
+            const _owner = ownerScope();
+            if (_owner) data[_owner.field] = _owner.value;
 
             // Cursor index score = insertion sequence (INCR), not createdAt. createdAt can be
             // client-supplied (backdated imports) and two creates can land in the same ms —
@@ -285,7 +316,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             const key = getDataKey(id);
             const data = await readData(key);
             if (!data) throw jsonrpc.NOT_FOUND(entityName);
-            return data;
+            return assertOwned(data);
         },
 
         /**
@@ -294,6 +325,14 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
         async update({ id, ...updates }) {
             if (!id) throw jsonrpc.MISSING_PARAM('id');
             const key = getDataKey(id);
+
+            // 行隔离：先验归属（不符 → NOT_FOUND，经 this.get 的 assertOwned），再锁死
+            // owner 字段不可被 update 改走（否则 owner-scoped 会话能把行转让/脱离隔离）。
+            const _owner = ownerScope();
+            if (_owner) {
+                await this.get({ id });
+                updates[_owner.field] = _owner.value;
+            }
 
             if (useJson) {
                 // RedisJSON 存储:读改写本身仍非原子(并发 update 可互相覆盖,已知缺口 §8.2,
@@ -345,6 +384,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             // Hard delete: read before for WAL, then remove
             const existing = await readData(key);
             if (!existing) throw jsonrpc.NOT_FOUND(entityName);
+            assertOwned(existing);   // 行隔离：不是你的行 → NOT_FOUND
 
             // Soft-delete never sRem's the SET index either (see the early return above), so
             // the cursor ZSET mirrors that: only a real hard delete removes the id from both.
@@ -418,7 +458,9 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
          *                                 that path is untouched by cursor mode.
          */
         async list({ status = STATUS_ACTIVE, limit = 50, offset = 0, includeDeleted = false, batchSize, filter, keyword, cursor } = {}) {
-            let finalFilter = filter;
+            // 行隔离在最外层合入：keyword 分支往下复合的是 finalFilter（而不是原始 filter），
+            // owner 谓词才不会在那个分支被覆盖丢掉。
+            let finalFilter = ownerFilter(filter);
 
             // Auto-construct keyword filter if searchFields are configured
             if (keyword && searchFields && searchFields.length > 0) {
@@ -430,11 +472,8 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
                     }
                     return false;
                 };
-                if (filter) {
-                    finalFilter = (item) => filter(item) && keywordFilter(item);
-                } else {
-                    finalFilter = keywordFilter;
-                }
+                const base = finalFilter;
+                finalFilter = base ? (item) => base(item) && keywordFilter(item) : keywordFilter;
             }
 
             // cursor === undefined (key not sent at all) → every existing caller, unchanged.
@@ -478,6 +517,9 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
          */
         async multiGet({ ids, status = STATUS_ACTIVE, limit, offset, includeDeleted = false, filter }) {
             if (!ids || !Array.isArray(ids) || ids.length === 0) return { items: [], total: 0 };
+            // 行隔离：multiGet 也被服务直接调用（不只经 list），这里再合一次。经 list 进来时
+            // filter 已含 owner 谓词，重复合入是纯谓词、幂等无害。
+            filter = ownerFilter(filter);
 
             const keys = ids.map(id => getDataKey(id));
             const results = await readManyData(keys);
@@ -533,6 +575,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
          *      "load more" UX, not "page X of Y".
          */
         async _listByCursor({ cursor, limit = 50, status = STATUS_ACTIVE, includeDeleted = false, filter }) {
+            filter = ownerFilter(filter);   // 行隔离（经 list 进来已含，幂等）
             const indexKey = getIndexKey();
             const cursorIndexKey = getCursorIndexKey();
 
@@ -635,6 +678,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             // Read before for WAL
             const existing = await readData(key);
             if (!existing) throw jsonrpc.NOT_FOUND(entityName);
+            assertOwned(existing);   // 行隔离：不是你的行 → NOT_FOUND
 
             if (canAtomicWal) {
                 const multi = redis.multi();
@@ -664,3 +708,18 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
 module.exports.STATUS_ACTIVE = STATUS_ACTIVE;
 module.exports.STATUS_DELETED = STATUS_DELETED;
 module.exports.walContext = walContext;
+
+/**
+ * Build the per-request walContext store from a Router-authenticated req.
+ * @why 每个服务此前各自手写 `{ uid: req.user || null, trace: …, depth: … }`——一旦 store
+ *      需要新字段（本次是行隔离的 owner），十几个副本不会跟着更新。收口成一个 helper，
+ *      服务侧写 `walContext.run(requestContext(req), …)`，新字段自动到位。
+ *      `owner` = Router 下发的 constraints.$owner（passport 外部会话才有）；工厂据此在
+ *      数据层自动执行行隔离（见上方 ownerScope 注释）。内部/admin 会话该字段为 null。
+ */
+module.exports.requestContext = (req) => ({
+    uid: req?.user || null,
+    trace: req?.meta?.trace || null,
+    depth: req?.meta?.depth ?? 0,
+    owner: (req?.constraints && req.constraints.$owner) || null,
+});

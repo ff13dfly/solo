@@ -7,6 +7,7 @@ const chalk = require('chalk');
 const redis = require('redis');
 
 const config = require('./config');
+const { bindAddr } = require('../../library/ports');
 const Methods = require('./logic');
 const authHandlers = require('./handlers/auth');
 const introspectionMethods = require('./handlers/introspection');
@@ -89,10 +90,10 @@ app.post('/auth/verify', (req, res) => authHandlers.handleVerify(req, res, confi
  *   - All methods except `ping` and `methods` require Level 3 Router authorization.
  *   - Errors are automatically reported to the centralized telemetry system.
  */
-const { walContext } = require('../../library/entity');
+const { walContext, requestContext } = require('../../library/entity');
 
 app.post('/jsonrpc', async (req, res) => {
-    await walContext.run({ uid: req.user || null, trace: req.meta?.trace || null, depth: req.meta?.depth ?? 0 }, async () => {
+    await walContext.run(requestContext(req), async () => {
         const { jsonrpc: jsonrpc_version, method, params, id } = req.body;
 
         try {
@@ -165,7 +166,7 @@ app.post('/jsonrpc', async (req, res) => {
 
 // --- SERVER STARTUP ---
 
-app.listen(PORT, () => {
+app.listen(PORT, bindAddr('agent'), () => {
     logger.info(`Service running on port ${PORT}`);
     logger.info(`Ready to serve AI capabilities.`);
 });

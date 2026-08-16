@@ -3,8 +3,9 @@ const cors = require('cors');
 const { corsOptionsFromEnv } = require('../library/cors');
 const bodyParser = require('body-parser');
 const config = require('./config');
+const { bindAddr } = require('../library/ports');
 const { createLogger } = require('../library/logger');
-const { walContext } = require('../library/entity');
+const { walContext, requestContext } = require('../library/entity');
 
 const { initializeRedis, ensureDefaultCategories } = require('./handlers/bootstrap');
 const authHandlers = require('./handlers/auth');
@@ -66,7 +67,7 @@ let indexer;
             logger.info('RediSearch indexes ready');
         }
 
-        app.listen(PORT, () => {
+        app.listen(PORT, bindAddr('sample'), () => {
             logger.info(`Service running on port ${PORT}`);
             logger.info(`Ready to accept connections.`);
         });
@@ -95,8 +96,13 @@ app.post('/auth/verify', (req, res) => authHandlers.handleVerify(req, res, confi
 app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
     if (!Methods) return res.status(503).json({ error: 'Service not ready' });
 
-    // WAL context: inject user uid for audit logging
-    await walContext.run({ uid: req.user || null, trace: req.meta?.trace || null, depth: req.meta?.depth ?? 0 }, async () => {
+    // WAL context: inject user uid for audit logging.
+    // requestContext(req) 同时把 Router 下发的 constraints.$owner（passport 外部会话的
+    // 行隔离声明）带进来 —— Entity Factory 会据此自动执行：create 盖章、get/update/delete
+    // 校验归属、list 过滤。服务代码零改动即满足 passport.md §3.7 的行隔离要求；
+    // 只有绕过 Entity Factory 直接读 redis 的自定义数据路径才需要自己过滤
+    // （参照 apps/collection 的 _scope 手工实现）。内部/admin 会话无 $owner，行为不变。
+    await walContext.run(requestContext(req), async () => {
 
     const { jsonrpc: jsonrpc_version, method, params, id } = req.body;
 

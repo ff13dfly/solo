@@ -128,6 +128,13 @@ user.passport.totp.verify({ anchor, code }) // 服务端用存好的密钥本地
 `user.passport.verify`（登录）校验设备令牌成功后，**不是逐请求携带令牌，而是签发一个受限会话**：
 
 - 会话 `kind: 'external'`、短 TTL（实现为 24h），`permit` 由**实体绑定的角色**解析得到。**当且仅当**该角色定义了 `ownerField` 时，`constraints.$owner` 才锁到该 anchor（**行级隔离**：外部用户只能访问自己的数据）；未定义则**无**行级隔离——故默认外部角色**必须**带 `ownerField`（见 §3.7）。
+- **`$owner` 的执行位置**（v1.1.16 起）：由 **Entity Factory** 在数据层自动执行——服务把
+  `requestContext(req)` 注入 `walContext` 后，create 自动盖 owner 章、get/update/delete/destroy
+  校验归属（不符 → NOT_FOUND，不泄露存在性）、list/multiGet 过滤。**绕过 Entity Factory 直接
+  读存储的自定义数据路径仍须服务自行过滤**（`getConstraints(req).$owner`，参照 collection 的
+  `_scope`）。⚠️ v1.1.15 及更早**没有任何执行环节**：三道发证关卡只强制"声明存在"，服务不
+  自己消费 `$owner` 就等于没有隔离——外部主体能读全表且零告警（docs/feedback/
+  passport-owner-isolation-declared-not-enforced.md）。
 - 之后业务请求走**标准 Router 会话鉴权**（携带会话 token），**不再每次携带设备令牌**——设备令牌只在登录 / 换会话时出现，降低泄露面。
 - 停用实体（`user.passport.disable`）同时阻断后续 verify 并撤销其所有在线会话。
 
@@ -153,7 +160,7 @@ user.passport.totp.verify({ anchor, code }) // 服务端用存好的密钥本地
 
 **默认角色（自助注册的越权风险——最关键）**
 - `config.passport.defaultRole` **必填、无代码兜底**（未配则 otp.verify 报配置错拒绝，fail-closed）。
-- 默认角色**必须** `scope:'external'`、**必须**定义 `ownerField`（使 `$owner` 行隔离非可选）、**禁止** `allow_all`；verify 时校验解析出的 permit 含 `constraints.$owner`，否则**拒签会话**（fail-closed）。
+- 默认角色**必须** `scope:'external'`、**必须**定义 `ownerField`（使 `$owner` 行隔离非可选）、**禁止** `allow_all`；verify 时校验解析出的 permit 含 `constraints.$owner`，否则**拒签会话**（fail-closed）。这三道关卡保证的是**声明存在**；数据层的**执行**见 §3.6（v1.1.16 起 Entity Factory 自动完成，此前需服务自行实现——别把"发证被拦"误读成"查询已被过滤"）。
 - ACTIVE vs PENDING **二选一钉死**：要么自助即 ACTIVE（挂锁死的 external 角色），要么落 PENDING 且扩展 `verify()` 支持降级会话——别两可（现 `verify()` 只认 `status==='ACTIVE'`）。
 
 **TOTP enroll 授权**
@@ -289,3 +296,4 @@ USER:PASSPORT:TOTP:{anchor}     →  Redis String        验证器共享密钥�
 | 1.0.0 | 2026-03-xx | 初版 |
 | 1.1.0 | 2026-04-14 | 修复 Salt 泄露设计矛盾；OTP 锁定改为 Anchor 级；deviceId 改为服务端签发；增加 Proof 过期机制；deviceToken 改为报头传输；Salt 轮转增加原子清理旧 Proof 要求 |
 | 1.2.0 | 2026-06-06 | 补充注册 / 登录模型（§3.4）、自助 OTP 投递与通道抽象（§3.5：email/sms→gateway，TOTP 本地不经 gateway）、外部会话（§3.6）、**实现约束与安全清单（§3.7）**；对齐实现位置（user 服务 `user.passport.*`）+ 数据结构补全。经对照审查校正现状偏差：deviceToken 当前走 params 非报头（§3.3/§4.5 标注待硬化）、session 键小写、Salt 轮转（§4.1）与单设备撤销（§4.2）标注未实现、$owner 行隔离改为有条件（依赖角色 ownerField，§3.6） |
+| 1.2.1 | 2026-08-16 | **`$owner` 从"强制声明"补齐为"自动执行"**（§3.6/§3.7）：此前三道发证关卡只保证声明存在，数据层无任何执行环节（colony 实测外部会话读到全表，docs/feedback/passport-owner-isolation-declared-not-enforced.md）；v1.1.16 起 Entity Factory 经 `requestContext(req)` 自动执行（create 盖章 / 越权 NOT_FOUND / list 过滤），自定义数据路径仍须服务自行过滤，文档同步言明执行位置与旧版本边界 |

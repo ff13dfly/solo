@@ -27,7 +27,7 @@ Using a shared library in a microservices environment involves a deliberate stra
 | `config.js` | Shared config resolution | Central place for env-driven config (ports, redis URL) so services don't each reinvent it. |
 | `constants.js` | System states & enums | Prevents semantic drift between Router, UI, and Logic. |
 | `crypto.js` | Hashing & signing primitives | One implementation of SHA-256 / Ed25519 helpers — no per-service crypto. |
-| `entity.js` | CRUD & Indexing Factory | Standardizes Redis key naming, anti-collision IDs, MULTI/EXEC, and WAL. |
+| `entity.js` | CRUD & Indexing Factory | Standardizes Redis key naming, anti-collision IDs, MULTI/EXEC, and WAL. Auto-enforces passport row isolation (`constraints.$owner`) when the service injects `requestContext(req)` — stamp on create, NOT_FOUND on cross-owner access, filtered lists. |
 | `fieldmask.js` | Field-level visibility | Masks `sensitiveFields` consistently (orthogonal to row-level `constraints`). |
 | `filestore.js` | Content-addressed (CAS) storage | SHA-256 addressed blobs — same content → same path, de-duplicated. |
 | `generator.js` | ID Generation | Guarantees entropy-safe Base58 identifiers. |

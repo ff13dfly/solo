@@ -3,6 +3,7 @@ const cors = require('cors');
 const { corsOptionsFromEnv } = require('../../library/cors');
 const bodyParser = require('body-parser');
 const config = require('./config');
+const { bindAddr } = require('../../library/ports');
 
 const { initializeRedis, ensureDefaultCategories } = require('./handlers/bootstrap');
 const authHandlers = require('./handlers/auth');
@@ -81,7 +82,7 @@ let Methods;
         Methods = createLogic(redisClient, config, { serviceName: config.serviceName, relay });
 
         // Start Server
-        app.listen(PORT, () => {
+        app.listen(PORT, bindAddr('user'), () => {
             logger.info(`Service running on port ${PORT}`);
             logger.info(`Ready to accept connections.`);
         });
@@ -108,12 +109,12 @@ app.post('/auth/verify', (req, res) => authHandlers.handleVerify(req, res, confi
  *   1. Router signature (Level 3) checked in middleware.
  *   2. Session-based permission checks (isAdmin) handled within the endpoint.
  */
-const { walContext } = require('../../library/entity');
+const { walContext, requestContext } = require('../../library/entity');
 
 app.post('/jsonrpc', async (req, res) => {
     if (!Methods) return jsonrpc.error(res, jsonrpc.SERVICE_NOT_READY(), null, 503);
 
-    await walContext.run({ uid: req.user || null, trace: req.meta?.trace || null, depth: req.meta?.depth ?? 0 }, async () => {
+    await walContext.run(requestContext(req), async () => {
         const { jsonrpc: jsonrpc_version, method, params, id } = req.body;
 
         // req.user = UID string, req.permit = 'admin'|'user' (set by auth middleware)

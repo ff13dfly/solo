@@ -3,9 +3,10 @@ const cors = require('cors');
 const { corsOptionsFromEnv } = require('../../library/cors');
 const bodyParser = require('body-parser');
 const config = require('./config');
+const { bindAddr } = require('../../library/ports');
 const { createLogger } = require('../../library/logger');
 const logger_lib = require('../../library/logger');
-const { walContext } = require('../../library/entity');
+const { walContext, requestContext } = require('../../library/entity');
 const { createRelay } = require('../../library/relay');
 
 const { mountHealth } = require('../../library/health');
@@ -55,7 +56,7 @@ let Methods;
         await ensureDefaultCategories(redisClient, config.serviceName);
         Methods = createLogic(redisClient, config, { relay });
 
-        app.listen(config.port, () => {
+        app.listen(config.port, bindAddr('fulfillment'), () => {
             logger.info(`Fulfillment service running on port ${config.port}`);
         });
     } catch (e) {
@@ -77,7 +78,7 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
     if (!Methods) return jsonrpc.error(res, jsonrpc.SERVICE_NOT_READY(), null, 503);
 
     // WAL context: inject user uid for audit logging
-    await walContext.run({ uid: req.user || null, trace: req.meta?.trace || null, depth: req.meta?.depth ?? 0 }, async () => {
+    await walContext.run(requestContext(req), async () => {
         const { method, params, id } = req.body;
 
         try {
@@ -118,7 +119,9 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'fulfillment.profile.generate': (p) => Methods.profile.generate(p),
                 // 投稿面: submit is callable by a (narrow-permit) submitter; approve/reject are
                 // admin-gated (an external submitter can propose but never self-activate).
-                'fulfillment.profile.submit':  (p) => Methods.profile.submit(p, req),
+                // enroll: true（把既有可信 profile 转入审核）单独 admin 门——它会冻结该
+                // profile 的全部实例，普通投稿人不能用它当 DoS 开关。
+                'fulfillment.profile.submit':  (p) => { if (p && p.enroll && !isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.submit(p, req); },
                 'fulfillment.profile.approve': (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.approve(p, req); },
                 'fulfillment.profile.reject':  (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.reject(p, req); }
             };

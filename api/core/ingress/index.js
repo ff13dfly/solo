@@ -3,9 +3,10 @@ const cors = require('cors');
 const { corsOptionsFromEnv } = require('../../library/cors');
 const bodyParser = require('body-parser');
 const config = require('./config');
+const { bindAddr } = require('../../library/ports');
 const { createLogger } = require('../../library/logger');
 const logger_lib = require('../../library/logger');
-const { walContext } = require('../../library/entity');
+const { walContext, requestContext } = require('../../library/entity');
 const { createRelay } = require('../../library/relay');
 const { mountHealth } = require('../../library/health');
 
@@ -50,7 +51,7 @@ let relay;
 
         Methods = createLogic(redisClient, { config, relay });
 
-        app.listen(PORT, () => {
+        app.listen(PORT, bindAddr('ingress'), () => {
             logger.info(`Service running on port ${PORT}`);
             logger.info('Ready to accept connections.');
         });
@@ -79,7 +80,7 @@ function extractApiKey(req) {
 app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
     if (!Methods) return jsonrpc.error(res, jsonrpc.SERVICE_NOT_READY(), null, 503);
 
-    await walContext.run({ uid: req.user || null, trace: req.meta?.trace || null, depth: req.meta?.depth ?? 0 }, async () => {
+    await walContext.run(requestContext(req), async () => {
         const { method, params, id } = req.body;
         const isAdmin = req.permit === 'admin';
         const needAdmin = () => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); };

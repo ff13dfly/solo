@@ -3,10 +3,11 @@ const cors = require('cors');
 const { corsOptionsFromEnv } = require('../../library/cors');
 const bodyParser = require('body-parser');
 const config = require('./config');
+const { bindAddr } = require('../../library/ports');
 const { createLogger } = require('../../library/logger');
 const logger_lib = require('../../library/logger');
 const { createRelay } = require('../../library/relay');
-const { walContext } = require('../../library/entity');
+const { walContext, requestContext } = require('../../library/entity');
 
 const { initializeRedis } = require('./handlers/bootstrap');
 const authHandlers = require('./handlers/auth');
@@ -46,7 +47,7 @@ let relay;
             walLogger: (key, data) => logger_lib.insert(key, data),
         });
         Methods = createLogic(redisClient, { config, relay });
-        app.listen(PORT, () => {
+        app.listen(PORT, bindAddr('collection'), () => {
             logger.info(`Service running on port ${PORT}`);
             logger.info('Ready to accept connections.');
         });
@@ -63,12 +64,15 @@ app.post('/auth/verify', (req, res) =>
 app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
     if (!Methods) return jsonrpc.error(res, jsonrpc.SERVICE_NOT_READY(), null, 503);
 
-    await walContext.run({ uid: req.user || null, trace: req.meta?.trace || null, depth: req.meta?.depth ?? 0 }, async () => {
+    await walContext.run(requestContext(req), async () => {
         const { method, params, id } = req.body;
 
         // 行隔离(authority.md §4.3):外部 session 带 constraints.$owner = {field, value}。
         // 服务端派生,覆盖任何客户端传入的 _scope(spread 在后 → 客户端无法注入/绕过)。
         // 内部/admin 无 $owner → scope=null → payment 逻辑行为不变。
+        // 注:Entity Factory 现已经 requestContext(req) 自动执行 $owner(盖章/过滤/校验),
+        // 这里的手工 _scope 是它出现之前的实现,保留作 belt-and-braces + 自定义数据路径的
+        // 参照(两者语义一致:越权一律 NOT_FOUND)。新服务不需要再抄这套,见 api/sample。
         const scope = (req.constraints && req.constraints.$owner) || null;
         const isAdmin = req.permit === 'admin';
 

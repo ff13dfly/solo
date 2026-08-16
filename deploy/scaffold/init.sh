@@ -287,9 +287,20 @@ chmod +x "$NEW_DIR/deploy/run.sh" "$NEW_DIR/deploy/precheck.sh" "$NEW_DIR/deploy
 # scaffolded project gets its own range so two projects on the same machine
 # don't collide. services.solo.json is the *which services* template; ports
 # in it are ignored and rewritten here.
+# 三处端口扫描都靠 lsof;它缺失时 `command not found` 会被吞掉、所有端口判成空闲。
+# 与其静默错配,不如当场点破(run.sh 侧已有 lsof/ss 双轨,这里只提醒)。
+if ! command -v lsof >/dev/null 2>&1; then
+    log_warn "lsof 不存在——下面三处端口扫描将探不到任何占用(全部判空闲)。"
+    log_warn "请显式传入 SOLO_PORT_BASE= / FE_PORT_BASE= / REDIS_PORT=,或先装 lsof。"
+fi
 SOLO_TEMPLATE="$SCRIPT_DIR/services.solo.json"
 SOLO_COUNT=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync('$SOLO_TEMPLATE','utf8')).length))")
-SOLO_PORT_BASE=8400
+# 与 FE_PORT_BASE 同款可覆盖(见下方 §10 的大段注释——那段推理对本文件三处端口扫描
+# 一字不差地成立,此前却只有前端那处开了口子):探测只看"此刻谁在监听",看不到兄弟
+# 项目已声明未启动的号段,更看不到"整栈已迁去别的机器、本机只剩声明"的永久空窗
+# (2026-08-15 实测:colony/trend 迁走后,scaffold 把它们的 8465-8477 与 6383 判成空闲)。
+# 知道答案的人(端口台账)直接传进来:SOLO_PORT_BASE=8520 REDIS_PORT=6385 bash init.sh …
+SOLO_PORT_BASE=${SOLO_PORT_BASE:-8400}
 while :; do
     _conflict=0
     for ((i=0;i<SOLO_COUNT;i++)); do
@@ -301,7 +312,7 @@ while :; do
     SOLO_PORT_BASE=$((SOLO_PORT_BASE + SOLO_COUNT))
     [ $SOLO_PORT_BASE -gt 9000 ] && log_error "No free $SOLO_COUNT-port range found below 9000"
 done
-log_info "Solo internal services → ports ${SOLO_PORT_BASE}-$((SOLO_PORT_BASE + SOLO_COUNT - 1)) (auto-selected, contiguous free range)"
+log_info "Solo internal services → ports ${SOLO_PORT_BASE}-$((SOLO_PORT_BASE + SOLO_COUNT - 1)) (runtime probe only — does NOT see other projects' declared-but-idle ranges; cross-check your port ledger, or pass SOLO_PORT_BASE=<n>)"
 
 node -e "
 const fs = require('fs');
@@ -347,12 +358,13 @@ PORTAL_SYSTEM_PORT=$((FE_PORT_BASE + 50))
 CLIENT_MOBILE_PORT=$((FE_PORT_BASE + 100))
 log_info "Frontend ports: operator=$PORTAL_OPERATOR_PORT system=$PORTAL_SYSTEM_PORT mobile=$CLIENT_MOBILE_PORT (auto-selected by runtime probe — does NOT check other projects' .env declarations; cross-check your port ledger, or pass FE_PORT_BASE=<n> to pick explicitly)"
 
-# Find an available Redis port starting from 6380
-REDIS_PORT=6380
+# Find an available Redis port starting from 6380 — overridable, same reasoning as
+# SOLO_PORT_BASE/FE_PORT_BASE above (a sibling's declared-but-idle Redis port scans as free).
+REDIS_PORT=${REDIS_PORT:-6380}
 while lsof -i:"$REDIS_PORT" &>/dev/null 2>&1; do
     REDIS_PORT=$((REDIS_PORT + 1))
 done
-log_info "Redis port: $REDIS_PORT (auto-selected, not currently in use)"
+log_info "Redis port: $REDIS_PORT (runtime probe only — does NOT see declared-but-idle ports; cross-check your port ledger, or pass REDIS_PORT=<n>)"
 
 # This heredoc is intentionally unquoted (`<< EOF`, not `<< 'EOF'`) — it interpolates
 # $REDIS_PASSWORD/$JWT_SECRET/$ROUTER_PUBLIC_KEY/$PROJECT_NAME/the three frontend port
@@ -372,6 +384,18 @@ JWT_SECRET=$JWT_SECRET
 # 或逗号分隔的精确 origin 白名单。全部服务经 library/cors.js 统一吃这一个开关。
 # CORS_ORIGINS=https://yourapp.example.com
 
+# 🔴 监听网卡（挂公网/局域网前务必看一眼）：不设 = 每个服务绑**所有网卡**（Node 默认，
+# 也是历史行为）。也就是说这台机器的任何一个可达 IP 上，Router、user（账号）、storage
+# 都是能连的——本机开发无感，一旦机器有公网网卡就等于全部对外。
+# 设成 127.0.0.1 = 全部只听本机（反向代理同机时的推荐姿态）；要单独放行某个服务，
+# 用 <服务名大写>_BIND_ADDR 覆盖，或在 deploy/services.json 里给该 app 写 env（见下）：
+#   BIND_ADDR=127.0.0.1
+#   CODER_BIND_ADDR=0.0.0.0
+# services.json 的等价写法（只对私有 app 生效，跟着 git 走、不依赖机器上的防火墙规则）：
+#   { "name": "coder", "path": "apps/coder/index.js", "port": 8422,
+#     "env": { "BIND_ADDR": "0.0.0.0" } }
+# BIND_ADDR=127.0.0.1
+
 # Router Identity
 SOLO_KEYPAIR_PATH=$NEW_DIR/.keypair
 ROUTER_PUBLIC_KEY=$ROUTER_PUBLIC_KEY
@@ -383,6 +407,13 @@ ENABLE_STATIC_ASSETS=false
 PORTAL_OPERATOR_PORT=$PORTAL_OPERATOR_PORT
 PORTAL_SYSTEM_PORT=$PORTAL_SYSTEM_PORT
 CLIENT_MOBILE_PORT=$CLIENT_MOBILE_PORT
+
+# 自有前端（源码形态，v1.1.16+）：声明即接入，不用改 run.sh（它属只读区，改了会被
+# upgrade 覆盖）。目录相对项目根；缺 dist/ 自动 npm install + npm run build；
+# config.js 注入与 tarball 前端同源；端口守卫同款（占用 fail fast）。
+# 更复杂的启动逻辑放 deploy/frontends.local.sh（不随 bundle 下发、upgrade 永不覆盖）。
+# FRONTEND_MYAPP_DIR=client/myapp
+# FRONTEND_MYAPP_PORT=3790
 
 # 门户品牌（可选，v1.1.13+）：system/operator 侧边栏与登录页标题、system Overview 说明卡。
 # 多实例同时打开时用来一眼分清是哪个部署；不配 = 显示通用文案。
@@ -525,7 +556,10 @@ printf "${YELLOW}  !! Review SETUP.md for initial credentials before starting se
 echo ""
 echo "Next steps:"
 echo "  1. cd $NEW_DIR"
-echo "  2. Confirm REDIS_URL in .env"
+echo "  2. 端口核对（上面三处自动分配只看运行时监听，看不到别家 .env / solo-services.json 的声明，"
+echo "     整栈迁去别的机器后本机遗留的声明更是永久盲区）："
+echo "       Solo 内部 ${SOLO_PORT_BASE}-$((SOLO_PORT_BASE + SOLO_COUNT - 1)) · 前端 ${PORTAL_OPERATOR_PORT}/${PORTAL_SYSTEM_PORT}/${CLIENT_MOBILE_PORT} · Redis ${REDIS_PORT}"
+echo "     → 与端口台账对一遍；要改：deploy/solo-services.json（Solo 内部）与 .env（前端端口/REDIS_URL）"
 echo "  3. bash deploy/run.sh"
 echo "  4. Log in, call admin.password.reset, then delete SETUP.md"
 echo ""

@@ -127,6 +127,12 @@ fulfillment 撑不起这个场景，不是因为它不好，而是**驱动模型
 
 ## 四、两个附带发现
 
+> ⚠️ **本节两条的定性已被后续源码核对推翻，triage 时以
+> `fulfillment-profile-submit-contract-and-enroll-gap.md` 为准**（2026-08-16）：
+> #1 的前提错了——submit 本来就是审核通道里的**创建**（双通道设计），该修的是描述与报错
+> （已修，并补了 enroll 路径）；#2 的建议请忽略——「缺 reviewState 视为未审核」会把可信
+> 直建通道整个打死，守卫按设计工作正常。本节按纪律保留原文不删。
+
 1. **`fulfillment.profile.submit` 报 "profile id already exists"**
    对一个已存在的 profile 调 submit（提交审核）时：
 

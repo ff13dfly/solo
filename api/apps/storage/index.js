@@ -4,8 +4,9 @@ const cors = require('cors');
 const { corsOptionsFromEnv } = require('../../library/cors');
 const { createClient } = require('redis');
 const config = require('./config');
+const { bindAddr } = require('../../library/ports');
 const { createLogger } = require('../../library/logger');
-const { walContext } = require('../../library/entity');
+const { walContext, requestContext } = require('../../library/entity');
 const authHandlers = require('./handlers/auth');
 const introspectionMethods = require('./handlers/introspection');
 const createLogic = require('./logic');
@@ -104,7 +105,7 @@ async function bootstrap() {
         }
 
         // WAL context: inject user uid for audit logging
-        await walContext.run({ uid: req.user || null, trace: req.meta?.trace || null, depth: req.meta?.depth ?? 0 }, async () => {
+        await walContext.run(requestContext(req), async () => {
             // Auth context (consistent with other services)
             const isAdmin = req.permit === 'admin';
             // toFix §6.4 — per-asset authorization context, threaded into asset logic.
@@ -141,7 +142,7 @@ async function bootstrap() {
         }); // walContext.run
     });
 
-    app.listen(config.port, () => {
+    app.listen(config.port, bindAddr('storage'), () => {
         log(`Service running on port ${config.port}`);
         log(`Storage provider: ${config.storage?.provider || 'local'} (access=${config.storage?.access || 'public'})`);
     });

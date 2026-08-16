@@ -52,7 +52,7 @@ SOLO 把"wire 兼容"做成了**可复用的 library factory**——auth 握手�
 // index.js（服务根 → ../library）
 const { corsOptionsFromEnv } = require('../library/cors');
 const { createLogger }       = require('../library/logger');   // createLogger(serviceName)
-const { walContext }         = require('../library/entity');   // WAL uid 注入用的 AsyncLocalStorage
+const { walContext, requestContext } = require('../library/entity');   // 请求上下文注入（WAL uid + 行隔离 $owner）
 const { createIndexer }      = require('../library/indexer');  // (redis, serviceName, indexes)
 const jsonrpc                = require('./handlers/jsonrpc');   // 本地 wrapper
 
@@ -60,14 +60,50 @@ const jsonrpc                = require('./handlers/jsonrpc');   // 本地 wrappe
 const { portFor, urlFor } = require('../library/ports');       // portFor('{{PROJECT_NAME}}svc', 8999)
 ```
 
-`/jsonrpc` 的 handler 整体**必须**包在 WAL 上下文里（审计链）：
+**`app.listen` 必须带 host**（否则永远绑所有网卡）：
 
 ```js
-await walContext.run(
-  { uid: req.user || null, trace: req.meta?.trace || null, depth: req.meta?.depth ?? 0 },
-  async () => { /* 方法派发 */ }
-);
+const { bindAddr } = require('../library/ports');    // 你的服务里是 ../../library/ports
+app.listen(PORT, bindAddr('{{PROJECT_NAME}}'), () => { /* ... */ });
 ```
+
+不带 host 的 `app.listen(PORT, cb)` 会让 Node 绑 `::` / 0.0.0.0 ——**这台机器的每一个网卡**。
+本机开发看不出来，机器一旦有公网网卡，这个服务当场对全网可达，而项目里没有任何地方能表达
+「它不该对外」，最后只能靠机器上的防火墙规则兜（那份知识不在仓库里、一条 `nft flush ruleset`
+就静默解除、加新服务时也没东西提醒你回去改）。
+
+`bindAddr()` 在 `BIND_ADDR` 与 `<服务名大写>_BIND_ADDR` 都没设时返回 `undefined`，
+而 `listen(port, undefined, cb)` 与 `listen(port, cb)` **完全等价**——所以接上它对现有部署
+零影响，只是把「能锁」这个能力加进来。锁的方式（两选一，都跟着 git 走）：
+
+```bash
+# .env — 全锁，再单独放行一个
+BIND_ADDR=127.0.0.1
+CODER_BIND_ADDR=0.0.0.0
+```
+```jsonc
+// deploy/services.json — per-app env，只对私有 app 生效
+{ "name": "coder", "path": "apps/coder/index.js", "port": 8422,
+  "env": { "BIND_ADDR": "0.0.0.0" } }
+```
+
+autocheck 的 `bind-address` 规则（WARN）会盯着这件事。
+
+`/jsonrpc` 的 handler 整体**必须**包在请求上下文里（审计链 + 行隔离）：
+
+```js
+await walContext.run(requestContext(req), async () => { /* 方法派发 */ });
+```
+
+**store 必须用 `requestContext(req)` 构造，别手写字面量。** 它除了 WAL 的
+uid/trace/depth，还带上 Router 下发的 `constraints.$owner`（passport 外部会话的行隔离
+声明）——Entity Factory 据此在数据层**自动执行**行隔离：create 盖章、get/update/delete
+校验归属（不符 → NOT_FOUND，不泄露存在性）、list 过滤。手写字面量 = `$owner` 进不了
+工厂，外部主体能读到全表且**零告警**（passport.md §3.7 的三道发证关卡只保证声明存在，
+执行靠这里）。内部/admin 会话没有 `$owner`，两种写法行为一致——所以这是纯上锁。
+只有绕过 Entity Factory 直接读 redis 的自定义数据路径需要自己过滤
+（`getConstraints(req).$owner`，参照 Solo 源里 apps/collection 的 `_scope`）。
+autocheck 的 `owner-context` 规则（WARN）盯着这件事。
 
 ---
 
@@ -251,7 +287,7 @@ autocheck 的 `pagination-safety` 规则会拦 `keys` / `sMembers` / `hGetAll` /
 
 ---
 
-## 7. 写完自查（6 条最常踩）
+## 7. 写完自查（8 条最常踩）
 
 1. **声明↔注册不同步** → `autocheck --static` 直接红。先跑它。
 2. **自己重写了 library 已有的东西**（category/entity/index/auth）→ 回 §0/§4 改成 `require` + 挂载。
@@ -260,5 +296,9 @@ autocheck 的 `pagination-safety` 规则会拦 `keys` / `sMembers` / `hGetAll` /
 5. **服务里直接 POST 另一个服务** → 禁止。走 Router：`relay.call(...)`（带 bot token），或返回 `_tasks` 让 Router 派发，或返回 `_event`（见 `events.md`）。
 6. **`*.list` 声明 `params: []`** → 无界集合会静默截断在 50 条；有界集合也要在 description 里
    明说"有意不分页"（§6.5）。顺手确认没在 logic 里用 `redis.keys()` 扫 keyspace。
+7. **`app.listen(PORT, cb)` 漏了 host** → 服务永远绑所有网卡，部署到有公网 IP 的机器上就是
+   直接对外。接 `bindAddr('<service>')`（§2）。
+8. **`walContext.run` 手写 store 字面量** → passport 外部会话的行隔离（`$owner`）进不了
+   Entity Factory，外部主体能读全表且零告警。用 `requestContext(req)`（§2）。
 
 > 跑通后：`node api/autocheck/checker.js api/apps/{{PROJECT_NAME}} --static` 必须 PASS；把服务加进 `deploy/solo-services.json` 或你的 services.json 才会被 Router 拉起。

@@ -13,6 +13,111 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
+## [v1.1.16] — 2026-08-16
+
+> 六篇派生项目 feedback 的集中收口（2026-08-14 与 08-16 两轮 triage），
+> 主线仍是「看起来正常」与「真的正常」之间的缝：行隔离声明了没人执行、fail-fast 报假原因、
+> 探测看不到声明、submit 的报错把人引向错误方向。全部只加不破。
+> hermetic CI 白名单 **126 套 / 1983 测试**，绿 125 套 / 1981（仅剩 2 例是 `agent.decide`
+> 的 LIVE Gemini 活体测试因外部模型行为漂移失败——在无本地改动的基线上复跑同样失败，
+> 与本版改动无关）；`deploy/build.sh` 端到端跑过（5.3M 产物，grep 确认
+> requestContext/ownerScope/enroll 均落进 bundle）。
+
+### Added — 🔴 行隔离 `$owner` 从「强制声明」补齐为「自动执行」（Entity Factory）
+
+> 来源：colony 实测，`docs/feedback/passport-owner-isolation-declared-not-enforced.md`。
+> 三道发证关卡强硬拒绝没有 `ownerField` 的外部角色，但 `$owner` 下发后**没有任何一环消费它**
+> ——服务不自己读，passport 外部主体就能读全表，零告警。
+
+- `library/entity.js` 新增导出 **`requestContext(req)`**（walContext store 收口：uid/trace/depth
+  + `owner` = `req.constraints.$owner`）；工厂据此在数据层自动执行：create 盖 owner 章（覆盖
+  客户端伪造）、get/update/delete/destroy 越权 → NOT_FOUND（不泄露存在性，与 collection 手工
+  实现同语义）、list/multiGet/cursor 过滤、update 不能改走 owner 字段。
+- 14 个用 walContext 的服务 + `api/sample` 全部改为 `walContext.run(requestContext(req), …)`。
+  内部/admin/bot 会话无 `$owner` → 行为与从前完全一致；**fail-closed**：外部会话只能看到盖了
+  自己章的行（enforcement 之前的存量行对外部会话不可见——这是设计）。
+- 新增 autocheck 规则 `owner-context`（WARN）：`walContext.run` 手写 store 字面量即告警。
+- 文档同步：passport.md §3.6/§3.7（言明执行位置 + 「v1.1.15 及更早没有执行环节」的版本边界）、
+  user GUIDE、scaffold `docs/authoring/service.md` §2 + 自查第 8 条、solo-service SKILL.md。
+- 回归：新增 `library/tests/entity-owner-scope.test.js`（13 用例）入 CI 白名单。
+
+> 下游 action：**把各自有服务 `walContext.run` 的手写 store 换成 `requestContext(req)`**
+> （autocheck 会 WARN 提示）。换完后 passport 外部会话将只看到盖了自己章的行——存量行没有
+> owner 字段会从外部视角消失；单用户/想让外部看全表的场景，给角色去掉 external scope 或给
+> 存量行补 owner 字段。内部/admin 调用零变化。
+
+### Fixed/Added — fulfillment `profile.submit` 契约纠偏 + `enroll` 追溯治理
+
+> 来源：colony，`docs/feedback/fulfillment-profile-submit-contract-and-enroll-gap.md`。
+
+- submit 撞已存在 id：捕获工厂通用 "already exists"，翻译成通道契约报错（点名「submit 是在
+  审核通道里**创建**」、报出对方所在通道、指路 enroll）；`config.js` 英中描述、introspection
+  注释同步改写。
+- **Added `submit { id, enroll: true }`**（handler 层 admin 门）：把既有可信直建 profile 转入
+  PENDING_REVIEW——重 lint（坏的拒收、原样保持可用）、清 approvals/approvedDigest、实例经
+  现有激活闸立即冻结。记 `enrolledBy` 而非 `submittedBy`（否则「审批人 ≠ 投稿人」让单管理员
+  系统 enroll 后无人能批）。GUIDE.md 配方二补第 4 步。
+- 回归：新增 `apps/fulfillment/tests/profile-lanes.test.js`（7 用例）入 CI 白名单。
+
+> 下游 action：无（submit 正常路径行为不变；新报错只出现在此前必然失败的调用上）。
+
+### Fixed — scaffold `run.sh` 端口探测的 lsof 硬依赖（缺失时守卫**反向失效**）
+
+> 来源：overview 迁 N100 实测，`docs/feedback/run-sh-lsof-hard-dependency.md`。Debian 最小安装
+> 无 lsof：fe_assert_port_free 静默放行、fe_confirm_bound 把起得好好的前端 exit 1 打死，
+> 报错与事实相反、还指向空日志。
+
+- 启动前置检查：lsof 与 ss 都没有 → 报真实原因 + 安装命令后拒绝启动。
+- 全脚本探测收口成三个函数（`port_in_use` / `listener_pids` / `listener_desc`），lsof → ss
+  自动回退；cleanup 清扫、两个 fe 守卫、dashboard 四处绿点全部换用。
+- fe_confirm_bound 失败分支区分「没人监听」与「有人监听但确认不了归属」（ss 无权限场景），
+  不再统一报「前端没起来」。
+
+> 下游 action：无（macOS 与已装 lsof 的机器行为不变；未装 lsof 的 Linux 从「误杀栈」变成
+> 「正常工作」）。改过 `deploy/run.sh` 的项目随 DIVERGED 流程手动 merge。
+
+### Added — scaffold `run.sh` 自有前端注册表（四个项目各抄一段的终结）
+
+> 来源：colony，`docs/feedback/run-sh-no-derived-frontend-registry.md`。runner/finance/trend/
+> colony 各在只读区抄了一段几乎相同的启动代码，全是 upgrade 的必然牺牲品。
+
+- `.env` 声明即接入：`FRONTEND_<NAME>_DIR` + `FRONTEND_<NAME>_PORT`，run.sh 扫描并经新函数
+  `serve_src_frontend` 启动（缺 dist 自动 npm install+build、端口守卫同款、进 dashboard）。
+- 逃生舱 `deploy/frontends.local.sh`（存在才 source，不随 bundle 下发、upgrade 永不覆盖）。
+- config.js 注入收编成 `write_fe_config`，tarball 前端与源码前端共用——注入项以后增删，
+  自有前端自动跟上。`init.sh` 生成的 `.env` 模板带注释示例。
+
+> 下游 action：**四个有自有前端的项目**升级后把 DIVERGED 的前端段删掉、换成 `.env` 两行声明
+> （runner 顺带获得它此前缺失的端口守卫；finance 的定制签名挪 `frontends.local.sh`）。
+
+### Fixed — `init.sh` 三处端口扫描只有前端一处能被调用方覆盖
+
+> 来源：steward 脚手架实测，`docs/feedback/scaffold-port-scan-blind-to-declarations.md`。
+> 探测看不到「已声明未启动」，更看不到「整栈迁走后本机遗留声明」的永久盲区。
+
+- `SOLO_PORT_BASE` / `REDIS_PORT` 补上与 `FE_PORT_BASE` 同款环境变量覆盖（没传行为不变）。
+- 三处分配的提醒统一措辞并收进结尾 Next steps 第 2 步（一行列出全部分配结果 + 台账核对指引）；
+  扫描前加 lsof 缺失警告（缺了会把所有端口判成空闲）。
+
+> 下游 action：无（存量项目不受影响；新建项目可一条命令传齐三个号段）。
+
+### Added — per-app env + `bindAddr()` 监听网卡控制 + redis 模块第三档（2026-08-14 批）
+
+> 来源：runner 部署 N100 实测，`docs/feedback/run-sh-no-per-app-env.md`（详细 triage 在文内）。
+
+- `deploy/services.json` 支持 per-app `env`（如 `{ "env": { "BIND_ADDR": "0.0.0.0" } }`），
+  「哪个服务对外」变成声明在项目里、跟着 git 走的事实。
+- `library/ports.js` 新增 `bindAddr(name)`（`<NAME>_BIND_ADDR` > `BIND_ADDR` > `undefined`，
+  两个都不设时与不传 host 完全等价 = 零行为变化）；15 个服务 + sample 的 `app.listen` 接上；
+  新增 autocheck 规则 `bind-address`（WARN）。
+- `run.sh` redis 分支第三档：落到 plain `redis-server` 时自动找 `rejson.so`/`redisearch.so`
+  并 `--loadmodule`（Debian 12 官方源的模块随包装但默认不加载）；安装提示按平台分。
+
+> 下游 action：无强制（全部 opt-in）。要锁监听网卡的部署在 `.env` 或 services.json 里声明；
+> runner 的私有服务可换用 `bindAddr()` 但注意默认值方向（详见 feedback 文内动作项）。
+
+---
+
 ## [v1.1.15] — 2026-08-08
 
 > 五批派生项目实战反馈的集中收口，同一条主线：**"看起来正常"与"真的正常"之间的缝**——

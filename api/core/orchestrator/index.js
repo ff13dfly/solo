@@ -3,6 +3,7 @@ const cors = require('cors');
 const { corsOptionsFromEnv } = require('../../library/cors');
 const bodyParser = require('body-parser');
 const config = require('./config');
+const { bindAddr } = require('../../library/ports');
 
 const { initializeRedis, ensureDefaultCategories } = require('./handlers/bootstrap');
 const authHandlers = require('./handlers/auth');
@@ -129,7 +130,7 @@ app.use(authHandlers.middleware);
 
 
         // Start Server
-        app.listen(PORT, () => {
+        app.listen(PORT, bindAddr('orchestrator'), () => {
             logger.info(`Service running on port ${PORT}`);
 
             // event.md §5 — async run-queue worker.
@@ -169,12 +170,12 @@ app.post('/auth/verify', (req, res) => authHandlers.handleVerify(req, res, confi
  *   - `orchestrator.run` and `orchestrator.workflow.run` require header-based context extraction.
  *   - Error handling differentiates between normal "Method not found" for entities and critical failures.
  */
-const { walContext } = require('../../library/entity');
+const { walContext, requestContext } = require('../../library/entity');
 
 app.post('/jsonrpc', async (req, res) => {
     if (!Methods) return jsonrpc.error(res, jsonrpc.SERVICE_NOT_READY(), null, 503);
 
-    await walContext.run({ uid: req.user || null, trace: req.meta?.trace || null, depth: req.meta?.depth ?? 0 }, async () => {
+    await walContext.run(requestContext(req), async () => {
         const { jsonrpc: jsonrpc_version, method, params, id } = req.body;
         const isAdmin = permitIsAdmin(req);
 

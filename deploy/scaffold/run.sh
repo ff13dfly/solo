@@ -37,6 +37,51 @@ log_info()  { printf "${GREEN}✓ %s${NC}\n" "$1"; }
 log_warn()  { printf "${YELLOW}⚠ %s${NC}\n" "$1"; }
 log_error() { printf "${RED}✗ %s${NC}\n" "$1" >&2; }
 
+# ── 端口探测统一入口（lsof / ss 二选一）───────────────────────────────────
+# macOS 必有 lsof;Debian/Ubuntu 最小安装常**没有** lsof（不是默认包），但必有
+# ss(iproute2)。v1.1.14 的 fail-fast 守卫曾把 lsof 当必然存在:缺失时 `command not
+# found` 被 2>/dev/null 吞掉、stdout 为空——fe_assert_port_free 静默放行(它要防的
+# 正是静默失效)、fe_confirm_bound 空转 5 秒后 exit 1 打死起得好好的前端,报错文本
+# 与事实相反、还指向一个空日志(docs/feedback/run-sh-lsof-hard-dependency.md)。
+# 现在:两个工具都没有 → 启动即报**真实原因**;有其一 → 全脚本经这三个函数探测。
+PORT_TOOL=""
+command -v lsof >/dev/null 2>&1 && PORT_TOOL="lsof"
+[ -z "$PORT_TOOL" ] && command -v ss >/dev/null 2>&1 && PORT_TOOL="ss"
+if [ -z "$PORT_TOOL" ]; then
+    log_error "缺少端口探测工具:lsof 与 ss 都不存在——端口守卫(fail-fast/清扫/dashboard)依赖其一。"
+    log_error "Debian/Ubuntu: sudo apt-get install -y lsof   (或装 iproute2 提供 ss)"
+    exit 1
+fi
+
+# port_in_use <port> — 有人在监听该 TCP 端口则返回 0
+port_in_use() {
+    if [ "$PORT_TOOL" = "lsof" ]; then
+        lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+    else
+        [ -n "$(ss -tlnH "sport = :$1" 2>/dev/null)" ]
+    fi
+}
+
+# listener_pids <port> — 监听该端口的 pid,一行一个。注意:ss 无权限看别的用户的进程时
+# 会有监听但拿不到 pid(输出为空)——调用方要区分「没人监听」与「查不到归属」,用
+# port_in_use 交叉判断。函数本身恒返回 0(set -e 下命令替换赋值不炸)。
+listener_pids() {
+    if [ "$PORT_TOOL" = "lsof" ]; then
+        lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null || true
+    else
+        ss -tlnpH "sport = :$1" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true
+    fi
+}
+
+# listener_desc <port> — 占用方的一行人读描述(报错用)。恒返回 0。
+listener_desc() {
+    if [ "$PORT_TOOL" = "lsof" ]; then
+        lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1 || true
+    else
+        ss -tlnpH "sport = :$1" 2>/dev/null | head -1 || true
+    fi
+}
+
 # --- Args ---
 
 MODE="dashboard"
@@ -96,17 +141,32 @@ fi
 
 # --- 4. Load services.json (private apps) ---
 
-declare -a SVC_NAMES SVC_PATHS SVC_PORTS
+declare -a SVC_NAMES SVC_PATHS SVC_PORTS SVC_ENVS
 if [ -f "$SERVICES_JSON" ]; then
     _tmp_svc=$(mktemp)
+    # Optional per-app `env` object, serialized as \x1f-separated K=V pairs in the 4th
+    # field. WHY it exists: .env is sourced with `set -o allexport`, so anything put
+    # there hits EVERY service — but "which service is exposed / how verbose is it" is a
+    # per-service decision. Without this, a project that wants ONE app reachable from
+    # outside has to open all of them and claw the boundary back with a machine-level
+    # firewall — knowledge that lives outside the repo, silently lost on `nft flush
+    # ruleset`, and never re-checked when a new service is added.
+    #   { "name": "coder", "path": "apps/coder/index.js", "port": 8422,
+    #     "env": { "BIND_ADDR": "0.0.0.0" } }
+    # Field order matters: `env` is LAST so a value containing '|' can't break the split
+    # (read's final variable absorbs the remainder).
     node -e "
 const services = JSON.parse(require('fs').readFileSync('$SERVICES_JSON', 'utf8'));
-services.forEach(s => console.log([s.name, s.path, s.port].join('|')));
+services.forEach(s => {
+  const env = Object.entries(s.env || {}).map(([k, v]) => k + '=' + v).join('\x1f');
+  console.log([s.name, s.path, s.port, env].join('|'));
+});
 " > "$_tmp_svc"
-    while IFS='|' read -r n p port; do
+    while IFS='|' read -r n p port envs; do
         SVC_NAMES+=("$n")
         SVC_PATHS+=("$p")
         SVC_PORTS+=("$port")
+        SVC_ENVS+=("$envs")
     done < "$_tmp_svc"
     rm -f "$_tmp_svc"
 fi
@@ -168,7 +228,7 @@ cleanup() {
     local _our_pgid _pg l
     _our_pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
     for port in "${SOLO_PORTS[@]}" "${SVC_PORTS[@]}"; do
-        for l in $(lsof -ti:"$port" 2>/dev/null || true); do
+        for l in $(listener_pids "$port"); do
             _pg=$(ps -o pgid= -p "$l" 2>/dev/null | tr -d ' ')
             [ -n "$_our_pgid" ] && [ "$_pg" = "$_our_pgid" ] && kill -9 "$l" 2>/dev/null || true
         done
@@ -191,13 +251,39 @@ if ! redis-cli -p "$REDIS_PORT" ping &>/dev/null 2>&1; then
     # appends our args afterwards and redis config is last-wins, so the
     # `--daemonize yes` below correctly daemonizes it. Teardown uses
     # `redis-cli shutdown nosave` (below), which works regardless of binary.
+    # NOTE the `${arr[@]+"${arr[@]}"}` form used wherever this array is expanded below:
+    # this script runs under `set -u` and macOS still ships bash 3.2, where a plain
+    # "${EMPTY[@]}" aborts with "unbound variable" (verified). Don't "simplify" it.
+    REDIS_MODULE_ARGS=()
     if command -v redis-stack-server &>/dev/null; then
         REDIS_BIN="redis-stack-server"
     elif command -v redis-server &>/dev/null; then
         REDIS_BIN="redis-server"
-        log_warn "redis-stack-server not found — falling back to plain redis-server."
-        log_warn "  orchestrator/storage/nexus need RedisJSON and will fail on JSON.SET."
-        log_warn "  Install: brew install redis-stack"
+        # Redis 8.x on Debian/Ubuntu (packages.redis.io) ships the modules as .so files
+        # under /usr/lib/redis/modules/ but does NOT load them unless the packaged
+        # redis.conf says so — and we start redis with our own flags, never that conf.
+        # So `redis-stack-server` is absent, this branch is taken, and JSON.SET then
+        # fails with "unknown command" even though rejson.so is sitting right there.
+        # Load it explicitly when we can find it, and only warn when we genuinely can't.
+        # (Reported from a runner deploy on Debian 12 / redis 8.10 — 2026-08-14.)
+        for _mdir in /usr/lib/redis/modules /usr/local/lib/redis/modules /opt/redis-stack/lib; do
+            if [ -f "$_mdir/rejson.so" ]; then
+                REDIS_MODULE_ARGS+=(--loadmodule "$_mdir/rejson.so")
+                [ -f "$_mdir/redisearch.so" ] && REDIS_MODULE_ARGS+=(--loadmodule "$_mdir/redisearch.so")
+                break
+            fi
+        done
+        if [ ${#REDIS_MODULE_ARGS[@]} -gt 0 ]; then
+            log_info "redis-stack-server not found — using redis-server + modules from ${_mdir}"
+        else
+            log_warn "redis-stack-server not found — falling back to plain redis-server."
+            log_warn "  orchestrator/storage/nexus need RedisJSON and will fail on JSON.SET."
+            case "$(uname -s)" in
+                Darwin) log_warn "  Install: brew install redis-stack" ;;
+                Linux)  log_warn "  Install: see https://redis.io/docs/latest/operate/oss_and_stack/install/ (Redis 8+ ships the modules; this script loads them from /usr/lib/redis/modules automatically once present)" ;;
+                *)      log_warn "  Install a Redis build that provides the RedisJSON module." ;;
+            esac
+        fi
     else
         log_error "Redis not running on port $REDIS_PORT and no redis-stack-server/redis-server found"
         exit 1
@@ -211,6 +297,7 @@ if ! redis-cli -p "$REDIS_PORT" ping &>/dev/null 2>&1; then
         --dir "$SCRIPT_DIR/redis_data" \
         --logfile "$SCRIPT_DIR/redis.log" \
         ${REDIS_PASSWORD:+--requirepass "$REDIS_PASSWORD"} \
+        ${REDIS_MODULE_ARGS[@]+"${REDIS_MODULE_ARGS[@]}"} \
         --save "3600 1" --save "300 100" --save "60 10000"
     for i in $(seq 1 20); do
         redis-cli -p "$REDIS_PORT" ping &>/dev/null 2>&1 && break
@@ -308,14 +395,28 @@ for j in "${!SOLO_NAMES[@]}"; do
 done
 
 # --- 9. Start private apps ---
+#
+# Network exposure: services call `app.listen(PORT, bindAddr('<name>'), …)`
+# (api/library/ports.js). With neither BIND_ADDR nor <NAME>_BIND_ADDR set, bindAddr
+# returns undefined and Node binds EVERY interface — the historical behavior, kept so
+# upgrades don't cut off reverse proxies that reach a service from another host.
+# To lock a deployment down, set BIND_ADDR=127.0.0.1 in .env and open exactly the apps
+# that need it via the per-app `env` in services.json (see §4 above).
 
 for i in "${!SVC_NAMES[@]}"; do
     name="${SVC_NAMES[$i]}"
     path="${SVC_PATHS[$i]}"
     port="${SVC_PORTS[$i]}"
     log_file="$DEBUG_DIR/${name}_debug.log"
-    PORT="$port" ROUTER_URL="http://localhost:$ROUTER_PORT" \
-        node "$ROOT_DIR/api/$path" > "$log_file" 2>&1 &
+    _app_env=("PORT=$port" "ROUTER_URL=http://localhost:$ROUTER_PORT")
+    if [ -n "${SVC_ENVS[$i]:-}" ]; then
+        # `|| true`: read hits EOF on the last field and returns 1 — with set -e that
+        # would kill the script even though the array was populated correctly.
+        IFS=$'\x1f' read -r -a _extra <<< "${SVC_ENVS[$i]}" || true
+        _app_env+=(${_extra[@]+"${_extra[@]}"})
+        log_info "  $name ← per-app env: ${_extra[*]:-}"
+    fi
+    env "${_app_env[@]}" node "$ROOT_DIR/api/$path" > "$log_file" 2>&1 &
     pid=$!
     CHILD_PIDS+=("$pid")
     log_info "  $name → port $port (pid $pid)"
@@ -341,13 +442,11 @@ declare -a FE_NAMES FE_PORTS FE_LOGS
 # 否则那些前端仍是"端口被占 → serve 静默换随机口"的重灾区(finance/trend 均实测)。
 
 # fe_assert_port_free <name> <port> — 启动前确认端口空闲,被占直接 fail fast。
-# `|| true`:端口空闲时 lsof 返回 1,配上 set -o pipefail 会让赋值语句直接触发 set -e。
 fe_assert_port_free() {
-    local name="$1" port="$2" holder
-    holder=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1 || true)
-    if [ -n "$holder" ]; then
+    local name="$1" port="$2"
+    if port_in_use "$port"; then
         log_error "  $name: 端口 $port 已被占用,拒绝启动(否则 serve 会静默换随机端口)"
-        log_error "    占用方：$holder"
+        log_error "    占用方：$(listener_desc "$port")"
         log_error "    改 .env 里 $name 的端口,或先停掉占用方。"
         exit 1
     fi
@@ -360,17 +459,44 @@ fe_confirm_bound() {
     local name="$1" port="$2" pid="$3" log_file="$4" bound=0 holder
     for _ in $(seq 1 25); do
         kill -0 "$pid" 2>/dev/null || break
-        if lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$pid"; then
+        if listener_pids "$port" | grep -qx "$pid"; then
             bound=1; break
         fi
         sleep 0.2
     done
     if [ $bound -eq 0 ]; then
+        # 「没人监听」和「有人监听但确认不了归属」必须说成两句话——后者(ss 无权限看
+        # 到别的用户的进程等)如果也报「没起来」,会把人引向一个空的 serve 日志。
+        if port_in_use "$port" && [ -z "$(listener_pids "$port")" ]; then
+            log_error "  $name: 端口 $port 有人监听,但无法确认归属($PORT_TOOL 拿不到对方 pid)"
+            log_error "    多半是别的用户/服务占着这个口——改 .env 里 $name 的端口,或先停掉占用方。"
+            exit 1
+        fi
         log_error "  $name: 前端没能在端口 $port 上起来"
-        holder=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1 || true)
+        holder=$(listener_desc "$port")
         [ -n "$holder" ] && log_error "    端口现在的占用方：$holder"
         log_error "    serve 日志：$log_file"
         exit 1
+    fi
+}
+
+# write_fe_config <dir> — 注入 config.js(Router 地址 + 品牌变量)。抽成函数:此前
+# 自有前端只能把这几行复制出去,bundle 一旦增删注入项(如 v1.1.15 加的
+# __SOLO_SYSTEM_DESCRIPTION__),各家的副本不会跟着更新,症状是新字段在自有前端里
+# 永远读不到。现在 tarball 前端与源码前端(serve_src_frontend)共用同一份注入。
+write_fe_config() {
+    local dir="$1"
+    if [ $SSL_ENABLED -eq 1 ]; then
+        printf 'window.__SOLO_ROUTER__ = "https://localhost:8686/";\n' > "$dir/config.js"
+    else
+        printf 'window.__SOLO_ROUTER__ = "http://localhost:%s/";\n' "$ROUTER_PORT" > "$dir/config.js"
+    fi
+    local sys_name="${SYSTEM_DISPLAY_NAME:-SYSTEM}"
+    printf 'window.__SOLO_SYSTEM_NAME__ = "%s";\n' "${sys_name//\"/\\\"}" >> "$dir/config.js"
+    # `:-` 兜底必须有:init.sh 生成的 .env 没有这个变量,set -u 下裸引用会让
+    # 全新项目在第一个前端这里直接死掉(unbound variable)。
+    if [ -n "${SYSTEM_DESCRIPTION:-}" ]; then
+        printf 'window.__SOLO_SYSTEM_DESCRIPTION__ = "%s";\n' "${SYSTEM_DESCRIPTION//\"/\\\"}" >> "$dir/config.js"
     fi
 }
 
@@ -388,18 +514,7 @@ serve_frontend() {
     local serve_dir="$DEBUG_DIR/serve/$name"
     mkdir -p "$serve_dir"
     tar -xzf "$tarball" -C "$serve_dir"
-    if [ $SSL_ENABLED -eq 1 ]; then
-        printf 'window.__SOLO_ROUTER__ = "https://localhost:8686/";\n' > "$serve_dir/config.js"
-    else
-        printf 'window.__SOLO_ROUTER__ = "http://localhost:%s/";\n' "$ROUTER_PORT" > "$serve_dir/config.js"
-    fi
-    local sys_name="${SYSTEM_DISPLAY_NAME:-SYSTEM}"
-    printf 'window.__SOLO_SYSTEM_NAME__ = "%s";\n' "${sys_name//\"/\\\"}" >> "$serve_dir/config.js"
-    # `:-` 兜底必须有:init.sh 生成的 .env 没有这个变量,set -u 下裸引用会让
-    # 全新项目在第一个前端这里直接死掉(unbound variable)。
-    if [ -n "${SYSTEM_DESCRIPTION:-}" ]; then
-        printf 'window.__SOLO_SYSTEM_DESCRIPTION__ = "%s";\n' "${SYSTEM_DESCRIPTION//\"/\\\"}" >> "$serve_dir/config.js"
-    fi
+    write_fe_config "$serve_dir"
     # 端口冲突必须在启动前拦下:`serve` 在端口被占时会**静默换一个随机端口并报告成功**
     # (实测 serve 14.2.4:占住 39117 后日志里写的是 "Accepting connections at :51410";
     # 源码 build/main.js 是 listen 前 isPortReachable 探一下、可达就无条件 startServer
@@ -422,6 +537,62 @@ SOLO_VER=$(tr -d '[:space:]' < "$VERSION_FILE")
 serve_frontend "operator" "$ROOT_DIR/portal/publish/operator.${SOLO_VER}.tar.gz" "${PORTAL_OPERATOR_PORT:-}"
 serve_frontend "system"   "$ROOT_DIR/portal/publish/system.${SOLO_VER}.tar.gz"   "${PORTAL_SYSTEM_PORT:-}"
 serve_frontend "mobile"   "$ROOT_DIR/client/publish/mobile.${SOLO_VER}.tar.gz"   "${CLIENT_MOBILE_PORT:-}"
+
+# ── 派生项目自有前端(源码形态:自己的 Vite/React 应用等)──────────────────
+# 此前唯一的接入方式是把启动代码写进本文件——而本文件随 bundle 升级被 upgrade.sh
+# 整体覆盖,四个派生项目各抄的那段就是每次升级的必然牺牲品:轻则前端静默消失,
+# 重则连带丢掉对 serve_frontend 的本地改动而 run.sh 照常打印"启动成功"
+# (docs/feedback/run-sh-no-derived-frontend-registry.md)。现在改成声明式:
+# .env 里写一对变量即接入,run.sh 零改动、升级零冲突:
+#   FRONTEND_ANT_DIR=client/ant      # 相对项目根(或绝对路径);目录下须有 package.json
+#   FRONTEND_ANT_PORT=3790           # 缺 PORT 的 DIR 声明会被点名警告
+# 行为:缺 dist/ 自动 npm install + npm run build → 注入与 tarball 前端同源的
+# config.js → 同款端口守卫(fe_assert_port_free / fe_confirm_bound)→ 进 dashboard。
+serve_src_frontend() {
+    local name="$1" dir="$2" port="$3"
+    [ -z "$port" ] && return
+    if [ ! -d "$dir" ]; then
+        log_warn "  $name: 前端目录不存在($dir)— 跳过。检查 .env 里 FRONTEND_$(printf '%s' "$name" | tr 'a-z' 'A-Z')_DIR。"
+        return
+    fi
+    if [ ! -d "$dir/dist" ]; then
+        log_warn "  $name: dist/ 缺失,现场构建(npm install + npm run build,首次约 1 分钟)..."
+        if ! (cd "$dir" && npm install --no-audit --no-fund --loglevel=error && npm run build) >> "$DEBUG_DIR/fe_${name}_build.log" 2>&1; then
+            log_error "  $name: 构建失败 —— 见 $DEBUG_DIR/fe_${name}_build.log"
+            exit 1
+        fi
+    fi
+    write_fe_config "$dir/dist"
+    fe_assert_port_free "$name" "$port"
+    local log_file="$DEBUG_DIR/fe_${name}.log"
+    "$ROOT_DIR/node_modules/.bin/serve" "$dir/dist" -p "$port" -s \
+        > "$log_file" 2>&1 &
+    local pid=$!
+    CHILD_PIDS+=($pid)
+    fe_confirm_bound "$name" "$port" "$pid" "$log_file"
+    FE_NAMES+=("$name"); FE_PORTS+=("$port"); FE_LOGS+=("$log_file")
+    log_info "  $name → http://localhost:$port (src)"
+}
+
+# 扫 .env 声明(经 allexport 已成环境变量;compgen -v 列所有已定义变量,bash 3.2 可用)
+for _fev in $(compgen -v | grep '^FRONTEND_[A-Z0-9_]*_DIR$' || true); do
+    _fe_name=$(printf '%s' "$_fev" | sed 's/^FRONTEND_//; s/_DIR$//')
+    _fe_port_var="FRONTEND_${_fe_name}_PORT"
+    _fe_dir="${!_fev}"
+    _fe_port="${!_fe_port_var:-}"
+    if [ -z "$_fe_port" ]; then
+        log_warn "  ${_fev} 声明了但没有配套的 ${_fe_port_var} —— 该前端不会启动。"
+        continue
+    fi
+    case "$_fe_dir" in /*) ;; *) _fe_dir="$ROOT_DIR/$_fe_dir" ;; esac
+    serve_src_frontend "$(printf '%s' "$_fe_name" | tr 'A-Z' 'a-z')" "$_fe_dir" "$_fe_port"
+done
+
+# 逃生舱:注册表覆盖不了的启动逻辑(自定义 serve 命令、额外注入等)放这个文件。
+# 它不随 bundle 下发、upgrade.sh 永不覆盖;文件里可直接用本脚本的函数
+# (write_fe_config / fe_assert_port_free / fe_confirm_bound / port_in_use)与数组
+# (CHILD_PIDS / FE_NAMES / FE_PORTS / FE_LOGS)。
+[ -f "$SCRIPT_DIR/frontends.local.sh" ] && . "$SCRIPT_DIR/frontends.local.sh"
 
 # --- 11. Optional SSL proxy ---
 
@@ -473,7 +644,7 @@ if [ "$MODE" = "dashboard" ]; then
         # Solo services
         for j in "${!SOLO_PORTS[@]}"; do
             port=${SOLO_PORTS[$j]}; name="solo:${SOLO_NAMES[$j]}"
-            if lsof -i:"$port" -sTCP:LISTEN &>/dev/null; then
+            if port_in_use "$port"; then
                 status="${GREEN}[ONLINE]${NC}"
             else
                 status="${RED}[OFFLINE]${NC}"
@@ -485,7 +656,7 @@ if [ "$MODE" = "dashboard" ]; then
         for i in "${!SVC_NAMES[@]}"; do
             name="app:${SVC_NAMES[$i]}"; port="${SVC_PORTS[$i]}"
             log_file="$DEBUG_DIR/${SVC_NAMES[$i]}_debug.log"
-            if lsof -i:"$port" -sTCP:LISTEN &>/dev/null; then
+            if port_in_use "$port"; then
                 status="${GREEN}[ONLINE]${NC}"
             else
                 status="${RED}[OFFLINE]${NC}"
@@ -498,7 +669,7 @@ if [ "$MODE" = "dashboard" ]; then
             echo "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
             for i in "${!FE_NAMES[@]}"; do
                 fe_name="fe:${FE_NAMES[$i]}"; fe_port="${FE_PORTS[$i]}"
-                if lsof -i:"$fe_port" -sTCP:LISTEN &>/dev/null; then
+                if port_in_use "$fe_port"; then
                     fe_status="${GREEN}[ONLINE]${NC}"
                 else
                     fe_status="${RED}[OFFLINE]${NC}"
@@ -509,7 +680,7 @@ if [ "$MODE" = "dashboard" ]; then
         # SSL proxy
         if [ $SSL_ENABLED -eq 1 ]; then
             echo "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
-            if lsof -i:8686 -sTCP:LISTEN &>/dev/null; then
+            if port_in_use 8686; then
                 _ssl_status="${GREEN}[ONLINE]${NC}"
             else
                 _ssl_status="${RED}[OFFLINE]${NC}"

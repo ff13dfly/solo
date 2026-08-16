@@ -3,10 +3,11 @@ const cors = require('cors');
 const { corsOptionsFromEnv } = require('../../library/cors');
 const bodyParser = require('body-parser');
 const config = require('./config');
+const { bindAddr } = require('../../library/ports');
 const { createLogger } = require('../../library/logger');
 const logger_lib = require('../../library/logger');
 const { createRelay } = require('../../library/relay');
-const { walContext } = require('../../library/entity');
+const { walContext, requestContext } = require('../../library/entity');
 const { mountHealth } = require('../../library/health');
 
 const { initializeRedis, ensureDefaultCategories } = require('./handlers/bootstrap');
@@ -52,7 +53,7 @@ let relay;
 
         Methods = createLogic(redisClient, { config, relay });
 
-        app.listen(PORT, () => {
+        app.listen(PORT, bindAddr('approval'), () => {
             logger.info(`Service running on port ${PORT}`);
             logger.info('Ready to accept connections.');
         });
@@ -69,7 +70,7 @@ app.post('/auth/verify', (req, res) =>
 app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
     if (!Methods) return jsonrpc.error(res, jsonrpc.SERVICE_NOT_READY(), null, 503);
 
-    await walContext.run({ uid: req.user || null, trace: req.meta?.trace || null, depth: req.meta?.depth ?? 0 }, async () => {
+    await walContext.run(requestContext(req), async () => {
         const { jsonrpc: jsonrpc_version, method, params, id } = req.body;
         // The Router already gated method-level access; we record the acting uid.
         const ctx = { actor: req.user || null, isAdmin: req.permit === 'admin' };

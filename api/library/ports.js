@@ -36,4 +36,34 @@ function urlFor(name, fallbackPort) {
   return p ? `http://localhost:${p}` : null;
 }
 
-module.exports = { portFor, urlFor };
+//
+// bindAddr(name) — which network interface THIS service should listen on.
+//
+// @why Until now every Solo service called `app.listen(PORT, cb)` with no host, which
+//      makes Node bind `::` / 0.0.0.0 — EVERY interface. On a laptop that's invisible;
+//      on a box with a public NIC it means the Router, the user service (accounts) and
+//      storage are all reachable from outside the moment the process starts, and the
+//      only way to stop it is a machine-level firewall. "Which service is exposed" is a
+//      deployment decision that belongs in the project, not in some host's nftables.
+//      (Reported from a runner deploy, 2026-08-14 — see docs/feedback/run-sh-no-per-app-env.md.)
+//
+// Resolution: <SERVICE>_BIND_ADDR > BIND_ADDR > undefined.
+//
+// @attention Returning **undefined** is deliberate and load-bearing: `listen(port, undefined, cb)`
+//      is exactly equivalent to `listen(port, cb)` (verified against Node before relying on it),
+//      so a project that sets neither variable keeps today's all-interfaces behavior byte for
+//      byte. This is an opt-IN lockdown, not a silent change of default — flipping the default
+//      to 127.0.0.1 would break every already-deployed stack whose reverse proxy, container
+//      network or LB reaches the service from another host.
+//
+// The per-service form is what makes "expose one app, keep the rest local" expressible:
+//      BIND_ADDR=127.0.0.1     CODER_BIND_ADDR=0.0.0.0
+// …locks everything down and opens exactly one. deploy/run.sh's per-app `env` in
+// services.json does the same job for private apps declared there.
+function bindAddr(name) {
+  const perService = name && process.env[`${String(name).toUpperCase()}_BIND_ADDR`];
+  const addr = perService || process.env.BIND_ADDR;
+  return addr && String(addr).trim() ? String(addr).trim() : undefined;
+}
+
+module.exports = { portFor, urlFor, bindAddr };

@@ -112,6 +112,7 @@ async function main() {
     checks.tasksCheck.check(resolvedPath, results);
     checks.throwCheck.check(resolvedPath, results);
     checks.inlineErrors.check(resolvedPath, results);
+    checks.bindAddress.check(resolvedPath, results);
     checks.paginationSafety.check(resolvedPath, results);
     checks.redisScanNormalize.check(resolvedPath, results);
     checks.redisTransaction.check(resolvedPath, results);

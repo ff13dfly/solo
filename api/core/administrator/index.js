@@ -4,6 +4,7 @@ const { corsOptionsFromEnv } = require('../../library/cors');
 const bodyParser = require('body-parser');
 const { createClient } = require('redis');
 const config = require('./config');
+const { bindAddr } = require('../../library/ports');
 const { mountHealth } = require('../../library/health');
 const createLogic = require('./logic');
 const introspectionMethods = require('./handlers/introspection');
@@ -51,7 +52,7 @@ mountHealth(app, { serviceName: config.serviceName, version: config.version, get
         await Methods.identity.init(redisClient);
 
         // Start Server — capture handle so admin.self.lock can close it.
-        server = app.listen(PORT, () => {
+        server = app.listen(PORT, bindAddr('administrator'), () => {
              logger.info(`Service running on port ${PORT}`);
         });
     } catch (e) {

@@ -93,6 +93,25 @@ Router capability catalog in Redis — you don't guess it. These docs supply the
   acceptable in exactly one place: a boot-time one-shot index rebuild, marked `// SAFE:` with the
   reason on that line. (autocheck `pagination-safety` — also flags `sMembers` / `hGetAll` /
   `zRange(k, 0, -1)`; don't silence those with a bare `// SAFE:` unless the set is genuinely bounded.)
+- **`app.listen` takes a host** — `app.listen(PORT, bindAddr('<service>'), cb)` with
+  `bindAddr` from `api/library/ports.js`. Omitting the host makes Node bind **every
+  interface**, so the day the box gets a public NIC your service is on the internet and
+  nothing in the repo can say otherwise — the boundary ends up in some host's firewall
+  rules, which aren't in git, vanish on `nft flush ruleset`, and nobody updates when a new
+  service is added. `bindAddr` returns `undefined` when neither `BIND_ADDR` nor
+  `<SERVICE>_BIND_ADDR` is set, and `listen(port, undefined, cb)` is exactly
+  `listen(port, cb)` — so wiring it changes nothing until a deployment opts in with
+  `BIND_ADDR=127.0.0.1` (+ `<SERVICE>_BIND_ADDR=0.0.0.0` to expose one service), or with
+  per-app `env` in `deploy/services.json`. (autocheck `bind-address`, WARN)
+- **`walContext.run` takes `requestContext(req)`, never a hand-written store literal** — both
+  from `api/library/entity.js`. `requestContext` carries the WAL uid/trace/depth *plus* the
+  Router-issued row-isolation predicate (`constraints.$owner`, present on passport external
+  sessions). The Entity Factory enforces it automatically — create stamps the owner field,
+  get/update/delete reject cross-owner access as NOT_FOUND, list filters. A hand-written
+  literal drops `$owner` on the floor: external principals read the whole table, silently.
+  Internal/admin sessions carry no `$owner`, so the two spellings behave identically for
+  them — wiring it is pure upside. Only custom data paths that bypass the Entity Factory
+  still need manual filtering (`getConstraints(req).$owner`). (autocheck `owner-context`, WARN)
 - **No scattered `Date.now()`** — use `api/library/clock.js` (injectable, freezable in tests).
 - **No `console.log`** — use the built-in logger from `api/library/logger.js`. (autocheck `logging`)
 - **Trust the X-Router-Token, parsed correctly.** The Router signs a *compressed* identity payload;

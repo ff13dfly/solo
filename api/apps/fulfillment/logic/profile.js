@@ -108,12 +108,48 @@ module.exports = (redis, config, relay) => {
         },
 
         // ── 投稿面 (submission lane) ───────────────────────────────────────────────
-        // submit: untrusted/external authoring → lint-gated PENDING_REVIEW. Only lint-clean
-        // profiles enter the review queue (the human reviewer never sees structurally-broken
-        // ones); a submitted profile is NOT usable until approved. `allowedActions` (optional)
-        // enforces the action policy (rule 6) — the submitter's permitted method set.
+        // submit: untrusted/external authoring → lint-gated PENDING_REVIEW. It CREATES a new
+        // profile in the review lane (it is not "submit an existing profile for review" —
+        // that is `enroll` below). Only lint-clean profiles enter the review queue (the human
+        // reviewer never sees structurally-broken ones); a submitted profile is NOT usable
+        // until approved. `allowedActions` (optional) enforces the action policy (rule 6).
+        //
+        // submit { id, enroll: true } (admin-gated at the handler): move an EXISTING trusted
+        // direct-create profile into the review lane (retroactive governance). Without this
+        // path governance is a create-time-only opt-in — "run first, add review later", the
+        // most common evolution, would be impossible (docs/feedback/
+        // fulfillment-profile-submit-contract-and-enroll-gap.md §三.3). Enrolling re-lints the
+        // stored definition and flips it to PENDING_REVIEW — its instances freeze immediately
+        // via the activation gate (instance.js) until (re-)approved.
         submit: async (params = {}, req) => {
-            const { allowedActions = null, ...profile } = params || {};
+            const { allowedActions = null, enroll = false, ...profile } = params || {};
+
+            if (enroll) {
+                if (!profile.id) throw jsonrpc.MISSING_PARAM('id');
+                const existing = await factory.get({ id: profile.id });
+                if (existing.reviewState) {
+                    throw jsonrpc.FORBIDDEN(`profile "${profile.id}" is already in the review lane (reviewState: ${existing.reviewState})`);
+                }
+                const lintReport = lintProfile(existing, localMethodIndex(), allowedActions ? { allowedActions } : {});
+                if (lintReport.errors.length) {
+                    // Refused at the gate (reviewer never sees broken ones); the profile STAYS
+                    // trusted direct-create and remains usable — nothing changed.
+                    return { ok: false, id: existing.id, reviewState: null, lintReport };
+                }
+                // enrolledBy, NOT submittedBy: enroll is a governance request, not content
+                // authoring (the definition already existed). Recording it as submittedBy would
+                // trip approve's "approver ≠ submitter" gate and deadlock single-admin systems.
+                const updated = await factory.update({
+                    id: existing.id,
+                    reviewState: REVIEW.PENDING,
+                    approvals: [],
+                    approvedDigest: null,
+                    enrolledBy: req?.user || null,
+                    enrolledAt: Date.now(),
+                });
+                return { ok: true, id: updated.id, reviewState: REVIEW.PENDING, lintReport };
+            }
+
             if (!profile.name && !profile.id) throw jsonrpc.MISSING_PARAM('name');
             if (!profile.id) {
                 profile.id = String(profile.name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 32) || `p_${Date.now()}`;
@@ -122,13 +158,31 @@ module.exports = (redis, config, relay) => {
             if (lintReport.errors.length) {
                 return { ok: false, id: profile.id, reviewState: null, lintReport };   // rejected at the gate; nothing stored
             }
-            const created = await factory.create({
-                ...profile,
-                reviewState: REVIEW.PENDING,
-                submittedBy: req?.user || null,
-                approvals: [],
-                submittedAt: Date.now(),
-            });
+            let created;
+            try {
+                created = await factory.create({
+                    ...profile,
+                    reviewState: REVIEW.PENDING,
+                    submittedBy: req?.user || null,
+                    approvals: [],
+                    submittedAt: Date.now(),
+                });
+            } catch (e) {
+                // The Entity Factory's generic "already exists" points callers the wrong way
+                // here (they go debug a duplicated create instead of realizing submit IS a
+                // create) — translate it into the submit-lane contract at the point of impact.
+                if (/already exists/.test(e?.message || '')) {
+                    const existing = await factory.get({ id: profile.id }).catch(() => null);
+                    const lane = existing && existing.reviewState
+                        ? `reviewState: ${existing.reviewState}`
+                        : 'trusted direct-create — usable without review';
+                    throw jsonrpc.INVALID_PARAM(
+                        `profile.submit CREATES a new profile in the review lane; id "${profile.id}" already exists (${lane}). ` +
+                        `Pick a different id — or, to move the existing profile into review, use submit { id: "${profile.id}", enroll: true } (admin).`
+                    );
+                }
+                throw e;
+            }
             return { ok: true, id: created.id, reviewState: REVIEW.PENDING, lintReport };
         },
 

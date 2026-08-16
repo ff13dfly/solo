@@ -132,9 +132,70 @@ describe('ports — setup/teardown isolates global state', () => {
 });
 
 describe('ports — module shape', () => {
-    test('exports exactly portFor and urlFor as functions', () => {
+    test('exports exactly bindAddr, portFor and urlFor as functions', () => {
         expect(typeof P.portFor).toBe('function');
         expect(typeof P.urlFor).toBe('function');
-        expect(Object.keys(P).sort()).toEqual(['portFor', 'urlFor']);
+        expect(typeof P.bindAddr).toBe('function');
+        expect(Object.keys(P).sort()).toEqual(['bindAddr', 'portFor', 'urlFor']);
+    });
+});
+
+/**
+ * bindAddr — which interface a service listens on. The single most important case is
+ * the FIRST one: undefined must come back when nothing is configured, because
+ * `listen(port, undefined, cb)` is exactly `listen(port, cb)` (all interfaces), which is
+ * what every already-deployed stack relies on. Any change that makes this return a
+ * string by default silently breaks every reverse proxy reaching a service from
+ * another host.
+ */
+describe('bindAddr', () => {
+    let saved;
+
+    beforeEach(() => {
+        saved = { BIND_ADDR: process.env.BIND_ADDR, CODER_BIND_ADDR: process.env.CODER_BIND_ADDR };
+        delete process.env.BIND_ADDR;
+        delete process.env.CODER_BIND_ADDR;
+    });
+
+    afterEach(() => {
+        for (const [k, v] of Object.entries(saved)) {
+            if (v === undefined) delete process.env[k]; else process.env[k] = v;
+        }
+    });
+
+    test('nothing set → undefined (preserves the historical all-interfaces bind)', () => {
+        expect(P.bindAddr('coder')).toBeUndefined();
+        expect(P.bindAddr()).toBeUndefined();
+    });
+
+    test('global BIND_ADDR applies to every service', () => {
+        process.env.BIND_ADDR = '127.0.0.1';
+        expect(P.bindAddr('coder')).toBe('127.0.0.1');
+        expect(P.bindAddr('git')).toBe('127.0.0.1');
+    });
+
+    test('per-service overrides the global — the "expose exactly one app" case', () => {
+        process.env.BIND_ADDR = '127.0.0.1';
+        process.env.CODER_BIND_ADDR = '0.0.0.0';
+        expect(P.bindAddr('coder')).toBe('0.0.0.0');
+        expect(P.bindAddr('git')).toBe('127.0.0.1');   // still locked down
+    });
+
+    test('service name is uppercased to build the env key', () => {
+        process.env.CODER_BIND_ADDR = '0.0.0.0';
+        expect(P.bindAddr('coder')).toBe('0.0.0.0');
+        expect(P.bindAddr('CODER')).toBe('0.0.0.0');
+    });
+
+    test('blank / whitespace-only values are treated as unset, not as an empty host', () => {
+        process.env.BIND_ADDR = '   ';
+        expect(P.bindAddr('coder')).toBeUndefined();
+        process.env.BIND_ADDR = '';
+        expect(P.bindAddr('coder')).toBeUndefined();
+    });
+
+    test('surrounding whitespace is trimmed (a stray space in .env must not break listen)', () => {
+        process.env.BIND_ADDR = ' 0.0.0.0 ';
+        expect(P.bindAddr('coder')).toBe('0.0.0.0');
     });
 });

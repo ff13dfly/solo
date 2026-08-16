@@ -52,6 +52,10 @@ module.exports = {
     tasksCheck: require('./tasks-check'),
     // 裸 throw new Error() 检查 (logic 层应使用标准 jsonrpc 错误码)
     throwCheck: require('./throw-check'),
+    // 监听网卡检查 (app.listen 是否可经 BIND_ADDR 控制，而非永远绑所有网卡)
+    bindAddress: require('./bind-address'),
+    // 行隔离上下文检查 (walContext.run 是否经 requestContext 注入 $owner，使 Entity Factory 能自动执行行隔离)
+    ownerContext: require('./owner-context'),
     // 架构稳定性与防击穿检测
     paginationSafety: require('./pagination-safety'),
     inlineErrors: require('./inline-errors'),

@@ -3,6 +3,7 @@ const cors = require('cors');
 const { corsOptionsFromEnv } = require('../../library/cors');
 const bodyParser = require('body-parser');
 const config = require('./config');
+const { bindAddr } = require('../../library/ports');
 const { createLogger } = require('../../library/logger');
 const { mountHealth } = require('../../library/health');
 
@@ -67,7 +68,7 @@ app.use(authHandlers.middleware);
         Methods = createLogic(redisClient, { serviceName: config.serviceName, config, logger, relay });
 
         // Start Server
-        app.listen(PORT, () => {
+        app.listen(PORT, bindAddr('gateway'), () => {
             logger.info(`Service running on port ${PORT}`);
             logger.info(`Targeting Router at: ${config.routerUrl}`);
         });
