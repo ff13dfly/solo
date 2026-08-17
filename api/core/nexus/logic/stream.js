@@ -2,6 +2,17 @@ const { createLogger } = require('../../../library/logger');
 const { walContext } = require('../../../library/entity');
 const logger = createLogger('nexus-stream');
 
+// DLQ hard cap — mirrors notification/logic/worker.js DLQ_MAXLEN and orchestrator
+// worker.js RUNQ_DLQ_MAXLEN (their own words: "no bound = unbounded poison
+// accumulation"); this stream-flavored DLQ was the one without a lid
+// (docs/feedback/event-bus-xadd-unbounded-dead-config.md §二.4). Approximate
+// trim (~), oldest parked entries drop first; the source event stays in its
+// origin stream, the DLQ entry is just the retry handle.
+const DLQ_MAXLEN = (() => {
+    const n = parseInt(process.env.NEXUS_DLQ_MAXLEN, 10);
+    return Number.isFinite(n) && n > 0 ? n : 1000;
+})();
+
 // toFix §6.2② — stable event_id for emitted decision events. Must satisfy the
 // Router's EVENT_ID_RE (/^[A-Za-z0-9_-]{8,64}$/): squash other chars, clamp, pad.
 function stableEventId(s) {
@@ -232,7 +243,7 @@ module.exports = (redis, config, { sentinelLogic, relay, assembler, identity, co
             event: JSON.stringify(message),   // raw flat field map → faithful re-XADD on retry
             attempts: String(attempts),
             failedAt: String(Date.now()),
-        });
+        }, { TRIM: { strategy: 'MAXLEN', strategyModifier: '~', threshold: DLQ_MAXLEN } });
     }
 
     // Dynamic stream discovery: the union of the default lifecycle streams and every

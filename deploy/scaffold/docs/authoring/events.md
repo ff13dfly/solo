@@ -205,6 +205,22 @@ Router 剥掉 `_tasks`，核对**任务白名单**（`allowFrom`/`allowMethods`�
 
 ---
 
+## 6.5 流的保留语义：投递通道，不是审计账本
+
+- **契约**：`EVENT:*` 流是**投递通道 + 有限回看窗口**。需要长期审计/对账的下游自己落库
+  （实体或自己的存储），**别把流的绝对长度当账本**。
+- **现状（校准到 v1.1.17）**：Router 写入端**尚未修剪**——`config.eventMaxLen` 存在但没接线
+  （见 solo 仓 `docs/feedback/event-bus-xadd-unbounded-dead-config.md`），流历史目前无限增长。
+  **这是待修的缺口、不是可依赖的承诺**：修剪接线是计划内的行为变更，随时可能在某个版本落地。
+  量级参考：仅 2 个 symbol 的 1m+5m K 线事件 ≈ 0.86 MB/天，一年 ~0.3 GB，线性增长不封顶。
+  `NEXUS:DLQ`（投递失败停车场）v1.1.17 起已封顶（`NEXUS_DLQ_MAXLEN`，默认 1000，`MAXLEN ~` 近似修剪）。
+- **对账写法**：拿 `XLEN` 绝对总数与业务账本对账的用法，在修剪上线后会**静默失真**——
+  对账一律**按窗口**做（时间段内条目、或按 `event_id` 集合比对）。排查时注意
+  「被修剪掉」≠「丢事件」：前者是保留策略，后者是故障（如 token 过期），两者症状都是"流里找不到"，
+  别混在一起追。
+
+---
+
 ## 7. 写完自查（最常踩）
 
 1. **发了没登记的 stream/type** → 被 registry 拦截、静默不写。先把它加进 `SYSTEM:CONFIG:EVENT_REGISTRY`。
@@ -212,3 +228,4 @@ Router 剥掉 `_tasks`，核对**任务白名单**（`allowFrom`/`allowMethods`�
 3. **想"事件触发"却写进 `handlers/events.js` 的 subscribes** → 那是文档性的；真订阅写在 workflow 的 `event_subscriptions`（§4）。
 4. **直接 POST 别的服务** → 改 `_tasks` / `relay.call` / `_event`（§5）。
 5. **后台循环发事件却没幂等** → 给 `event_id`，下游给 `idempotency_key`（§6）。
+6. **拿流当审计账本（`XLEN` 绝对数对账）** → 自己落库，对账按窗口做（§6.5）。

@@ -48,6 +48,11 @@ nexus 的共享 relay 只在 Sentinel 事件触发时才被调（`stream.js:49`
 emit 走 `relay.call('event.emit')`，任何 2h 轮转窗口至少被踩 4 次。已线上验证
 （`last_fired_at` 前进、事件落流、`actor=cron:<schedule_id>`）。
 
+**2026-08-18 追记（colony N100 实测）**：绕法闭环验证完成——预判的轮转窗口
+（08-17 11:42–13:42 UTC）如期被心跳踩中，`RELAY:TOKEN:nexus.lastRefreshAt` 从签发时刻
+前进到 1786968706587（08-17 12:11:46 UTC），期间日志零 NO_TOKEN。schedule 心跳这个
+用户侧绕法确认有效，可作为 ≤v1.1.16 存量部署的过渡方案（建议 1 落地后即删）。
+
 ## 二、为什么这值得框架层面解决
 
 - **每一个部署了 Sentinel 的 Solo 栈都会踩**：nexus 的调用频率由业务事件决定，
