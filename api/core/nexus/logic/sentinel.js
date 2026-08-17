@@ -42,6 +42,24 @@ module.exports = (redis, config, { relay, identity } = {}) => {
         }
     }
 
+    // Pre-check the SHARED nexus relay token at create/enable time. Without it the
+    // Sentinel is created fine (token can be provisioned later) but the whole
+    // delivery pipeline (event.emit + notification.send) dies with NO_TOKEN only
+    // when the FIRST event arrives — possibly days later, visible only in service
+    // logs (docs/feedback/nexus-relay-lazy-rotation-sparse-callers.md §三). A
+    // warning in the response makes it visible at creation. Best-effort: never
+    // blocks the operation.
+    async function relayTokenWarning() {
+        if (!relay || typeof relay.status !== 'function') return undefined;
+        try {
+            const s = await relay.status();
+            if (!s.hasToken || s.expired) {
+                return 'nexus relay has no usable service token — event delivery and context.emit will fail with NO_TOKEN until it is provisioned (user.bot.issue.token → nexus.token.set, see events.md §0.5)';
+            }
+        } catch (_) { /* pre-check must never block create/enable */ }
+        return undefined;
+    }
+
     // Create the consumer group on each subscribed stream NOW (from '$', MKSTREAM) so
     // events emitted after this returns are captured — the stream consumer discovers the
     // stream on its next tick and reads them via '>'. Without this, events in the
@@ -101,7 +119,10 @@ module.exports = (redis, config, { relay, identity } = {}) => {
         await multi.exec();
         await ensureGroups(eventSubscriptions);
 
-        return { id, name, authorityRole, status: profile.status };
+        const out = { id, name, authorityRole, status: profile.status };
+        const warning = await relayTokenWarning();
+        if (warning) out.warning = warning;
+        return out;
     }
 
     /**
@@ -279,7 +300,10 @@ module.exports = (redis, config, { relay, identity } = {}) => {
         await multi.exec();
         await ensureGroups(subs);
 
-        return { id, status: profile.status };
+        const out = { id, status: profile.status };
+        const warning = await relayTokenWarning();
+        if (warning) out.warning = warning;
+        return out;
     }
 
     // §2.4 — permanently delete a Sentinel from the registry: profile, registry set,

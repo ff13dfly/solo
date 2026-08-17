@@ -38,7 +38,17 @@
 - `uid` 必须**恰好**是 `system.<serviceName>`（`library/relay.js` 的 `expectedSub` 这么拼），不匹配抛 `SUB_MISMATCH`。
 - 第 1 步的 `permit` 不能给 `allow_all:true`（`user.bot.create` 会拒绝——bot 权限必须显式枚举 `services.method`），按你的服务实际要调的 Router 方法（通常至少要有 `event.emit`）来写。
 - 🔴 **`services` 里必须含 `user: ['user.token.refresh']`，不论你的服务实际要调什么方法**——这一条不是业务权限，是 `library/relay.js` 自身续期机制（`rotateBeforeMs` 默认到期前 2 小时）要用的，`event.emit` 本身虽然不查 permit，但 relay 每隔一段时间会自己去调 `user.token.refresh`，那次调用跟普通方法一样过权限检查。**漏了这条，token 到期前 2 小时开始悄悄轮转失败，24 小时后彻底失效，之后所有 `event.emit`/`relay.call` 都静默丢事件**——RPC 返回、日志、账本全部正常，只有事件消失，且要等满一个 token 生命周期才会暴露（colony 2026-08-10 实测踩过，丢了 3 条真实事件才发现，详见 `docs/feedback/done/relay-provisioning-and-event-registry.md` §五）。
-- 全新 scaffold 出来的栈，Solo 自带的 nexus / orchestrator 这两个服务同样没有 token（它们的 `event.emit`/调度事件功能因此不可用），需要同样手工走一遍这四步——这条尚无自动化，见 `docs/feedback/done/relay-provisioning-and-event-registry.md`。
+- 🔴 **permit 配齐只保证轮转不被「拒」，不保证轮转被「触发」**——relay 的轮转是惰性的，只在
+  `relay.call()`/`getToken()` 被走到时才检查。调用稀疏的服务（事件驱动、可静默数小时的）完全可能在
+  到期前 2h 的轮转窗口内一次调用都没有，token 静默过期，之后所有调用 `TOKEN_EXPIRED`——四步做全也一样。
+  **v1.1.17 起 relay 已内建轮转心跳**（`createRelay` 的 `rotationHeartbeatMs`，默认 10 分钟走一次
+  `getValidToken()`，无 token 时静默、不发业务 RPC、不需要额外 permit），这条坑自动解除。
+  **若你的 bundle 是 v1.1.16 及更早**（没有心跳），必须自己安排保底调用，两个实测可用的做法：
+  ① 服务内 10 分钟定时器调 `relay.getToken()`（内部走 refreshIfNeeded，够触发轮转）；
+  ② 用 `nexus.schedule` 建 30 分钟递归的 `emit_event` 心跳（stream 落 `EVENT:SENTINEL:*`，内置白名单免登记）。
+  （colony 2026-08-14/16 两次实测踩到：持仓静默 9.5h 盖住轮转窗口 → token 静默过期 → 之后
+  `event.emit`/`agent.decide` 全部 -32001，详见 solo 仓 `docs/feedback/nexus-relay-lazy-rotation-sparse-callers.md`。）
+- 全新 scaffold 出来的栈，Solo 自带的 nexus / orchestrator 这两个服务同样没有 token（它们的 `event.emit`/调度事件功能因此不可用），需要同样手工走一遍这四步——这条尚无自动化，见 `docs/feedback/done/relay-provisioning-and-event-registry.md`。**v1.1.17 起 `nexus.sentinel.create`/`enable` 会在 nexus relay 无可用 token 时在返回体里带 `warning` 预警**（不阻止创建，token 可后配）；此前版本没有预警，第一个事件到达时才在 nexus 日志里看到 `NO_TOKEN`。
 
 ## 1. `_event` 信封：你给什么 vs Router 盖什么
 

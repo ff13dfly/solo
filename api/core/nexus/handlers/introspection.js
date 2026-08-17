@@ -47,13 +47,15 @@ const methods = [
             { name: 'context',            type: 'object', optional: true }
         ],
         returns: ['id', 'name', 'authorityRole', 'status'],
-        // Handler returns exactly { id, name, authorityRole, status } — a SLICE of the
-        // profile, not the whole record (unlike update/get).
+        // Handler returns { id, name, authorityRole, status } — a SLICE of the
+        // profile, not the whole record (unlike update/get). `warning` appears only
+        // when the shared nexus relay has no usable token (delivery would NO_TOKEN).
         returns_schema: [
             { name: 'id',            type: 'string', required: true },
             { name: 'name',          type: 'string', required: true },
             { name: 'authorityRole', type: 'string', required: true },
             { name: 'status',        type: 'string', required: true },
+            { name: 'warning',       type: 'string' },
         ],
         description: 'Create a Sentinel (descriptive authorityRole links to a bot account; bot token is provisioned separately via user.bot.*). Optional declarative context enables context assembly (context.md).',
         ai: false
@@ -127,8 +129,9 @@ const methods = [
         params: [{ name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }],
         returns: ['id', 'status'],
         returns_schema: [
-            { name: 'id',     type: 'string', required: true },
-            { name: 'status', type: 'string', required: true },  // ACTIVE (or already-ACTIVE idempotent path)
+            { name: 'id',      type: 'string', required: true },
+            { name: 'status',  type: 'string', required: true },  // ACTIVE (or already-ACTIVE idempotent path)
+            { name: 'warning', type: 'string' },                  // only when the shared relay has no usable token
         ],
         description: 'Re-enable a DISABLED Sentinel (re-adds it to subscription sets + re-establishes consumer groups)',
         ai: false

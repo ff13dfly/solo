@@ -112,6 +112,41 @@ describe('nexus.sentinel', () => {
     });
 });
 
+// Shared-relay token pre-check (docs/feedback/nexus-relay-lazy-rotation-sparse-callers.md
+// §三) — without a usable nexus relay token a Sentinel is created fine but the whole
+// delivery pipeline dies with NO_TOKEN on the first event; create/enable now surface
+// that as a `warning` so it's visible at creation instead of days later in logs.
+describe('nexus.sentinel — shared relay token pre-check warning', () => {
+    test('no relay configured (hermetic default) → no warning field', async () => {
+        const r = await logic.create({ name: 'w0', authorityRole: 'r' });
+        expect(r.warning).toBeUndefined();
+    });
+
+    test('relay without token → create AND enable carry a NO_TOKEN warning', async () => {
+        const l = createSentinel(mockRedis(), config, { relay: { async status() { return { hasToken: false }; } } });
+        const c = await l.create({ name: 'w1', authorityRole: 'r' });
+        expect(c.warning).toContain('NO_TOKEN');
+        await l.disable({ id: c.id });
+        const e = await l.enable({ id: c.id });
+        expect(e.status).toBe('ACTIVE');
+        expect(e.warning).toContain('NO_TOKEN');
+    });
+
+    test('relay with an expired token → warning; healthy token → none', async () => {
+        const expired = createSentinel(mockRedis(), config, { relay: { async status() { return { hasToken: true, expired: true }; } } });
+        expect((await expired.create({ name: 'w2', authorityRole: 'r' })).warning).toContain('NO_TOKEN');
+        const healthy = createSentinel(mockRedis(), config, { relay: { async status() { return { hasToken: true, expired: false }; } } });
+        expect((await healthy.create({ name: 'w3', authorityRole: 'r' })).warning).toBeUndefined();
+    });
+
+    test('pre-check is best-effort — a throwing relay.status never blocks create', async () => {
+        const l = createSentinel(mockRedis(), config, { relay: { async status() { throw new Error('redis down'); } } });
+        const r = await l.create({ name: 'w4', authorityRole: 'r' });
+        expect(r.status).toBe('ACTIVE');
+        expect(r.warning).toBeUndefined();
+    });
+});
+
 // §1.2 visibility — get/list surface the identity mode (shared vs own bot) and
 // whether that bot's token is provisioned, so the portal can show it.
 describe('nexus.sentinel — identity visibility (§1.2)', () => {

@@ -262,44 +262,53 @@ data_fetchers 的 RPC 调用由 **Nexus 服务账号**（`library/relay.js` 的 
 
 ## 6. Context Payload（发给 Agent 的结构）
 
-组装完成后，Nexus 向 Agent 发送标准化 Context Payload：
+> 本节示例与实现逐字段对齐（`api/core/nexus/logic/context.js` assemble ④，2026-08-17 校对，
+> 由 colony 派生项目线上抓包核实——此前版本把 `event.payload` 画成业务数据，是错的）。
 
-```json
+组装完成后，Nexus 经 `notification.send` 把 Context Payload 写进 Agent 的 inbox。
+**inbox 消息本身**是 `{ id, targetId, type, payload, sourceId: "nexus", ref }`——`type` 是 **stream 名**、
+`ref` 是流条目 id（消费侧幂等 key），Context Payload 是其中的 `payload` 字段：
+
+```jsonc
 {
-  "message_id": "msg_abc123",
-
   "event": {
-    "type": "EVENT:WORKFLOW:STATUS:PENDING_REVIEW",
-    "payload": {
-      "workflow_id": "wf_xyz",
-      "status": "PENDING_REVIEW",
-      "timestamp": 1746000000
+    "type": "EVENT:WORKFLOW:STATUS",       // ⚠ stream 名（与 inbox 消息外层 type 相同），不是事件 type
+    "payload": {                            // ← Router 事件信封（§1 的信封字段在这一层）
+      "type": "workflow.status_changed",   //    事件 type 在这里
+      "source": "system.orchestrator",
+      "actor": "uid-abc123",
+      "event_id": "evt-a1b2c3d4",
+      "trace_id": "…", "depth": "1", "emitted_at": "1746000000000",
+      "payload": { "workflow_id": "wf_xyz", "status": "PENDING_REVIEW" }   // ← 业务数据（第四段路径）
     }
   },
 
   "context": {
-    "system_prompt": "你是工作流安全审核员，专责审核 PENDING_REVIEW 状态的工作流。\n\n待审工作流：\n{\"id\":\"wf_xyz\",...}\n\n提交人：张三（zhang@example.com）",
+    "system_prompt": "你是工作流安全审核员，专责审核 PENDING_REVIEW 状态的工作流。…",
     "data": {
-      "workflow": { "id": "wf_xyz", "steps": [...], "created_by": "u_001" },
-      "submitter": { "id": "u_001", "name": "张三", "email": "zhang@example.com" }
+      "workflow": { "id": "wf_xyz", "created_by": "u_001" },
+      "submitter": { "id": "u_001", "name": "张三" }
     },
-    "agent": {
-      "id": "agent_auditor_01",
-      "name": "工作流安全审核 AI",
-      "role_id": "bot:workflow_auditor"
-    }
+    "output": { "decision": "approve", "confidence": 0.92, "reason": "…", "escalate": false },
+    "sentinel": { "id": "Ac50zBOVpfH8", "name": "工作流安全审核 AI", "authorityRole": "system.wf-auditor" }
   }
 }
 ```
 
 | 字段 | 说明 |
 |------|------|
-| `message_id` | 全局唯一，接收端用于幂等去重（与 Nexus §5 保持一致） |
-| `event.type` | 触发事件的 Stream key |
-| `event.payload` | 事件原始数据 |
-| `context.system_prompt` | 渲染后的系统提示词（`context` 未声明时为空字符串） |
-| `context.data` | 所有 fetcher 结果，按 key 索引（`context` 未声明时为 `{}`） |
-| `context.agent` | 本 Agent 的身份信息 |
+| `event.type` | 触发事件的 Stream key（**不带**新信息——与 inbox 消息外层 `type` 相同） |
+| `event.payload` | **Router 事件信封**（`type`/`source`/`actor`/`event_id`/`trace_id`/`depth`/`emitted_at`），业务数据在 `event.payload.payload` |
+| `context.system_prompt` | 渲染后的系统提示词（未声明模板时为空字符串） |
+| `context.data` | 所有 fetcher 结果，按 key 索引（无 fetcher 时为 `{}`） |
+| `context.output` | autorun 的结构化决策（无 autorun 时不存在；autorun 调用失败时为 `null` 并附 `context.autorun_error`） |
+| `context.sentinel` | 本 Sentinel 的身份（`{ id, name, authorityRole }`） |
+
+- **无 `context` 的 Sentinel 拿到的 `payload` 不是这个结构**——是事件信封直传（少了 `event`/`context` 两层包装）。
+  消费侧要同时兼容两种形状，稳妥做法是**按特征下钻**：找带 `source`/`event_id` 的那层当信封。
+- guard / `system_prompt_template` / `emit_when` 模板里的 `{{event.*}}` 一律指**信封层**
+  （业务数据即 `{{event.payload.*}}`），与本节坐标一致。
+- 幂等去重用 inbox 消息的 `ref`（或信封的 `event_id`），Payload 内部没有独立的 message id。
 
 `context.data` 由 Nexus 预取完毕，Agent 直接使用，无需再次调用 RPC。
 

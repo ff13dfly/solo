@@ -26,6 +26,7 @@ const https = require('https');
 const { walContext } = require('./entity');
 
 const DEFAULT_ROTATE_BEFORE_MS = 2 * 60 * 60 * 1000;  // 2 hours
+const DEFAULT_ROTATION_HEARTBEAT_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_LOCK_TTL_SEC = 30;
 const REFRESH_WAIT_POLL_MS = 200;
 const REFRESH_WAIT_MAX_MS = 10000;
@@ -64,6 +65,8 @@ const ERR = {
  * @param {string}  options.serviceName        e.g. 'notification' — used as bot uid namespace
  * @param {string}  options.routerUrl          full Router RPC endpoint
  * @param {number} [options.rotateBeforeMs]    rotate when TTL < this (default 2h)
+ * @param {number} [options.rotationHeartbeatMs] periodic getValidToken() walk so sparse
+ *                                             callers still rotate (default 10min; 0 disables)
  * @param {number} [options.lockTtlSec]        refresh lock TTL (default 30s)
  * @param {function} [options.walLogger]       optional logger.insert function for audit (signature: (key, data) => void)
  * @param {function} [options.now]             time source for testing (default Date.now)
@@ -74,6 +77,7 @@ function createRelay(options) {
         serviceName,
         routerUrl,
         rotateBeforeMs = DEFAULT_ROTATE_BEFORE_MS,
+        rotationHeartbeatMs = DEFAULT_ROTATION_HEARTBEAT_MS,
         lockTtlSec = DEFAULT_LOCK_TTL_SEC,
         requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
         walLogger = null,
@@ -395,7 +399,46 @@ function createRelay(options) {
         audit('clear', {});
     }
 
-    return { call, callAs, getToken, setToken, status, clear };
+    // ── ROTATION HEARTBEAT ───────────────────────────────────────────────────
+    // Rotation is otherwise LAZY — it only happens when a call()/getToken() walks
+    // getValidToken(). A sparse caller (an event-driven service can sit silent for
+    // hours) may make zero calls during the whole rotation window (rotateBeforeMs
+    // before expiry) and let its token expire silently; every later call then dies
+    // with TOKEN_EXPIRED even though the permit was fully provisioned
+    // (docs/feedback/nexus-relay-lazy-rotation-sparse-callers.md — bit ant, then
+    // nexus, on colony). The heartbeat walks getValidToken() on a timer so the
+    // window is always visited regardless of traffic. unref() keeps the timer from
+    // holding the process alive, so stopHeartbeat() is hygiene, not a requirement.
+    // NO_TOKEN stays quiet — "not provisioned yet" is a normal state (events.md
+    // §0.5); refresh failures already console.error inside refreshIfNeeded.
+    let heartbeatTimer = null;
+    if (rotationHeartbeatMs > 0) {
+        let ticking = false;
+        heartbeatTimer = setInterval(async () => {
+            if (ticking) return;   // a slow Router must not stack ticks
+            ticking = true;
+            try {
+                await getValidToken();
+            } catch (e) {
+                if (e.code !== 'NO_TOKEN') {
+                    console.error(`[relay:${serviceName}] rotation heartbeat: ${e.message}`);
+                }
+            } finally {
+                ticking = false;
+            }
+        }, rotationHeartbeatMs);
+        if (heartbeatTimer.unref) heartbeatTimer.unref();
+    }
+
+    /** Stop the rotation heartbeat (graceful shutdown / tests). Idempotent. */
+    function stopHeartbeat() {
+        if (heartbeatTimer) {
+            clearInterval(heartbeatTimer);
+            heartbeatTimer = null;
+        }
+    }
+
+    return { call, callAs, getToken, setToken, status, clear, stopHeartbeat };
 }
 
 module.exports = {

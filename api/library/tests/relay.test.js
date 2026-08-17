@@ -149,7 +149,7 @@ describe('createRelay — required options', () => {
     });
     test('exposes the documented public surface', () => {
         const { relay } = makeRelay();
-        expect(Object.keys(relay).sort()).toEqual(['call', 'callAs', 'clear', 'getToken', 'setToken', 'status'].sort());
+        expect(Object.keys(relay).sort()).toEqual(['call', 'callAs', 'clear', 'getToken', 'setToken', 'status', 'stopHeartbeat'].sort());
     });
 });
 
@@ -535,6 +535,79 @@ describe('clear — emergency reset', () => {
     test('is a no-op (no throw) when nothing is stored', async () => {
         const { relay } = makeRelay();
         await expect(relay.clear()).resolves.toBeUndefined();
+    });
+});
+
+// ── rotation heartbeat ───────────────────────────────────────────────────────
+// Rotation is lazy (only getValidToken() walks it); the heartbeat exists so a
+// sparse caller still visits the rotation window with zero call() traffic
+// (docs/feedback/nexus-relay-lazy-rotation-sparse-callers.md).
+describe('rotation heartbeat — rotates without any call() traffic', () => {
+    const waitFor = async (cond, timeoutMs = 2000) => {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            if (cond()) return true;
+            await new Promise((r) => setTimeout(r, 10));
+        }
+        return cond();
+    };
+
+    test('near-expiry token is refreshed by the timer alone', async () => {
+        const { relay, redis } = makeRelay({ rotationHeartbeatMs: 25 });
+        try {
+            responder = (b) => b.method === 'user.token.refresh'
+                ? { json: { jsonrpc: '2.0', id: b.id, result: { token: 'NEW', expiresAt: NOW + 10 * HOUR } } }
+                : {};
+            await relay.setToken({ token: 'OLD', expiresAt: NOW + 1000 });   // inside rotation window
+            expect(await waitFor(() => requests.some((q) => q.method === 'user.token.refresh'))).toBe(true);
+            await waitFor(() => JSON.parse(redis._kv.get(TOKEN_KEY) || '{}').token === 'NEW');
+            expect(JSON.parse(redis._kv.get(TOKEN_KEY))).toMatchObject({ token: 'NEW', expiresAt: NOW + 10 * HOUR });
+        } finally {
+            relay.stopHeartbeat();
+        }
+    });
+
+    test('NO_TOKEN (not yet provisioned) stays quiet — no log, no crash', async () => {
+        const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        const { relay } = makeRelay({ rotationHeartbeatMs: 10 });
+        try {
+            await new Promise((r) => setTimeout(r, 80));   // several ticks with no stored token
+            expect(spy).not.toHaveBeenCalled();
+            expect(requests).toHaveLength(0);              // heartbeat never RPCs without a token
+        } finally {
+            relay.stopHeartbeat();
+            spy.mockRestore();
+        }
+    });
+
+    test('non-NO_TOKEN failure (already-expired token) is surfaced via console.error', async () => {
+        const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        const { relay, redis } = makeRelay({ rotationHeartbeatMs: 10 });
+        try {
+            redis._kv.set(TOKEN_KEY, stateJson('OLD', NOW - 5000));   // expired (setToken would reject)
+            expect(await waitFor(() => spy.mock.calls.some((c) => String(c[0]).includes('rotation heartbeat')))).toBe(true);
+            expect(redis._kv.has(TOKEN_KEY)).toBe(false);             // getValidToken cleared the expired state
+        } finally {
+            relay.stopHeartbeat();
+            spy.mockRestore();
+        }
+    });
+
+    test('rotationHeartbeatMs: 0 disables the timer; stopHeartbeat is a safe no-op', async () => {
+        const { relay } = makeRelay({ rotationHeartbeatMs: 0 });
+        await relay.setToken({ token: 'OLD', expiresAt: NOW + 1000 });   // would rotate if a timer existed
+        await new Promise((r) => setTimeout(r, 80));
+        expect(requests).toHaveLength(0);
+        relay.stopHeartbeat();   // null-timer branch
+    });
+
+    test('stopHeartbeat halts further rotation attempts (idempotent)', async () => {
+        const { relay } = makeRelay({ rotationHeartbeatMs: 10 });
+        relay.stopHeartbeat();   // stopped synchronously before the first tick can fire
+        relay.stopHeartbeat();   // second call exercises the already-stopped branch
+        await relay.setToken({ token: 'OLD', expiresAt: NOW + 1000 });   // would rotate if alive
+        await new Promise((r) => setTimeout(r, 80));
+        expect(requests).toHaveLength(0);
     });
 });
 

@@ -36,9 +36,21 @@ Sentinel 的 `context` 字段（全部可选）按序执行；`context` 全空 =
 ## 坑与约定
 
 - **时间戳是 epoch 毫秒数字，不是 ISO 字符串**：`createdAt` / `lastSeenAt` / `updatedAt`、schedule 的 `fire_at` / `created_at` / `last_fired_at` / `recurrence_ms` 全是 `number`（entities 里标 "datetime" 是展示语义，实际存 `Date.now()`）。
-- **事件信封字段**（无 context 时直接透传给你）：`type` / `source`（Router 认证、不可伪造）/ `actor`（触发主体：`uid-*` / `cron:{id}` / `event:{stream}` / bot 名）/ `trace_id`（贯穿全链）/ `event_id`（消费侧幂等 key）/ `emitted_at` / `depth`。provenance 看 `actor`，别翻 payload。
+- **inbox 消息的 `payload` 有两种形状**（由 Sentinel 有无 `context` 决定，消费侧必读；外层消息 `type` 恒为 **stream 名**、`ref` 为流条目 id）：
+  - 无 `context`：`payload` **就是事件信封**（字段见下条）。
+  - 有 `context`：`payload` 是装配产物，**三层嵌套**——
+    ```jsonc
+    { "event":   { "type": "EVENT:ANT:ENTRY_FAILED",        // ⚠ 又是 stream 名（与外层消息 type 相同），不是事件 type
+                   "payload": { "type": "ant.entry.failed",  // ← 这层才是事件信封（source/event_id/…）
+                                "source": "system.ant", "event_id": "…",
+                                "payload": { "symbol": "PROBE" } } },   // ← 业务数据（第四段路径）
+      "context": { "system_prompt": "…", "data": {}, "output": …, "sentinel": {} } }
+    ```
+    稳妥解析法：**按特征下钻**——找带 `source`/`event_id` 的那层当信封，两种形状通吃。guard / `system_prompt_template` / `emit_when` 里的 `{{event.*}}` 一律指**信封层**（业务数据即 `{{event.payload.*}}`），与此坐标一致。完整标注版见 `docs/protocol/zh/context.md` §6。
+- **事件信封字段**：`type` / `source`（Router 认证、不可伪造）/ `actor`（触发主体：`uid-*` / `cron:{id}` / `event:{stream}` / bot 名）/ `trace_id`（贯穿全链）/ `event_id`（消费侧幂等 key）/ `emitted_at` / `depth`。provenance 看 `actor`，别翻 payload。
 - **depth 熔断**：每 emit 一跳 `depth+1`，Router 在 `depth > EVENT_MAX_DEPTH`（默认 16）时**阻断**——自喂事件环的断路器。Sentinel 的 emit 继承触发信封的 depth，别造环。
 - **幂等三处**：① consumer 是 at-least-once（consumer group），失败指数退避重试，超 `maxDeliveries`（默认 5）进 DLQ（`nexus.dlq.list/retry`，admin）；② notification 按 `(targetId, ref=流条目 id)` 去重，重投不重复落 inbox；③ `context.emit` 按 `(ref, sentinel)` SETNX at-most-once，重试不重复回抛。**你的下游消费仍须按 `event_id` 自做幂等去重。**
+- **create/enable 返回带 `warning`** = nexus 共享 relay 没有可用 token——Sentinel 建得起来（token 可以后配），但投递与 `context.emit` 会在**第一个事件到达时** NO_TOKEN（重试 5 次进 DLQ，token 注好后 DLQ 重投可送达）。先给 nexus 配 token（`user.bot.issue.token` → `nexus.token.set`，见 events.md §0.5）再指望它干活。
 - **软删 / 状态**：Sentinel 仅 `ACTIVE` / `DISABLED`。`disable` = 停投递 + 从订阅集摘除 + 软吊销 nexus 持有的 token（硬吊销活 session 需 admin 另调 `user.token.revoke`）；`enable` 复原；`delete` 是硬删（管理记录，非用户数据）。
 - **排障**：`nexus.trace.get { traceId }` 一次拉全链（跨所有 `EVENT:*` 流 + 实体 WAL，时序，WAL 是环形缓冲只覆盖近期写）；`nexus.event.streams` / `nexus.event.recent` 看总线。均为只读 admin 视图。
 - schedule / dlq / event / trace / token / control 系列均为 admin；`nexus.control.pause` 停自动化（consumer + scheduler）但手动 RPC 照常。
