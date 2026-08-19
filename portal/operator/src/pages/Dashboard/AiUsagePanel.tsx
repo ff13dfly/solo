@@ -4,6 +4,7 @@ import { useLang } from '../../providers/LanguageProvider';
 import { callRpc } from '../../utils/rpc';
 import type { DailyStats, RecentEntry } from './types';
 import { EmptyState } from './Common';
+import { LoadError } from '../../components/ui/LoadError';
 import { Button } from '../../components/ui';
 
 const CNY_RATE = 7.25;
@@ -21,6 +22,9 @@ export default function AiUsagePanel({ daily, recent, loading }: Props) {
     const [aiHourly, setAiHourly] = useState<{ hour: string, costUsd: number, models: Record<string, number> }[]>([]);
     const [aiSelectedDate, setAiSelectedDate] = useState<string | null>(null);
     const [aiHourlyLoading, setAiHourlyLoading] = useState(false);
+    // Swallowing the drill-down error made a failed call look like a zero-spend day
+    // (docs/feedback/done/operator-onboarding-three-silent-traps.md 二).
+    const [aiHourlyError, setAiHourlyError] = useState<unknown>(null);
 
     const week = daily.slice(0, 7);
     const sorted = [...week].reverse();
@@ -173,12 +177,12 @@ export default function AiUsagePanel({ daily, recent, loading }: Props) {
         const step = 3600000;
 
         callRpc<{ ts: number, costUsd: number, models: Record<string, number> }[]>('agent.stats.range', { start, end, step })
-            .then(d => setAiHourly((d || []).map(item => ({
+            .then(d => { setAiHourly((d || []).map(item => ({
                 hour: new Date(item.ts).getHours() + ':00',
                 costUsd: item.costUsd,
                 models: item.models
-            }))))
-            .catch(() => {})
+            }))); setAiHourlyError(null); })
+            .catch(e => setAiHourlyError(e))
             .finally(() => setAiHourlyLoading(false));
     };
 
@@ -210,7 +214,9 @@ export default function AiUsagePanel({ daily, recent, loading }: Props) {
                             <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
                                 {aiSelectedDate ? t('dashboard.qr_hourly_title', { date: aiSelectedDate }) : t('dashboard.cost_trend_label')}
                             </div>
-                            {week.length === 0 ? (
+                            {aiSelectedDate && aiHourlyError ? (
+                                <LoadError error={aiHourlyError} compact />
+                            ) : week.length === 0 ? (
                                 <EmptyState label={t('dashboard.no_trend_data')} />
                             ) : aiSelectedDate && aiHourly.every(h => Object.keys(h.models || {}).length === 0) ? (
                                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px dashed var(--border-color)', borderRadius: 8, color: 'var(--text-secondary)', fontSize: 12 }}>

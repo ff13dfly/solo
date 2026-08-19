@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { useLang } from '../../providers/LanguageProvider';
 import { callRpc } from '../../utils/rpc';
+import { LoadError } from '../../components/ui/LoadError';
 import type { WalDailyStats } from './types';
 import { EmptyState } from './Common';
 import { Button } from '../../components/ui';
@@ -18,6 +19,10 @@ export default function WalStatsPanel({ walDaily, loading }: Props) {
     const [walHourly, setWalHourly] = useState<WalHourly[]>([]);
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
     const [hourlyLoading, setHourlyLoading] = useState(false);
+    // A swallowed drill-down failure used to render as a flat "no data" chart — the
+    // panel looked like a quiet day instead of a broken call
+    // (docs/feedback/done/operator-onboarding-three-silent-traps.md 二).
+    const [hourlyError, setHourlyError] = useState<unknown>(null);
 
     const COLORS = { create: '#10b981', update: '#3b82f6', destroy: '#ef4444' };
 
@@ -118,8 +123,8 @@ export default function WalStatsPanel({ walDaily, loading }: Props) {
             end: entry.ts + 86400000,
             step: 3600000,
         })
-            .then(d => setWalHourly(d || []))
-            .catch(() => {})
+            .then(d => { setWalHourly(d || []); setHourlyError(null); })
+            .catch(e => setHourlyError(e))
             .finally(() => setHourlyLoading(false));
     };
 
@@ -146,6 +151,8 @@ export default function WalStatsPanel({ walDaily, loading }: Props) {
             <div className="panel-content" style={{ padding: '20px 24px' }}>
                 {loading || (selectedDate && hourlyLoading) ? (
                     <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px 0' }}>{t('common.loading')}</div>
+                ) : selectedDate && hourlyError ? (
+                    <LoadError error={hourlyError} compact />
                 ) : !selectedDate && walDaily.every(d => d.total === 0) ? (
                     <EmptyState label={t('dashboard.no_wal_data')} />
                 ) : (

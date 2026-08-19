@@ -3,6 +3,7 @@ import { resolveAssetUrl } from '../../../utils/asset';
 import { formatBytes, isImage } from '../utils';
 import { useLang } from '../../../providers/LanguageProvider';
 import { IconButton } from '../../../components/ui';
+import { LoadError } from '../../../components/ui/LoadError';
 
 const THUMB_SIZES = ['sm', 'md', 'lg'] as const;
 
@@ -305,9 +306,12 @@ function TemplateCard({ item, onEdit, onDelete }: {
     );
 }
 
-export function AssetList({ items, isLoading, onEdit, onDelete, onRebuild, isTemplate = false }: {
+export function AssetList({ items, isLoading, error, onEdit, onDelete, onRebuild, isTemplate = false }: {
     items: any[];
     isLoading: boolean;
+    // A failed load must not render as "no assets found"
+    // (docs/feedback/done/operator-onboarding-three-silent-traps.md §二).
+    error?: unknown;
     onEdit: (item: any) => void;
     onDelete: (item: any) => void | Promise<void>;
     onRebuild?: (id: string) => Promise<void>;
@@ -316,6 +320,9 @@ export function AssetList({ items, isLoading, onEdit, onDelete, onRebuild, isTem
     const { t } = useLang();
     if (isLoading) {
         return <div style={{ textAlign: 'center', color: '#94a3b8', padding: '60px' }}>{t('common.loading')}</div>;
+    }
+    if (error) {
+        return <LoadError error={error} />;
     }
     if (items.length === 0) {
         return <div style={{ textAlign: 'center', color: '#94a3b8', padding: '60px' }}>{t('storage.no_assets_found')}</div>;

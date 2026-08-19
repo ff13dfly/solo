@@ -42,7 +42,7 @@ log_error() { printf "${RED}✗ %s${NC}\n" "$1" >&2; }
 # ss(iproute2)。v1.1.14 的 fail-fast 守卫曾把 lsof 当必然存在:缺失时 `command not
 # found` 被 2>/dev/null 吞掉、stdout 为空——fe_assert_port_free 静默放行(它要防的
 # 正是静默失效)、fe_confirm_bound 空转 5 秒后 exit 1 打死起得好好的前端,报错文本
-# 与事实相反、还指向一个空日志(docs/feedback/run-sh-lsof-hard-dependency.md)。
+# 与事实相反、还指向一个空日志(docs/feedback/done/run-sh-lsof-hard-dependency.md)。
 # 现在:两个工具都没有 → 启动即报**真实原因**;有其一 → 全脚本经这三个函数探测。
 PORT_TOOL=""
 command -v lsof >/dev/null 2>&1 && PORT_TOOL="lsof"
@@ -542,7 +542,7 @@ serve_frontend "mobile"   "$ROOT_DIR/client/publish/mobile.${SOLO_VER}.tar.gz"  
 # 此前唯一的接入方式是把启动代码写进本文件——而本文件随 bundle 升级被 upgrade.sh
 # 整体覆盖,四个派生项目各抄的那段就是每次升级的必然牺牲品:轻则前端静默消失,
 # 重则连带丢掉对 serve_frontend 的本地改动而 run.sh 照常打印"启动成功"
-# (docs/feedback/run-sh-no-derived-frontend-registry.md)。现在改成声明式:
+# (docs/feedback/done/run-sh-no-derived-frontend-registry.md)。现在改成声明式:
 # .env 里写一对变量即接入,run.sh 零改动、升级零冲突:
 #   FRONTEND_ANT_DIR=client/ant      # 相对项目根(或绝对路径);目录下须有 package.json
 #   FRONTEND_ANT_PORT=3790           # 缺 PORT 的 DIR 声明会被点名警告

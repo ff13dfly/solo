@@ -40,7 +40,7 @@ export default function GenericEntityPage({ serviceId: propServiceId }: GenericE
   const pageSize = 12;
   const currentKeyword = keywords[activeEntity] || '';
 
-  const { data: queryData, isLoading: dataLoading } = useEntityQuery({
+  const { data: queryData, isLoading: dataLoading, error: dataError } = useEntityQuery({
     serviceId: serviceId || '',
     activeEntity,
     page,
@@ -213,6 +213,7 @@ export default function GenericEntityPage({ serviceId: propServiceId }: GenericE
               serviceId={serviceId}
               activeEntity={activeEntity}
               isLoading={dataLoading}
+              error={dataError}
             />
           </div>
 

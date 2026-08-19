@@ -23,6 +23,25 @@
   - **TIER 轴** = `categories.POWER`（admin/operator/normal）——决定 portal 访问与 session 策略。
   - `user.role.assign` 只动 RBAC，**绝不碰** `categories.POWER`；改等级走 `user.account.update` 的 `categories`。
 
+## 配方一之二：从零建一个能用的 operator 账号（三步缺一不可）
+
+新项目的第一个运营账号要跨三道坎，**每道坎失败时的信号都指向错误的方向**，所以按顺序做完再验：
+
+1. **建账号**：`user.register { name, salt, hash, email?, phone? }`——`salt`/`hash` **必填且由客户端算**
+   （派生方式见匿名 `system.guide` §2b）。服务端拿不到也恢复不了密码，**没有改密/重置接口**。
+   v1.1.17 起漏传直接 `-32602`；**此前是随机生成一个谁都不知道的凭证 + 返回 `success:true`**，
+   账号永久登不进去，且只在第一次登录时以「密码错」的形态暴露。
+2. **给等级**：`user.account.update { uid, categories: { POWER: 'operator' } }`——
+   operator portal 的登录闸读的是 **`categories.POWER`**（不是 `ROLE`，也不是 permit）。
+   漏了这步：密码正确、登录 RPC 成功，但前端当场登出并提示等级不符。
+3. **给权限**：`user.role.assign` 或 `user.permit.update`——新账号 permit 是空的
+   （`{ allow_all:false, services:{} }`），漏了这步能进 portal，但**每个业务方法都 `-32005`**。
+   v1.1.17 前的 portal 会把这种失败渲染成「还没有数据」并引导你去点「+ 新建」（那个动作再撞一次
+   `-32005`），排查方向会被带向数据写入链路。
+
+**验完再交付**：拿新账号真登一次 + 打开一个业务列表页。前两步的失败都发生在登录，第三步的失败
+只在数据页可见——只验登录不算验完。
+
 ## 配方二：给用户配权限（RBAC，admin/permit-gated）
 
 模板优先，别手搓 permit 对象：
@@ -33,6 +52,9 @@
    - **执行位置**：`$owner` 自 v1.1.16 起由 Entity Factory 在数据层自动执行（服务经
      `requestContext(req)` 注入即生效）；绕过工厂的自定义数据路径仍须服务自行过滤。
      v1.1.15 及更早只有"声明被强制"、没有执行——见 passport.md §3.6/§3.7。
+   - 下发形态是 `$owner: { field, value }`，**判定归属的是 `value` 不是调用者 uid**（代理调用下
+     两者会分叉）；**无请求上下文的直调（后台循环）不过滤**。验收别只看"我能看到自己的"——
+     单租户下它与"根本没过滤"结果相同，要改一行 owner 为他人再看它是否消失（passport.md §3.6）。
 2. 物化到内部用户：`user.role.assign { uid, role }` — 把模板 permit **拷贝**进 `user.permit`。
    是物化不是运行时解析：**改了 role 模板，得对每个用户重新 assign 才生效**。
 3. 个别用户例外：`user.permit.update { uid, permit }` — `permit` 结构须 `{ allow_all:boolean, services:object }`，否则 `-32602`。

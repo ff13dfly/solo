@@ -14,6 +14,7 @@ import { callRpc } from '../../utils/rpc';
 import { useEntityQuery } from '../default/hooks/useEntityQuery';
 import { useLang } from '../../providers/LanguageProvider';
 import { Button, IconButton } from '../../components/ui';
+import { LoadError } from '../../components/ui/LoadError';
 
 function NewProfileModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const { t } = useLang();
@@ -261,7 +262,7 @@ export default function FulfillmentPage() {
 
   const currentEntityDef = entities[activeEntity];
 
-  const { data: queryData, isLoading: dataLoading } = useEntityQuery({
+  const { data: queryData, isLoading: dataLoading, error: dataError } = useEntityQuery({
     serviceId,
     activeEntity,
     page: 1,
@@ -383,6 +384,8 @@ export default function FulfillmentPage() {
             <div style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
               {dataLoading ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>{t('fulfillment.page.requestingData')}</div>
+              ) : dataError ? (
+                <LoadError error={dataError} />
               ) : items.length === 0 ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>{t('common.no_data')}</div>
               ) : (
@@ -395,7 +398,9 @@ export default function FulfillmentPage() {
             </div>
           ) : activeEntity === 'profile' ? (
             <div style={{ flex: 1, overflowY: 'auto' }}>
-              <ProfileList profiles={items} onEdit={startEditing} onStatesUpdated={() => queryClient.invalidateQueries({ queryKey: ['entities', serviceId, 'profile'] })} />
+              {dataError
+                ? <LoadError error={dataError} />
+                : <ProfileList profiles={items} onEdit={startEditing} onStatesUpdated={() => queryClient.invalidateQueries({ queryKey: ['entities', serviceId, 'profile'] })} />}
             </div>
           ) : (
             <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -405,6 +410,8 @@ export default function FulfillmentPage() {
                 onViewRaw={startEditing}
                 serviceId={serviceId}
                 activeEntity={activeEntity}
+                isLoading={dataLoading}
+                error={dataError}
               />
             </div>
           )}

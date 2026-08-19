@@ -541,7 +541,7 @@ describe('clear — emergency reset', () => {
 // ── rotation heartbeat ───────────────────────────────────────────────────────
 // Rotation is lazy (only getValidToken() walks it); the heartbeat exists so a
 // sparse caller still visits the rotation window with zero call() traffic
-// (docs/feedback/nexus-relay-lazy-rotation-sparse-callers.md).
+// (docs/feedback/done/nexus-relay-lazy-rotation-sparse-callers.md).
 describe('rotation heartbeat — rotates without any call() traffic', () => {
     const waitFor = async (cond, timeoutMs = 2000) => {
         const deadline = Date.now() + timeoutMs;

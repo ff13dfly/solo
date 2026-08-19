@@ -46,7 +46,7 @@ module.exports = (redis, config, { relay, identity } = {}) => {
     // Sentinel is created fine (token can be provisioned later) but the whole
     // delivery pipeline (event.emit + notification.send) dies with NO_TOKEN only
     // when the FIRST event arrives — possibly days later, visible only in service
-    // logs (docs/feedback/nexus-relay-lazy-rotation-sparse-callers.md §三). A
+    // logs (docs/feedback/done/nexus-relay-lazy-rotation-sparse-callers.md §三). A
     // warning in the response makes it visible at creation. Best-effort: never
     // blocks the operation.
     async function relayTokenWarning() {

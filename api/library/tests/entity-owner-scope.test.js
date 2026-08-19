@@ -3,7 +3,7 @@
  *
  * 背景：passport.md §3.7 在三处强制外部角色声明 ownerField（不声明拒发会话），但执行
  * 此前不存在——$owner 被下发后没有任何一环消费它，外部主体能读到全表
- * (docs/feedback/passport-owner-isolation-declared-not-enforced.md)。现在服务经
+ * (docs/feedback/done/passport-owner-isolation-declared-not-enforced.md)。现在服务经
  * requestContext(req) 把 $owner 注入 walContext，工厂在数据层自动执行：
  *   create 盖章（覆盖客户端伪造）· get/update/delete/destroy 校验归属（不符 → NOT_FOUND，
  *   与 collection 手工实现同语义）· list/multiGet 过滤 · update 不能改走 owner 字段。
@@ -158,5 +158,41 @@ describe('list / multiGet — owner filtering', () => {
         await asOwner('bob', () => entity.create({ name: 'b1' }));
         const res = await asOwner('alice', () => entity.list({ cursor: null, limit: 10 }));
         expect(res.items.map((i) => i.name)).toEqual(['a1']);
+    });
+});
+
+// The two properties a multi-tenant service depends on that are easy to break in a
+// refactor and near-impossible to notice afterwards
+// (docs/feedback/done/passport-owner-isolation-declared-not-enforced.md 追记 ①③).
+describe('scope resolution — the two contracts callers depend on', () => {
+    test('$owner.value (not the caller uid) decides the scope — they diverge on proxied calls', async () => {
+        // A bot acting FOR a tenant: uid is the bot, $owner.value is the tenant. Filtering
+        // by uid here would silently serve the wrong tenant's rows.
+        const proxied = {
+            user: 'system.some-bot',
+            meta: {},
+            constraints: { $owner: { field: 'ownerId', value: 'alice' } },
+        };
+        await asOwner('alice', () => entity.create({ name: 'a1' }));
+        await asOwner('bob', () => entity.create({ name: 'b1' }));
+
+        const seen = await walContext.run(requestContext(proxied), () => entity.list());
+        expect(seen.items.map((i) => i.name)).toEqual(['a1']);      // tenant's rows, not the bot's
+        const made = await walContext.run(requestContext(proxied), () => entity.create({ name: 'a2' }));
+        expect(made.ownerId).toBe('alice');                          // stamped with the tenant too
+    });
+
+    test('no walContext at all (background loop / direct logic call) → NO filtering, not an empty scope', async () => {
+        // Schedulers and cross-tenant risk math call logic directly, outside any request.
+        // If absence of context ever resolved to "empty scope" instead of "unscoped", they
+        // would see zero rows — an engine that silently stops, which reads as a data bug,
+        // not a permissions one.
+        await asOwner('alice', () => entity.create({ name: 'a1' }));
+        await asOwner('bob', () => entity.create({ name: 'b1' }));
+
+        const all = await entity.list();                             // no walContext.run wrapper
+        expect(all.total).toBe(2);
+        const direct = await entity.create({ name: 'sys' });
+        expect(direct.ownerId).toBeUndefined();                      // nothing stamped either
     });
 });

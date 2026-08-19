@@ -128,13 +128,26 @@ user.passport.totp.verify({ anchor, code }) // 服务端用存好的密钥本地
 `user.passport.verify`（登录）校验设备令牌成功后，**不是逐请求携带令牌，而是签发一个受限会话**：
 
 - 会话 `kind: 'external'`、短 TTL（实现为 24h），`permit` 由**实体绑定的角色**解析得到。**当且仅当**该角色定义了 `ownerField` 时，`constraints.$owner` 才锁到该 anchor（**行级隔离**：外部用户只能访问自己的数据）；未定义则**无**行级隔离——故默认外部角色**必须**带 `ownerField`（见 §3.7）。
+- **`$owner` 的下发形态**：`constraints.$owner = { field: 'ownerId', value: '<anchor>' }`。
+  🔴 **判定归属的是 `value`，不是调用者 `req.user`**——单用户场景两者恰好相同，但 bot 代租户
+  发起的调用里会分叉，按 `req.user` 过滤就是**服务了错误的租户**。工厂按 `value` 执行。
 - **`$owner` 的执行位置**（v1.1.16 起）：由 **Entity Factory** 在数据层自动执行——服务把
   `requestContext(req)` 注入 `walContext` 后，create 自动盖 owner 章、get/update/delete/destroy
   校验归属（不符 → NOT_FOUND，不泄露存在性）、list/multiGet 过滤。**绕过 Entity Factory 直接
   读存储的自定义数据路径仍须服务自行过滤**（`getConstraints(req).$owner`，参照 collection 的
   `_scope`）。⚠️ v1.1.15 及更早**没有任何执行环节**：三道发证关卡只强制"声明存在"，服务不
-  自己消费 `$owner` 就等于没有隔离——外部主体能读全表且零告警（docs/feedback/
+  自己消费 `$owner` 就等于没有隔离——外部主体能读全表且零告警（docs/feedback/done/
   passport-owner-isolation-declared-not-enforced.md）。
+- **无上下文 = 不过滤**（契约，不是实现细节）：后台循环 / 调度器 / 维护脚本直调 logic 时没有
+  `walContext`，工厂**不加任何过滤**（内部/admin 会话同理——它们有上下文但无 `$owner`）。
+  跨租户的风控分母、同组扫描依赖这条。反过来实现成「无上下文 = 空作用域」会让调度器一行都
+  看不到，症状是**引擎静默停摆**，比越权泄露更难查。回归测试锁在
+  `library/tests/entity-owner-scope.test.js`。
+- **怎么验收「过滤真的接上了」**：🔴 单租户下「过滤生效」与「压根没接线」**返回完全相同的结果**
+  （所有行都归你，两种情况都返回全部），据此宣布完成必然误判。决定性做法是**制造一行属于他人的
+  数据**：把某行的 owner 字段改成别的 anchor，再用外部会话看——正确接线时它**立刻从 list 消失**
+  且直接 `get` 抛 `-32002`（NOT_FOUND，刻意不泄露存在性）。这是 fail-open 类缺陷的通用验收形态：
+  **别验证「我能看到该看的」，要验证「我看不到不该看的」**。
 - 之后业务请求走**标准 Router 会话鉴权**（携带会话 token），**不再每次携带设备令牌**——设备令牌只在登录 / 换会话时出现，降低泄露面。
 - 停用实体（`user.passport.disable`）同时阻断后续 verify 并撤销其所有在线会话。
 
@@ -296,4 +309,5 @@ USER:PASSPORT:TOTP:{anchor}     →  Redis String        验证器共享密钥�
 | 1.0.0 | 2026-03-xx | 初版 |
 | 1.1.0 | 2026-04-14 | 修复 Salt 泄露设计矛盾；OTP 锁定改为 Anchor 级；deviceId 改为服务端签发；增加 Proof 过期机制；deviceToken 改为报头传输；Salt 轮转增加原子清理旧 Proof 要求 |
 | 1.2.0 | 2026-06-06 | 补充注册 / 登录模型（§3.4）、自助 OTP 投递与通道抽象（§3.5：email/sms→gateway，TOTP 本地不经 gateway）、外部会话（§3.6）、**实现约束与安全清单（§3.7）**；对齐实现位置（user 服务 `user.passport.*`）+ 数据结构补全。经对照审查校正现状偏差：deviceToken 当前走 params 非报头（§3.3/§4.5 标注待硬化）、session 键小写、Salt 轮转（§4.1）与单设备撤销（§4.2）标注未实现、$owner 行隔离改为有条件（依赖角色 ownerField，§3.6） |
-| 1.2.1 | 2026-08-16 | **`$owner` 从"强制声明"补齐为"自动执行"**（§3.6/§3.7）：此前三道发证关卡只保证声明存在，数据层无任何执行环节（colony 实测外部会话读到全表，docs/feedback/passport-owner-isolation-declared-not-enforced.md）；v1.1.16 起 Entity Factory 经 `requestContext(req)` 自动执行（create 盖章 / 越权 NOT_FOUND / list 过滤），自定义数据路径仍须服务自行过滤，文档同步言明执行位置与旧版本边界 |
+| 1.2.1 | 2026-08-16 | **`$owner` 从"强制声明"补齐为"自动执行"**（§3.6/§3.7）：此前三道发证关卡只保证声明存在，数据层无任何执行环节（colony 实测外部会话读到全表，docs/feedback/done/passport-owner-isolation-declared-not-enforced.md）；v1.1.16 起 Entity Factory 经 `requestContext(req)` 自动执行（create 盖章 / 越权 NOT_FOUND / list 过滤），自定义数据路径仍须服务自行过滤，文档同步言明执行位置与旧版本边界 |
+| 1.2.2 | 2026-08-19 | §3.6 补三条此前只存在于代码里的契约（colony 在 v1.1.15 上手工实现一遍后反馈）：**下发形态含 `value` 且判定归属的是它而非 `req.user`**（代理调用下会分叉）、**无请求上下文 = 不过滤**（后台循环依赖，反之会让调度器静默停摆）、**单租户下验收必须制造他人数据反证**（否则"接上了"与"没接线"返回相同结果）。均为文档补齐，实现无改动（两条语义已由 `library/tests/entity-owner-scope.test.js` 的回归用例锁定） |

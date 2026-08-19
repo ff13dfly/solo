@@ -94,7 +94,7 @@ export default function AssetManagementPage({ serviceId = 'storage' }: { service
     const service = services.find(s => s.id === serviceId);
     const entityDef = service?.entities?.[activeEntity];
 
-    const { data: queryData, isLoading } = useEntityQuery({
+    const { data: queryData, isLoading, error: dataError } = useEntityQuery({
         serviceId,
         activeEntity,
         page,
@@ -264,6 +264,7 @@ export default function AssetManagementPage({ serviceId = 'storage' }: { service
                             <AssetList
                                 items={items}
                                 isLoading={isLoading}
+                                error={dataError}
                                 onEdit={startEditing}
                                 onDelete={handleDelete}
                                 onRebuild={serviceId === 'storage' ? handleRebuild : undefined}

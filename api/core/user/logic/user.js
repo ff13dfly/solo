@@ -49,20 +49,34 @@ module.exports = (redisClient, config) => {
      * @process
      *   1. Check for username collision.
      *   2. Generate unique Base58 UID.
-     *   3. Hash password (if provided) or generate secure defaults.
+     *   3. Store the client-computed salt + hash (the server never sees the password).
      *   4. Atomic save to Redis (User data + Name index + Global set).
+     *
+     * salt/hash are REQUIRED. They used to fall back to server-generated randomness,
+     * which produced an account with a credential nobody holds — and since there is no
+     * password-reset method, that account could never log in, while register still
+     * returned { success: true, uid }. Creating a permanently unusable resource is not
+     * a valid outcome, so this now fails loudly instead
+     * (docs/feedback/done/operator-onboarding-three-silent-traps.md §一).
      */
     async register(params) {
         const { email, phone, salt, hash } = params;
         const name = params.name?.toLowerCase().trim();
         if (!name) throw jsonrpc.MISSING_PARAM('name');
+        if (!salt || !hash) {
+            throw jsonrpc.INVALID_PARAMS(
+                'register requires client-computed salt + hash — the server cannot recover them later ' +
+                'and there is no password-reset path, so an account created without them can never log in. ' +
+                'See router GUIDE §2b for the derivation.'
+            );
+        }
 
         try {
             const uid = generateId(config.idLengths?.user || 16);
             const now = new Date().toISOString();
 
-            const finalSalt = salt || crypto.randomBytes(16).toString('hex');
-            const finalHash = hash || crypto.createHash('sha256').update(crypto.randomBytes(16).toString('hex')).digest('hex');
+            const finalSalt = salt;
+            const finalHash = hash;
 
             const userData = {
                 id: uid,

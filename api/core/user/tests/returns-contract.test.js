@@ -116,16 +116,26 @@ describe('user service — actual returns satisfy declared returns_schema', () =
     });
 
     // ── user.* account lifecycle ────────────────────────────────────────────
+    // salt/hash are client-computed and mandatory — a registration without them could
+    // never log in (no reset path), so it is rejected rather than silently minted.
+    const CRED = { salt: 'a'.repeat(32), hash: 'b'.repeat(64) };
     async function makeUser(name = 'alice') {
-        const r = await user.register({ name, email: `${name}@ex.com`, phone: '12345' });
+        const r = await user.register({ name, email: `${name}@ex.com`, phone: '12345', ...CRED });
         return r.uid;
     }
 
     test('user.register → {success, uid}', async () => {
-        const r = await user.register({ name: 'alice', email: 'a@ex.com' });
+        const r = await user.register({ name: 'alice', email: 'a@ex.com', ...CRED });
         ok('user.register', r);
         expect(r.success).toBe(true);
         expect(typeof r.uid).toBe('string');
+    });
+
+    test('user.register without salt/hash → -32602 (no permanently-unloggable account)', async () => {
+        await expect(user.register({ name: 'nocreds', email: 'n@ex.com' }))
+            .rejects.toMatchObject({ code: -32602 });
+        await expect(user.register({ name: 'halfcreds', salt: CRED.salt }))
+            .rejects.toMatchObject({ code: -32602 });
     });
 
     test('user.profile (getProfile) → full profile, no `username`', async () => {

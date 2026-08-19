@@ -160,6 +160,26 @@ describe('fulfillment.instance', () => {
         expect(ok.meta.approved).toBe(true);
     });
 
+    // create/update take `meta`, so callers write `meta` on transition too — and it used
+    // to vanish without a word (undeclared params are neither rejected nor logged), taking
+    // the attached data with it. `meta` is now an accepted alias.
+    // docs/feedback/done/fulfillment-transition-metaupdate-naming-trap.md
+    test('transition — `meta` works as an alias for metaUpdate (same merge semantics)', async () => {
+        const inst = await logic.instance.create({ sourceId: 'ORD-010b', profileId: SM_ID, meta: { approved: false, keep: 'me' } }, MOCK_REQ);
+        await logic.instance.transition({ id: inst.id, event: 'start' }, MOCK_REQ);
+        const ok = await logic.instance.transition({ id: inst.id, event: 'confirm', meta: { approved: true } }, MOCK_REQ);
+        expect(ok.state).toBe('CONFIRMED');          // gate saw the aliased value BEFORE evaluating
+        expect(ok.meta).toMatchObject({ approved: true, keep: 'me' });   // merged, not replaced
+    });
+
+    test('transition — metaUpdate wins when both names are supplied', async () => {
+        const inst = await logic.instance.create({ sourceId: 'ORD-010c', profileId: SM_ID, meta: { approved: false } }, MOCK_REQ);
+        await logic.instance.transition({ id: inst.id, event: 'start' }, MOCK_REQ);
+        const ok = await logic.instance.transition(
+            { id: inst.id, event: 'confirm', metaUpdate: { approved: true, via: 'canonical' }, meta: { via: 'alias' } }, MOCK_REQ);
+        expect(ok.meta.via).toBe('canonical');
+    });
+
     test('update — merges meta without dropping existing keys', async () => {
         const inst = await logic.instance.create({ sourceId: 'ORD-011', profileId: PROFILE_ID, meta: { a: 1 } }, MOCK_REQ);
         const updated = await logic.instance.update({ id: inst.id, meta: { b: 2 } });

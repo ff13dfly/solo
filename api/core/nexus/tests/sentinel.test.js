@@ -112,7 +112,7 @@ describe('nexus.sentinel', () => {
     });
 });
 
-// Shared-relay token pre-check (docs/feedback/nexus-relay-lazy-rotation-sparse-callers.md
+// Shared-relay token pre-check (docs/feedback/done/nexus-relay-lazy-rotation-sparse-callers.md
 // §三) — without a usable nexus relay token a Sentinel is created fine but the whole
 // delivery pipeline dies with NO_TOKEN on the first event; create/enable now surface
 // that as a `warning` so it's visible at creation instead of days later in logs.

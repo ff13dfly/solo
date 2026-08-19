@@ -51,6 +51,8 @@ const zh = {
     copy: '复制',
     copied: '已复制',
     no_data: '暂无数据',
+    load_failed: '数据加载失败',
+    load_forbidden: '当前账号无权查看该数据——请联系管理员授权',
     zoom_in: '放大',
     zoom_out: '缩小',
     fetching_data: '正在获取数据...',
@@ -169,7 +171,7 @@ const zh = {
     authenticating: '正在认证...',
     success: '欢迎回来，运维专员',
     fail: '认证失败',
-    role_denied: '访问被拒绝：需要运维人员角色',
+    role_denied: '访问被拒绝：该账号的 categories.POWER 必须是 operator（是 POWER 不是 ROLE，由管理员用 user.account.update 设置）',
   },
   dashboard: {
     qr_hourly_back: '← 返回',

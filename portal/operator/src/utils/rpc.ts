@@ -15,6 +15,29 @@ export interface RpcResponse<T> {
   id: number | string | null;
 }
 
+/**
+ * A failed RPC, with the JSON-RPC code kept intact.
+ *
+ * The code used to be dropped at the throw site, leaving callers a bare message —
+ * so a permission denial was indistinguishable from any other failure, and pages
+ * that only read `data` rendered "nothing here yet" over a Forbidden
+ * (docs/feedback/done/operator-onboarding-three-silent-traps.md §二).
+ */
+export class RpcError extends Error {
+  code?: number;
+  data?: any;
+  constructor(message: string, code?: number, data?: any) {
+    super(message);
+    this.name = 'RpcError';
+    this.code = code;
+    this.data = data;
+  }
+}
+
+/** -32005 Forbidden: authenticated, but this account's permit doesn't cover the method. */
+export const isForbidden = (err: unknown): boolean =>
+  err instanceof RpcError && err.code === -32005;
+
 export const callRpc = async <T>(method: string, params: any = {}): Promise<T> => {
   const token = getSession();
 
@@ -40,11 +63,12 @@ export const callRpc = async <T>(method: string, params: any = {}): Promise<T> =
         clearSession();
         window.location.href = '/login';
       }
-      throw new Error(response.data.error.message);
+      throw new RpcError(response.data.error.message, response.data.error.code, response.data.error.data);
     }
 
     return response.data.result as T;
   } catch (err: any) {
-    throw new Error(err.message || 'RPC Error');
+    if (err instanceof RpcError) throw err;   // keep the code through the catch
+    throw new RpcError(err.message || 'RPC Error');
   }
 };

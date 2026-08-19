@@ -46,6 +46,7 @@ module.exports = {
         '<rootDir>/apps/collection/tests/logic.test.js',
         '<rootDir>/apps/fulfillment/tests/profile-lint.test.js',
         '<rootDir>/apps/fulfillment/tests/profile-lanes.test.js',
+        '<rootDir>/apps/fulfillment/tests/logic.test.js',
         '<rootDir>/library/tests/risk.test.js',
         '<rootDir>/router/tests/auth.test.js',
         '<rootDir>/router/tests/tasks.test.js',

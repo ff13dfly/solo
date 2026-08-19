@@ -110,9 +110,10 @@ const methods = [
         params: [
             { name: 'id',         type: 'string', required: true,  maxLength: 64, pattern: 'id', description: 'Instance ID' },
             { name: 'event',      type: 'string', required: true,  maxLength: 64, description: 'Transition event/trigger name, defined in the applied profile transitions[].event. The engine matches (event, from=current state) and derives the target state from the matched rule\'s `to` field — the caller does NOT pass the target state.' },
-            { name: 'metaUpdate', type: 'object', required: false, description: 'Metadata merged into instance.meta BEFORE the JsonLogic condition is evaluated' }
+            { name: 'metaUpdate', type: 'object', required: false, description: 'Metadata merged into instance.meta BEFORE the JsonLogic condition is evaluated' },
+            { name: 'meta',       type: 'object', required: false, description: 'Alias for metaUpdate (create/update call this field `meta`; both merge identically). Prefer metaUpdate — it names the merge semantics.' }
         ],
-        description: 'Trigger a state transition on a fulfillment instance. Transitions must be defined in the applied profile; the engine evaluates JsonLogic conditions before applying.',
+        description: 'Trigger a state transition on a fulfillment instance. Transitions must be defined in the applied profile; the engine evaluates JsonLogic conditions before applying. Metadata goes in `metaUpdate` (`meta` accepted as an alias).',
         returns_schema: INSTANCE_WITH_TASKS,   // { ...instance, _tasks } — _tasks for Router async dispatch
         ai: false
     },

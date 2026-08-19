@@ -11,6 +11,7 @@ import { resolveEffectiveFields, resolveLabel, evalComputed, type ResolvedField 
 import { displayScope } from '../../displayConfig/types';
 import { rendererRegistry } from './registry/RendererRegistry';
 import { CommonErrorBoundary } from '../../components/CommonErrorBoundary';
+import { LoadError } from '../../components/ui/LoadError';
 import './DefaultPage.css';
 
 const Row = memo(({ index, style, items, gridTemplate, onViewRaw, onDelete, serviceId, resolverTarget, setResolverTarget, fields, t }: any) => {
@@ -144,11 +145,15 @@ interface GenericListProps {
   onDelete?: (item: any) => void;
   serviceId: string;
   isLoading?: boolean;
+  // A failed load renders as an error, never as "no data found" — a Forbidden list
+  // otherwise reads as an empty one
+  // (docs/feedback/done/operator-onboarding-three-silent-traps.md §二).
+  error?: unknown;
   // Identifies the list so view mode is remembered per `{serviceId}_{activeEntity}`.
   activeEntity?: string;
 }
 
-export function GenericList({ items, entityDef, onViewRaw, onDelete, serviceId, isLoading, activeEntity }: GenericListProps) {
+export function GenericList({ items, entityDef, onViewRaw, onDelete, serviceId, isLoading, error, activeEntity }: GenericListProps) {
   const { getViewMode, getFieldConfig } = useUI();
   const { getManifest } = useDisplayConfig();
   const { t, lang } = useLang();
@@ -236,6 +241,8 @@ export function GenericList({ items, entityDef, onViewRaw, onDelete, serviceId, 
               t
             }}
           />
+        ) : error ? (
+          <LoadError error={error} />
         ) : (
           <div style={{ padding: '40px', textAlign: 'center', color: '#94a3b8' }}>
             {isLoading ? t('default.loading_data') : t('default.no_data_found')}

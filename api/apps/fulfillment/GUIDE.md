@@ -64,6 +64,10 @@
 - **`submit` 是在审核通道里创建新 profile，不是「提交已有 profile 进审核」**——撞已存在的 id
   会明确报错并指向 enroll。可信直建的 profile 想事后补一道审核，只有
   `submit { id, enroll: true }`（管理员）这一条路，转入即冻结其实例。
+- **附带元数据：transition 用 `metaUpdate`，create/update 用 `meta`**（两者语义相同，都是浅合并进
+  `instance.meta`）。v1.1.17 起 transition 也收 `meta` 作别名，但**别指望「传错了会报错」**——
+  Router 不校验未声明参数，写错的字段既不报错也不进日志，只是悄悄不见（colony 的镜像就这么丢了
+  一天多的 `closeReason`/`realizedPnl`，而状态机、事件、history 全绿）。
 - **profile 软删**：`delete` 是软删，返回**整条记录**（`status: DELETED`），不是 `{ success: true }`；
   `restore` 复活为 ACTIVE；`destroy` 才是真删、返回 `{ success: true }`。instance **不软删**。
 - **写方法对 AI 关闭**：只有 create/get/list 类是 `ai:true`（LLM 可自主调）；所有 transition/cancel/hold/

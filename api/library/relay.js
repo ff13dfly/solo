@@ -405,7 +405,7 @@ function createRelay(options) {
     // hours) may make zero calls during the whole rotation window (rotateBeforeMs
     // before expiry) and let its token expire silently; every later call then dies
     // with TOKEN_EXPIRED even though the permit was fully provisioned
-    // (docs/feedback/nexus-relay-lazy-rotation-sparse-callers.md — bit ant, then
+    // (docs/feedback/done/nexus-relay-lazy-rotation-sparse-callers.md — bit ant, then
     // nexus, on colony). The heartbeat walks getValidToken() on a timer so the
     // window is always visited regardless of traffic. unref() keeps the timer from
     // holding the process alive, so stopHeartbeat() is hygiene, not a requirement.

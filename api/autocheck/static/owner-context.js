@@ -8,7 +8,7 @@
  *      自 v1.1.16 起在数据层自动执行（create 盖章 / get·update·delete 校验 / list 过滤）——
  *      但前提是它能从 walContext store 里读到 owner 字段。手写的 store 字面量不带这个
  *      字段，于是隔离静默失效：外部主体能读到全表，且没有任何报错或日志。
- *      这正是 docs/feedback/passport-owner-isolation-declared-not-enforced.md 记录的
+ *      这正是 docs/feedback/done/passport-owner-isolation-declared-not-enforced.md 记录的
  *      「强制声明、可选执行」缺口——三道发证关卡都在拦，执行环节却依赖每个服务作者
  *      记得手工实现。requestContext(req)（library/entity 导出）把 uid/trace/depth/owner
  *      一次构造齐，服务侧一行接入，后续 store 再加字段也自动到位。

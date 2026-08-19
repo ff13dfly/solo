@@ -216,9 +216,18 @@ module.exports = (redis, config, relay = null) => {
         /**
          * fulfillment.instance.transition — the core state machine. Validates the
          * JsonLogic condition and emits _tasks for downstream side effects.
+         *
+         * `meta` is accepted as an alias for `metaUpdate`: create/update take `meta`,
+         * so callers write `meta` here from muscle memory — and since undeclared
+         * params are neither rejected nor logged, the field just vanished (colony ran
+         * a mirror for a day with closeReason/realizedPnl silently dropped; the state
+         * machine, events and history all looked green because nothing reads meta
+         * until someone does — docs/feedback/done/fulfillment-transition-metaupdate-naming-trap.md).
+         * Both names carry the same merge-into-instance.meta semantics, so the alias
+         * is safe; `metaUpdate` stays canonical (it says "merge", not "replace").
          */
-        async transition({ id, event, metaUpdate = {} }, req) {
-            return advance({ id, event, metaUpdate, skipCondition: false }, req);
+        async transition({ id, event, metaUpdate, meta }, req) {
+            return advance({ id, event, metaUpdate: metaUpdate ?? meta ?? {}, skipCondition: false }, req);
         },
 
         /**

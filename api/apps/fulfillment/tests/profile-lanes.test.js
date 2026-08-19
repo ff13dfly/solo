@@ -2,7 +2,7 @@
  * profile-lanes — 双通道契约：submit 是审核通道里的**创建**；enroll 把既有可信 profile
  * 事后纳入审核（追溯治理）。
  *
- * 背景（docs/feedback/fulfillment-profile-submit-contract-and-enroll-gap.md）：
+ * 背景（docs/feedback/done/fulfillment-profile-submit-contract-and-enroll-gap.md）：
  *   1. submit 撞已存在 id 时曾抛实体工厂的通用 "already exists"，把调用方引向
  *      「create 被重复调了」而不是「submit 本来就是创建」——现在换成指路的专用报错；
  *   2. 可信直建的 profile 此前**永远无法**事后纳入审核——现在 submit { id, enroll: true }

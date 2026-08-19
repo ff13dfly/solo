@@ -10,6 +10,63 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 ## [Unreleased]
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.1.x`）。
+> colony 的五篇 feedback triage（08-17 ~ 08-19）。主线接着 v1.1.16 那条缝：
+> **「返回成功」不等于「事情做成了」**——token 轮转从没被触发、附带参数被静默丢弃、
+> 注册出一个永远登不进去的账号、权限不足显示成「还没有数据」。
+
+### 🔴 BREAKING — `user.register` 现在强制要求 `salt` + `hash`
+
+> 来源：colony，`docs/feedback/done/operator-onboarding-three-silent-traps.md` §一。
+> 此前缺省时**服务端随机生成**一个谁都不知道的凭证，`register` 照常返回 `{ success: true, uid }`，
+> 而该账号**永远无法登录**（无改密/重置入口），只在第一次登录时以「密码错」的形态暴露。
+> 自省声明里根本没有这两个参数，「照声明写」必踩——只有散文 GUIDE §2b 警告过。
+
+- 缺任一 → `-32602`，报错指向 router GUIDE §2b；introspection 补齐两个参数的声明（`required: true`）。
+- **下游影响**：仓内两个真实调用方（portal/system 建号弹窗、scaffold e2e harness）本就传了
+  salt+hash，不受影响。**自建的建号脚本若依赖旧的静默兜底，会从「静默产出废账号」变成显式报错**
+  ——这正是意图。
+
+### Added — relay 内建轮转心跳（根治「稀疏调用方 token 静默过期」）
+
+> 来源：colony，`docs/feedback/done/nexus-relay-lazy-rotation-sparse-callers.md`（ant 与 nexus 两次实测）。
+> 轮转是**惰性**的：只在 `call()`/`getToken()` 走到 `getValidToken()` 时才检查。事件驱动的服务
+> 可以静默几小时到几天，轮转窗口（到期前 2h）内一次调用都没有 → token 静默过期。
+> 这与 events.md §0.5 讲的「permit 漏 `user.token.refresh`」是**两个不同的故障**：那个是轮转被拒，
+> 这个是轮转根本没被触发，permit 配得再全也一样死。
+
+- `createRelay` 新增 `rotationHeartbeatMs`（默认 10min，`0` 关闭）+ `stopHeartbeat()`；
+  无 token 时静默（provisioning 前是正常态）、不发业务 RPC、不需要额外 permit。
+- `nexus.sentinel.create`/`enable` 在共享 relay 无可用 token 时返回 `warning`（不阻止创建）。
+- `NEXUS:DLQ` 补 `MAXLEN ~` 上限（`NEXUS_DLQ_MAXLEN`，默认 1000），对齐 notification/orchestrator。
+
+### Added — `fulfillment.instance.transition` 接受 `meta` 作为 `metaUpdate` 的别名
+
+> 来源：colony，`docs/feedback/done/fulfillment-transition-metaupdate-naming-trap.md`。
+> create/update 收 `meta`、transition 收 `metaUpdate`，而 Router 对未声明参数既不拒也不记日志
+> ——写错名字的字段**无声无息地消失**，colony 的镜像因此丢了一天多的数据，账面全绿。
+
+- 两名并存时 `metaUpdate` 优先；introspection 与 GUIDE 同步标注。
+- ⚠️ 仍未解决的更大问题：**未声明参数一律静默透传**（建议改成 warn 档，落点在 router 保护区，待授权）。
+
+### Fixed — operator portal 不再把「权限不足」渲染成「还没有数据」
+
+> 来源：colony，`docs/feedback/done/operator-onboarding-three-silent-traps.md` §二、§三。
+
+- `utils/rpc.ts` 改抛保留 code 的 `RpcError`；新增 `LoadError` 组件，**Forbidden 与其他失败分开措辞**；
+  六处渲染点接上（fulfillment ×2 / GenericList / AssetList / Dashboard 两个面板）。
+- 登录被拒文案点名 `categories.POWER`（并说明「不是 ROLE」），user GUIDE 新增建号三步配方。
+
+### Docs
+
+- nexus 投递 payload 的三层嵌套形状（`context.md` §6 重写 + nexus GUIDE）——原示例是错的。
+- events.md §6.5「流是投递通道，不是审计账本」；§0.5 补「permit 配齐 ≠ 轮转被触发」。
+- passport.md §3.6 补三条只存在于代码里的契约（`$owner.value` 才是判定主体 / 无上下文 = 不过滤 /
+  单租户下必须造他人数据反证才算验收），并加回归测试锁定。
+
+> **下游 action**：① 自建建号脚本检查是否传了 `salt`/`hash`（见上方 BREAKING）；
+> ② `portal/operator/` 是 init.sh 一次性拷贝、`upgrade.sh` **永不覆盖**，上面那组前端修复
+> **不会随升级到达存量项目**，需自行回填（`utils/rpc.ts` + 新增 `components/ui/LoadError.tsx` +
+> 六处渲染点 + 两条 i18n）；③ 升级后可删掉为绕过 relay 惰性轮转而自建的 timer / schedule 心跳。
 
 ---
 
@@ -25,7 +82,7 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ### Added — 🔴 行隔离 `$owner` 从「强制声明」补齐为「自动执行」（Entity Factory）
 
-> 来源：colony 实测，`docs/feedback/passport-owner-isolation-declared-not-enforced.md`。
+> 来源：colony 实测，`docs/feedback/done/passport-owner-isolation-declared-not-enforced.md`。
 > 三道发证关卡强硬拒绝没有 `ownerField` 的外部角色，但 `$owner` 下发后**没有任何一环消费它**
 > ——服务不自己读，passport 外部主体就能读全表，零告警。
 
@@ -48,7 +105,7 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ### Fixed/Added — fulfillment `profile.submit` 契约纠偏 + `enroll` 追溯治理
 
-> 来源：colony，`docs/feedback/fulfillment-profile-submit-contract-and-enroll-gap.md`。
+> 来源：colony，`docs/feedback/done/fulfillment-profile-submit-contract-and-enroll-gap.md`。
 
 - submit 撞已存在 id：捕获工厂通用 "already exists"，翻译成通道契约报错（点名「submit 是在
   审核通道里**创建**」、报出对方所在通道、指路 enroll）；`config.js` 英中描述、introspection
@@ -63,7 +120,7 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ### Fixed — scaffold `run.sh` 端口探测的 lsof 硬依赖（缺失时守卫**反向失效**）
 
-> 来源：overview 迁 N100 实测，`docs/feedback/run-sh-lsof-hard-dependency.md`。Debian 最小安装
+> 来源：overview 迁 N100 实测，`docs/feedback/done/run-sh-lsof-hard-dependency.md`。Debian 最小安装
 > 无 lsof：fe_assert_port_free 静默放行、fe_confirm_bound 把起得好好的前端 exit 1 打死，
 > 报错与事实相反、还指向空日志。
 
@@ -78,7 +135,7 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ### Added — scaffold `run.sh` 自有前端注册表（四个项目各抄一段的终结）
 
-> 来源：colony，`docs/feedback/run-sh-no-derived-frontend-registry.md`。runner/finance/trend/
+> 来源：colony，`docs/feedback/done/run-sh-no-derived-frontend-registry.md`。runner/finance/trend/
 > colony 各在只读区抄了一段几乎相同的启动代码，全是 upgrade 的必然牺牲品。
 
 - `.env` 声明即接入：`FRONTEND_<NAME>_DIR` + `FRONTEND_<NAME>_PORT`，run.sh 扫描并经新函数
@@ -92,7 +149,7 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ### Fixed — `init.sh` 三处端口扫描只有前端一处能被调用方覆盖
 
-> 来源：steward 脚手架实测，`docs/feedback/scaffold-port-scan-blind-to-declarations.md`。
+> 来源：steward 脚手架实测，`docs/feedback/done/scaffold-port-scan-blind-to-declarations.md`。
 > 探测看不到「已声明未启动」，更看不到「整栈迁走后本机遗留声明」的永久盲区。
 
 - `SOLO_PORT_BASE` / `REDIS_PORT` 补上与 `FE_PORT_BASE` 同款环境变量覆盖（没传行为不变）。

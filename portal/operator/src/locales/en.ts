@@ -51,6 +51,8 @@ const en = {
     copy: 'Copy',
     copied: 'Copied!',
     no_data: 'No data',
+    load_failed: 'Could not load this data',
+    load_forbidden: 'This account is not permitted to view this data — ask an administrator to grant access',
     zoom_in: 'Zoom In',
     zoom_out: 'Zoom Out',
     fetching_data: 'Fetching data...',
@@ -169,7 +171,7 @@ const en = {
     authenticating: 'Authenticating...',
     success: 'Welcome back, Operator',
     fail: 'Authentication Failed',
-    role_denied: 'Access denied: Operator role required',
+    role_denied: "Access denied: this account's tier (categories.POWER) must be 'operator'. Note it is POWER, not ROLE — an admin sets it with user.account.update.",
   },
   dashboard: {
     qr_hourly_back: '← Back',

@@ -165,3 +165,53 @@ CI 绿色子集全量跑过（含 user/passport、collection、entity 系全部�
 `ant.instance.list` 对 passport 会话将只返回盖了该 anchor 章的行——**存量行没有
 ownerId 字段，会从外部视角消失**，单用户场景如需外部会话看全表，给该角色去掉
 external scope 或把存量行补上 owner 字段，二选一。
+
+---
+
+## 追记：colony 在 v1.1.15 上手工实现了一遍（2026-08-18 实测）
+
+多租户测试需要，等不到 v1.1.16，先在服务侧自行执行 `$owner`（`api/apps/ant/logic/owner.js`
++ 各对外方法透传 `req`）。三点实测反馈，供 v1.1.16 的工厂实现与文档参考：
+
+1. **下发形态带 `value`，文档没写。** 线上抄回的 passport session 是
+   `permit.constraints.$owner = { field: 'ownerId', value: 'fuu' }` —— **`value` 才是 Router
+   判定的归属主体**，而 `req.user` 是调用者。单用户场景两者相同，代理调用（bot 代某租户）
+   下会分叉，只按 `req.user` 过滤就是错的租户。我们的实现取 `value ?? req.user`。
+   建议工厂实现同样以 `value` 优先，并在 passport.md 的「执行位置」条目里写明这个字段。
+
+2. **「过滤生效」和「根本没过滤」在单租户下无法区分——这个坑值得写进文档。**
+   我们迁移后所有存量行都归 `fuu`，于是 `list` 返回 16 条：**过滤生效返回 16，压根没接线
+   也返回 16**。差点据此宣布完成。决定性实验是把**其中一行的 owner 改成他人**再看
+   （立刻变 15 条 + 直接 `get` 抛 `-32002`）。建议 v1.1.16 的验收清单里直接给出这个对照做法，
+   否则「以为接上了其实没有」会普遍发生——这正是本篇原报告那类 fail-open 的验收版。
+
+3. **内部调用必须绕开过滤，且这不是可选项。** ant 的调度循环直调 logic（无 `req`），
+   而跨实例风控（同向占比的分母、分组锁的同组扫描）**必须看到全部租户的行**才正确。
+   我们的边界是「无 `req` = 不过滤」，过滤只加在对外 RPC，绝不加在 `allInstances`。
+   ⚠️ 若 v1.1.16 的工厂实现按 `requestContext` 的 AsyncLocalStorage 自动生效，
+   要确认**后台循环（无请求上下文）默认拿到的是「不过滤」而不是「空作用域」**——
+   拿成空作用域会让调度器一个实例都看不到，症状是「引擎静默停摆」，比泄露更难查。
+
+顺带印证了动作项里那句预告：存量行确实会从外部视角整体消失。我们写了
+`deploy/backfill-owner.js`（幂等、默认干跑、只补不覆盖）补 `ownerId`，
+建议 v1.1.16 的迁移指引里提一句「派生项目需要自备 backfill」。
+
+### 追记的处理（2026-08-19）
+
+三点全部核实并处理，**实现无需改动——两条关键语义 HEAD 已经是对的**，缺的是文档承诺与测试锁定：
+
+1. **`value` 优先：已经是这样**。`entity.js:117-121` 的 `ownerScope()` 只认
+   `{ field, value }`，执行时用的是 `o.value`（`data[_owner.field] = _owner.value`、
+   过滤谓词 `item[o.field] === o.value`），**从不读 `req.user`**——`requestContext` 里 uid 与 owner
+   是两个独立字段。`{ field, value }` 这个下发形态也已有测试锁定
+   （`core/user/tests/passport.test.js:93`）。✅ 文档已补：passport.md §3.6 新增「下发形态」条目，
+   点名「判定归属的是 `value` 不是调用者 uid，代理调用下会分叉」；user GUIDE 同步一行。
+2. **验收对照法**：✅ 采纳，写进 passport.md §3.6，并提炼成通用判据——
+   「**别验证『我能看到该看的』，要验证『我看不到不该看的』**」，这是 fail-open 类缺陷的通用验收形态。
+3. **无上下文 = 不过滤：已经是这样**，但此前只是实现的自然结果、没有被承诺也没被测试锁定
+   （既有用例只覆盖了「有上下文但无 `$owner`」的 admin 场景）。✅ 现在两条都补了回归用例
+   （`library/tests/entity-owner-scope.test.js`：代理调用按 `value` 而非 uid 过滤 / 完全无
+   `walContext` 时不过滤且不盖章），并在 passport.md 里写成**契约**，附上「反之会让调度器静默停摆」
+   的后果说明。15 用例全绿。
+4. backfill 的提醒已在原「给派生项目的动作项」里（存量行会从外部视角消失 + 二选一的处置），
+   本次未再重复；`deploy/backfill-owner.js` 这类脚本按项目自备，框架不下发。

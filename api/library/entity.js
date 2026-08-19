@@ -107,7 +107,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
     // ── 行隔离 ($owner) 自动执行 ──────────────────────────────────────────────
     // passport.md §3.7 在三处强制外部角色声明 ownerField（不声明就拒发会话），Router 把
     // constraints.$owner 原样下发——但执行这一环此前不存在：服务不自己读，外部主体就能
-    // 看到全表（docs/feedback/passport-owner-isolation-declared-not-enforced.md）。
+    // 看到全表（docs/feedback/done/passport-owner-isolation-declared-not-enforced.md）。
     // 服务经 requestContext(req) 把 $owner 注入 walContext 后，工厂在数据层自动执行：
     // create 盖章、get/update/delete/destroy 校验归属、list/multiGet 过滤。归属不符一律
     // NOT_FOUND（与 collection 的手工实现同语义——不泄露"这条存在但不是你的"）。
