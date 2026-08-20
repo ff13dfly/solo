@@ -2,8 +2,6 @@
 
 > **S**wift · **O**rchestrated · **L**earning · **O**bjects
 
-**Version 1.1.10**
-
 English | [简体中文](README.zh-CN.md)
 
 ---
@@ -54,33 +52,33 @@ Each letter of the name is a design principle:
             └────────────┘
 ```
 
-14 services in total, registered in [`deploy/services.json`](deploy/services.json) (the single source of truth for what's real — CI checks every other doc against it):
+All services are declared in [`deploy/services.json`](deploy/services.json) — **the single source of truth**
+for what exists and on which port. CI checks every other doc against it, so read it rather than a copy:
 
-**Gateway**
-- **router** (8600) — the only entry point: auth, JSON-RPC dispatch, Ed25519-signed forwarding, async `_task` dispatch, method-level permission checks
+```bash
+node -e "console.log(require('./deploy/services.json').map(s => s.name + ':' + s.port).join('\n'))"
+```
 
-**Core**
-- **gateway** (8020) — outbound external-channel adapter (email/SMS/etc.)
-- **ingress** (8070) — inbound external-webhook adapter (API-key auth + dedup)
-- **mcp** (8091) — Model Context Protocol adapter; exposes approved orchestrator workflows as MCP tools for external AI clients
-- **notification** (8040) — delivery worker with backoff retry + dead-letter queue
-- **administrator** (8680) — system backend / single-admin model
-- **user** (8710) — accounts, sessions, permit storage
-- **agent** (8730) — AI provider hub (Gemini / Qwen / OpenAI), capability routing
-- **nexus** (8740) — Sentinel registry (event-subscribed reactive AI agents) + event routing
-- **orchestrator** (8820) — workflow template CRUD + execution, behind a review/approval gate
+**Gateway** — `router`, the only entry point: auth, JSON-RPC dispatch, Ed25519-signed forwarding,
+async `_task` dispatch, method-level permission checks.
 
-**Apps**
-- **planner** (8030) — schedule + todo
-- **fulfillment** (8050) — declarative state-machine fulfillment engine (JsonLogic)
-- **approval** (8060) — SAP approval protocol (request → verify → confirm → reject)
-- **storage** (8750) — content-addressable file storage (SHA-256)
+**Core** — infrastructure every system needs: outbound channels (`gateway`) and inbound webhooks
+(`ingress`), accounts and permissions (`user`), AI provider routing (`agent`), the event bus and
+its reactive agents (`nexus`), workflow templates behind a review gate (`orchestrator`), delivery
+with retry and dead-lettering (`notification`), MCP interop (`mcp`), system backend (`administrator`).
+
+**Apps** — generic, domain-agnostic building blocks: `planner`, `fulfillment` (declarative
+state machine), `approval`, `storage` (content-addressable).
 
 ### Clients
-- **Mobile** — cross-platform mobile client
-- **Desktop** — Tauri-based desktop application
-- **Portal System** — system administration dashboard
-- **Portal Operator** — operations dashboard (team-owned source, not overwritten on framework upgrades)
+
+- **Portal System** / **Portal Operator** — admin and operations dashboards. Operator is
+  team-owned source: shipped once, never overwritten by framework upgrades.
+- **Mobile** — cross-platform mobile client. **Desktop** — Tauri application.
+- **Browser extension** — [`client/extension-kit/`](client/extension-kit/) is the framework half
+  (transport with backoff, a persistent send queue that survives MV3 service-worker eviction,
+  image normalization, session handling) plus a runnable sample. Your own extension lives in
+  `client/extension/` and is never overwritten — the same split as `api/library` vs `api/apps`.
 
 ---
 
@@ -108,60 +106,33 @@ bash deploy/dev.sh
 
 ```
 solo/
-├── api/
-│   ├── router/          # API Gateway (main entry)
-│   ├── library/         # Shared utilities (auth, entity, permit, jsonrpc, clock, etc.)
-│   ├── core/             # Infrastructure services
-│   │   ├── administrator/
-│   │   ├── agent/
-│   │   ├── gateway/
-│   │   ├── ingress/
-│   │   ├── mcp/
-│   │   ├── notification/
-│   │   ├── nexus/
-│   │   ├── orchestrator/
-│   │   └── user/
-│   ├── apps/             # Generic, domain-agnostic applications
-│   │   ├── approval/
-│   │   ├── fulfillment/
-│   │   ├── planner/
-│   │   └── storage/
-│   ├── sample/           # New-service scaffold — copy this to build service #15
-│   └── autocheck/        # Static + simulation quality gate
-├── portal/
-│   ├── system/           # Admin portal
-│   └── operator/         # Business portal
-├── client/
-│   ├── mobile/           # Mobile client
-│   └── desktop/          # Desktop client (Tauri)
-├── deploy/               # Dev scripts, build, services.json (source of truth for ports/services)
-├── e2e/                  # Black-box integration harness
-└── docs/                 # Documentation & protocol specs
+├── api/         Router · shared library · core + app services · new-service scaffold · quality gate
+├── portal/      Admin and operations dashboards
+├── client/      Mobile · desktop · browser-extension kit
+├── deploy/      Dev scripts, build, project scaffold, services.json (source of truth)
+├── e2e/         Black-box integration harness
+└── docs/        Protocol specs, planning ledger, runbooks
 ```
+
+Service directories are not listed here on purpose — they change, and `deploy/services.json`
+already names them. To build service #15, copy [`api/sample/`](api/sample/).
 
 ---
 
-## Evolution
+## Releases
 
-Rather than a flat feature list, here's *why* each phase happened — the design questions that drove it. For the exact diff of every tagged release, see [`CHANGELOG.md`](docs/planning/CHANGELOG.md).
+Every tagged release has a [`CHANGELOG`](docs/planning/CHANGELOG.md) entry describing what it
+brings and what — if anything — downstream projects must do. The history is not duplicated here;
+a hand-kept copy only rots:
 
-### v1.0 — Framework skeleton
-The initial cut: Router API gateway, Entity Factory, a workflow orchestration engine, and AI-agent capability routing. Establishes the one non-negotiable rule everything else builds on: services never call each other directly — every cross-service interaction is mediated by the Router over JSON-RPC.
+```bash
+git tag | sort -V | tail -5          # recent releases
+git describe --tags --abbrev=0       # current
+```
 
-### v1.1.0 — From gateway to AI-automation platform
-Design question: how do you let AI agents react to events and act semi-autonomously without losing human oversight? This release added the **nexus** event bus and **Sentinel** (event-subscribed reactive AI agents) with a declarative context-assembly + autorun loop; **ingress** for inbound webhooks; storage moved behind a pluggable OSS provider; **orchestrator** got its first approval gate (a workflow must be reviewed before it can run); **passport** gave external users an isolated identity (method wall + row-level scoping); and a quality-gate trio — `autocheck` static audit, CI, and an e2e harness — so none of the above could regress silently.
-
-### v1.1.1 – v1.1.5 — Making orchestration trustworthy under failure
-Once workflows could run unattended, the real question became: what happens when a step fails halfway, or the process crashes mid-run? This phase added idempotency keys (so a retried or redelivered step can't double-execute), synchronous Saga-style compensation (undo already-completed steps when a later one fails), crash-safe checkpointing + retry (a stalled run can resume instead of silently rotting), and a scaffold contract package so services built on SOLO inherit these guarantees by default.
-
-### v1.1.6 – v1.1.8 — Opening the door to external users, safely
-Design question: how do you let real external users self-register without turning every internal RPC method into an accidental public API? This phase shipped passport OTP self-issuance, tightened the public-method surface twice (down to a small, explicit whitelist), added device-bound session upgrades — and, because a security boundary is only as trustworthy as the tests watching it, eliminated the last flaky mechanisms in the full e2e suite so CI could actually be trusted as a gate.
-
-### v1.1.9 – v1.1.10 — Closing architectural gaps, extending AI interop
-A structural review surfaced several "grew independently, now inconsistent" issues in one pass — caches with no invalidation path, two hand-synced copies of the bot permission map, two sources of truth for service ports — all fixed in the same release. Alongside that: a minimal **actor-claim** mechanism closes a confused-deputy gap for event-triggered workflows (a workflow can require that whoever *triggered* it, not just the bot executing it, actually holds the permission); an **MCP adapter** exposes approved orchestrator workflows as tools any MCP-speaking AI client can call; a second round of prompt-injection detection was added at the ingress boundary; and Saga compensation became *durable* — resuming correctly across an orchestrator restart, not just within one process's lifetime.
-
-### Since v1.1.10 (in progress on `main`)
-Background `_task` dispatch now retries with backoff before giving up, instead of a single fire-and-forget POST that silently dropped work on transient failure. Orchestrator workflows gained a `deprecate`/`restore` lifecycle distinct from delete, so retiring a workflow that's been running in production leaves its own audit trail instead of being indistinguishable from discarding a draft that was never approved.
+Development follows trunk + tags: `main` stays backward-compatible (no method removals, no
+narrowing of the public surface, library APIs only gain signatures), and breaking changes are
+saved for v2. See [`docs/runbook/release-and-branching.md`](docs/runbook/release-and-branching.md).
 
 ---
 
