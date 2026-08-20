@@ -56,7 +56,8 @@
 
 > 版本边界见 [`VERSION.md`](./docs/planning/VERSION.md)（v1.1 = AI 自动化平台：nexus + fulfillment + 治理线，受信外部 agent 投稿档，治理线已全部落地）；滚动待办见 [`BACKLOG.md`](./docs/planning/BACKLOG.md)（详情台账在 `docs/planning/`）；历史发版逐版本内容看 `git tag` + `git log`。
 > `v1-implementation-plan.md` 主线清单（P0-P2 + P4-MCP）**全部实现**。剩余项（P3 全部、P4 多机部署硬化）已确认暂缓存档；P4 剩余四项（passport TOTP/SSE/外部 agent SDK/metrics 正式档）+ P5 六项 minor 为低优先级可选项，见缝插针，不占排期。
-> **当前 = 阶段一（trunk + tags，只加不破，继续推 v1.1.x）**；发版/分支纪律见 [`docs/runbook/release-and-branching.md`](./docs/runbook/release-and-branching.md)。新发现默认进 v2，除非「只加不破」可平滑进 v1.1.x。
+> **当前 = 阶段一（trunk + tags，只加不破，继续推 v1.x）**；发版/分支纪律见 [`docs/runbook/release-and-branching.md`](./docs/runbook/release-and-branching.md)。新发现默认进 v2，除非「只加不破」可平滑进 v1.x。
+> **minor 步进的判据 = 多了一个新的交付物，不只是修补**（v1.2.0 = 新增 `client/extension-kit/` 浏览器插件半边）；只加不破的修补继续走 patch。
 
 1. **P0 CI**（✅ 已落地并 commit）：`.github/workflows/ci.yml`（static + jest 绿色子集）+ `api/jest.ci.config.js`。
 2. **治理线**：`api/library/permit.js`(footprint 预审 H6) → orchestrator C1 审核闸门，消费 approval。

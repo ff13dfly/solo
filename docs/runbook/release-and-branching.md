@@ -106,13 +106,23 @@ git checkout main
 
 ## 6. 当前状态(阶段一:trunk + tags 已就位)
 
-- **已有 tag(均已推送 origin)**:`v1.1.0` · `v1.1.1` · `v1.1.2`。"无任何 tag、消费者骑 main"的根已拔除。
-  - `v1.1.0` — AI 自动化平台 + 治理线(minor 基线)。
-  - `v1.1.1` @ `af472ae` — idle event-consumer 空转热修。
-  - `v1.1.2` @ `35173dd` — 返回契约线封闭(`returns_schema` 全量 + 契约引擎/守卫 + 两个 bug 修复)。
-- **三者一致**:`package.json.version` = bundle 文件名 `solo.v{ver}.js` = 消费者 `.solo-version` = tag。`v1.1.1`/`v1.1.2` 的 bump 见 CHANGELOG 各条目。
+- **"无任何 tag、消费者骑 main"的根已拔除。** 发过哪些版**现查,别在这里维护清单**——
+  手工副本必然变旧(这段曾停在 `v1.1.2`,而彼时实际已发到 `v1.1.17`,足足差了 15 个):
+
+  ```bash
+  git tag | sort -V | tail -5                    # 最近几个发布点
+  git describe --tags --abbrev=0                 # 当前最新 tag
+  git ls-remote --tags origin | grep -v '\^{}'   # 远端有哪些(本地有、远端没有 = 漏推)
+  ```
+
+  逐版本内容看 [`../planning/CHANGELOG.md`](../planning/CHANGELOG.md)(每个 tag 一条,含"下游 action")。
+- **minor 与 patch 的判据**:**多了一个新的交付物** → minor(`v1.2.0` = 新增
+  `client/extension-kit/` 浏览器插件半边);只加不破的修补 → patch。两者都仍受阶段一纪律约束
+  (不删方法、不缩公开面、library API 只加)。破坏性的一律进 v2。
+- **三者一致**:`package.json.version` = bundle 文件名 `solo.v{ver}.js` = 消费者 `.solo-version` = tag。
+  发版后当场核一遍,对不上就是"忘了部署或忘了打 tag"。
 - **补丁升级已验证**:`v1.1.1` → `v1.1.2` 用一次性消费者真跑通(8/8 断言),做法见 [`upgrade-patch.md`](./upgrade-patch.md)。同 minor 补丁 = 一条 `deploy/scaffold/upgrade.sh`,零手动步骤。
 - **仍待人触发的发布尾步**(§3-4/3-6,需基建/对外权限):从 tag build 的 bundle 归档到 Release/对象存储 + 通知消费者对齐 `.solo-version`。
-- **之后**:阶段一(trunk+tags)继续推 v1.1.x;真要动破坏性架构时,再切 `release/v1.1` + main 转 v2。
+- **之后**:阶段一(trunk+tags)继续推 v1.x;真要动破坏性架构时,再切 `release/v1.x` + main 转 v2。
 
 > ⚠️ **打 tag 是发布声明**(推上去后消费者会依赖它),所以由人触发,不自动。`v1.1.0–v1.1.2` 已按此扣过扳机。
