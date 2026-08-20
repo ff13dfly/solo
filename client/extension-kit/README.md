@@ -1,7 +1,12 @@
 # Extension Kit — 浏览器插件的框架侧半边
 
 > **[Solo] 所有，`upgrade.sh` 整目录覆盖。** 别在这里写站点逻辑——改动下次升级就没了。
-> 你自己的插件（manifest、popup、站点 adapter、DOM 选择器）放 **`client/plugin/`**，那边永不被覆盖。
+> 你自己的扩展（manifest、popup、站点 adapter、DOM 选择器）放 **`client/extension/`**，那边永不被覆盖。
+> 起步：`cp -r sample/* ../extension/`，然后只改 `kit.js` 一行路径（见 [`sample/README.md`](./sample/README.md)）。
+>
+> 🔴 **别跟 `client/plugin/` 搞混**——那是**桌面客户端**的 React 视图插件
+> （`{id, name, icon, entry: "View.tsx"}`，由 `client/desktop` 以 `@plugins/…` import），
+> 与浏览器扩展毫无关系。早期脚手架文档没写清楚，已有派生项目把 MV3 扩展放进了 `plugin/`。
 
 ---
 
@@ -14,6 +19,8 @@
 | **wavely** | `erp/client/plugin/` v1.2.9 | 1688 商品页采集 → `catalog`/`supply` |
 | **steward** | `client/plugin/` | 领工单 → 在店铺后台执行 → 回报 |
 | **trend** | `collector/extension/` | YouTube/Instagram/1688 采集 → `ingress.ingest` |
+
+（三家的落点各不相同，正是因为脚手架此前只有一个含义模糊的空 `client/plugin/` 占位符。）
 
 `wavely/lib/rpc.js` 与 `steward/lib/rpc.js` 逐行 diff：**逻辑差异 0 处**，实质差异只有
 `deviceId` 一个字符串，其余全是注释。`lib/endpoints.js`、`mock/serve.sh` 同样是复制品。
@@ -29,7 +36,31 @@
 | | 框架侧（升级整目录覆盖） | 项目侧（永不覆盖） |
 |---|---|---|
 | 服务 | `api/library/` `api/sample/` `api/autocheck/` | `api/apps/` |
-| **插件** | **`client/extension/`**（本目录） | **`client/plugin/`** |
+| **浏览器扩展** | **`client/extension-kit/`**（本目录，含 `lib/` + `sample/`） | **`client/extension/`**（其中 `kit/` 子目录例外，见下） |
+
+目录形态刻意对齐 `api/`：`lib/` 之于 `api/library/`，`sample/` 之于 `api/sample/`。
+（`client/plugin/` 不在这张表里——它是桌面客户端插件，见顶部 🔴。）
+
+### 🔴 kit 是**复制进**扩展的，不是被 import 出去的
+
+Chrome 扩展的根目录是一棵**封闭的树**：`import '../../extension-kit/lib/rpc.js'` 越过扩展根
+**加载不到**。而它的失败形态是这套东西里最坏的一种——**service worker 注册得起来、
+chrome://extensions 不报错、SW 的 URL 看着完全正常，但模块从未求值，所有调用石沉大海**
+（2026-08-20 实测，playwright 里表现为 `sw.evaluate()` 永久挂住）。
+
+所以每个扩展根内部都要有一份 kit：
+
+```bash
+bash client/extension-kit/sync.sh <你的扩展目录>     # lib/ → <目录>/kit/
+```
+
+`upgrade.sh` 会自动对 `client/extension/`（当它有 `manifest.json` 时）做这件事，
+所以框架修复照样随升级到达；**只有 `kit/` 这个子目录被覆盖**，你的其余文件永不被动。
+`sample/kit/` 已 gitignore——本仓库里跑一次 `sync.sh sample` 即可。
+
+考虑过软链（实测 Chrome 确实跟随），**没有采用**：它在 Windows / `zip -y` / 商店打包下会断，
+而断掉的症状正是上面那个"起得来但完全不工作、不报错"。复制的失败形态是"kit 旧了"，
+看得见、查得出——按仓库一贯的判据，选失败会响的那个。
 
 🔴 **这条边界必须一开始就对。** `portal/operator/` 就是反例：它 scaffold 时拷一次、
 `upgrade.sh` 永不覆盖，于是 SOLO 侧每一处前端修复都要各项目手工回填（v1.1.17 的下游
@@ -47,20 +78,22 @@ action 第 ② 条就是在还这笔债）。本 kit 从第一版起就在覆盖
 | `lib/endpoints.js` | Router 地址单一真源 | wavely + steward 合并 |
 | `lib/session.js` | token 存哪一层、凭据怎么留 | 抽自两家的 `auth.js` |
 | `lib/storage.js` | `chrome.storage` 适配 + 串行化读改写 | 新写（为了可测 + 防并发覆盖） |
+| **`sample/`** | **可直接 load unpacked 的最小扩展**：配 Router → 登录 → 采当前页 → 入队上报 | 新写（= `api/sample/`） |
 
 全部 ESM、零依赖、零构建——MV3 service worker 直接 `import`。
+`sample/` 同时是三样东西：§4 那段接法的**可执行版**、E2E 的 fixture、你自己扩展的起点。
 
 ---
 
 ## 4. 最小接法
 
 ```js
-// client/plugin/background.js   ← 你的项目自己的文件
-import { createRpc, createPasswordAuth } from '../extension/lib/rpc.js';
-import { createQueue }    from '../extension/lib/queue.js';
-import { createSession }  from '../extension/lib/session.js';
-import { createEndpoints } from '../extension/lib/endpoints.js';
-import { chromeArea }     from '../extension/lib/storage.js';
+// client/extension/background.js   ← 你的项目自己的文件（抄 sample/ 改的）
+// 前提：已跑过 bash ../extension-kit/sync.sh .  （kit 必须在扩展根内部，见 §2）
+// kit 路径只出现在 kit.js 这一处（抄 sample 的做法），复制到别处时只改那一行
+import {
+    createRpc, createPasswordAuth, createQueue, createSession, createEndpoints, chromeArea,
+} from './kit.js';
 
 const local   = chromeArea('local');
 const session = createSession({ local, session: chromeArea('session') });
@@ -128,8 +161,11 @@ await queue.drain();
 | 项目 | 删掉 | 换成 |
 |---|---|---|
 | wavely | `lib/rpc.js` `lib/endpoints.js` `lib/image.js` `lib/auth.js` | 本 kit；`stripCdnResize` 作为 `normalizeUrl` 传给 `fetchAsUploadPayload` |
-| steward | `lib/rpc.js` `lib/endpoints.js` `lib/auth.js` | 本 kit；`platforms/` 原样留在 `client/plugin/` |
+| steward | `lib/rpc.js` `lib/endpoints.js` `lib/auth.js` | 本 kit；`platforms/` 原样保留 |
 | trend | `background.js` 里的 `pushToIngress` / `generateRequestId` | 本 kit；**顺带获得它现在完全没有的队列**——那个串行 `for` 循环目前一睡就永久丢数据 |
+
+迁移时顺带把扩展从 `client/plugin/` 挪到 `client/extension/`（前者是桌面插件的位置，
+当初放错了）；`upgrade.sh` 对两者都不碰，挪不挪都不影响升级，只是名正言顺。
 
 `createRpc` 相对两个原版**只有一处行为变化**：重登钩子从写死的
 `getCredentials() → login(name, password)` 改成可注入的 `reauth`。
@@ -141,14 +177,24 @@ await queue.drain();
 
 ```bash
 # SOLO 仓库里（用仓库自己那份 jest，结果确定，不依赖 npx 缓存）
-cd client/extension && PATH="$PWD/../../api/node_modules/.bin:$PATH" npm test
+cd client/extension-kit && PATH="$PWD/../../api/node_modules/.bin:$PATH" npm test
 
 # 派生项目里（需要环境中有可解析的 jest）
-cd client/extension && npm test
+cd client/extension-kit && npm test
 ```
 
 50 用例 / 5 套。独立 config，**不并进 `api/jest.ci.config.js`**：kit 是 ESM，而 ESM 要
 `--experimental-vm-modules`；为它给 127 套既有 CJS 用例都挂上实验标志不划算。
+
+### 真浏览器 E2E
+
+```bash
+cd client/extension-kit/e2e && npm install && npx playwright install chromium && npm test
+```
+
+18 用例，约 22s，**不需要起 SOLO 栈**（自带假 Router）。验的是单元测试结构上够不到的那层：
+kit 在真 MV3 service worker 里是否真的跑起来、队列是否真的落盘、**worker 被回收后条目还在不在**。
+它同时是「扩展根是封闭的树」那个坑的回归守卫——见 [`e2e/README.md`](./e2e/README.md)。
 
 ⚠️ **`node --check` 查不出这里的语法错。** 它按 CJS 解析，`async` 回调里漏写 `async`
 这类错误会一路放行到 jest 才炸成 "Test suite failed to run"。要单独验语法用
@@ -167,5 +213,6 @@ cd client/extension && npm test
   wavely 的 `COLORWAY_MAP` 更是把 catalog 的枚举抄了一份在插件里，服务端加一个色值它就
   静默旧了。要新增 RPC 方法，而方法一旦发布就撤不回来（runbook §5），等第二个实例出现、
   形状清楚了再定。
-- **manifest / popup 骨架**。三家的 manifest 差异主要在 `host_permissions` 与
-  `content_scripts`，都是站点知识；抽骨架的收益还没验证过。
+- **adapter 契约**（steward `platforms/contract.js` 那套：`detect`/`read`/`execute` +
+  `needs_human` 一等结局 + 注册前校验）。它只有一个实例，抽象是否成立要等第二个平台来验
+  ——steward 自己也把这当判据（"接第二个平台花的时间 ≈ 第一个的 30% 则抽象是真的"）。

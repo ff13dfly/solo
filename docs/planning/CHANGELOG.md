@@ -11,7 +11,7 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.1.x`）。
 
-### Added — 浏览器插件 kit（`client/extension/`）+ 客户端所有权边界
+### Added — 浏览器插件 kit（`client/extension-kit/`）+ 客户端所有权边界
 
 > 来源：实扫三个派生项目各自手搓的 MV3 插件（wavely `erp/client/plugin/` v1.2.9 ·
 > steward `client/plugin/` · trend `collector/extension/`）。**`wavely/lib/rpc.js` 与
@@ -22,7 +22,7 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 > 症状是登录成功但什么都读不到"），**而 wavely 自己的文件里没有这条**——抄的人拿到了教训，
 > 被抄的人还在原地等着回归。
 
-- **`client/extension/`（新增，[Solo] 所有）**：`rpc`（网络层失败归一化 -32099 + 退避重试 +
+- **`client/extension-kit/`（新增，[Solo] 所有，形态对齐 `api/library/`+`api/sample/`）**：`lib/` 收：`rpc`（网络层失败归一化 -32099 + 退避重试 +
   会话失效重登）· `endpoints`（地址单一真源，不猜尾斜杠）· `session`（token 存 local/session
   的策略收口）· `image`（分块 base64 + 逐级降质，对齐 `storage.asset.upload` 的 5MB 上限）·
   `storage`（chrome.storage 适配 + 串行化读改写）。ESM、零依赖、零构建。
@@ -31,18 +31,36 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
   **worker 一睡就断在中间且无队列 = 永久静默丢数据**。语义为 **at-least-once**：条目只有
   确认成功才出队，故 `idemKey` 必填（对应 ingress 的 `(source, request_id)` 与实体业务键）；
   溢出 / 永久失败 / 重试用尽**一律进死信，不静默丢**。
-- 🔴 **所有权边界（本次的关键决定）**：`client/extension/` 进 `upgrade.sh` 整目录覆盖清单，
-  `client/plugin/`（manifest / popup / 站点 adapter / 选择器）维持 [Project] 所有、永不覆盖
-  ——等同 `api/library/` 与 `api/apps/` 的分工。**边界必须在第一版就对**：`portal/operator/`
+- **`sample/`（新增）**：最小可加载扩展（配 Router → 登录 → 采当前页 → 入队上报），同时充当
+  README 接法的**可执行版**、E2E fixture、派生项目的起点。已在真 Chrome 里实跑验证
+  （playwright + `channel: 'chromium'`：SW 起来、kit 接线、入队去重、落盘、idemKey 守卫全通）。
+- 🔴 **`sync.sh`：kit 必须复制进扩展根内部，不能 import 出去**。Chrome 扩展的根是一棵封闭的树，
+  `import '../../extension-kit/lib/rpc.js'` 越界**加载不到**，且失败形态极坏——**service worker
+  注册得起来、不报任何错、URL 看着正常，但模块从未求值，所有调用石沉大海**（2026-08-20 实测）。
+  `upgrade.sh` 对有 `manifest.json` 的 `client/extension/` 自动刷新其 `kit/` 子目录，
+  框架修复照样到达，而项目的 manifest / adapter / 选择器永不被动。
+  （软链实测可行但未采用：Windows / `zip -y` / 商店打包下会断，断掉正好是上面那个静默症状。）
+- 🔴 **所有权边界（本次的关键决定）**：`client/extension-kit/` 进 `upgrade.sh` 整目录覆盖清单；
+  **`client/extension/`（项目自己的浏览器扩展）**维持 [Project] 所有、永不覆盖——等同
+  `api/library/`+`api/sample/` 与 `api/apps/` 的分工。**边界必须在第一版就对**：`portal/operator/`
   正是反例（scaffold 拷一次、永不再同步，v1.1.17 的下游 action ② 就是在还这笔债）。
   `init.sh` 同步下发。
-- 回归：`client/extension/tests/` 50 用例 5 套，**独立 jest config**（kit 是 ESM，需
-  `--experimental-vm-modules`；不并进主 gate，避免为它给 127 套既有 CJS 用例挂实验标志）。
+- 🔴 **顺带纠正一处长期歧义**：`client/plugin/` 是**桌面客户端**的 React 视图插件
+  （`{id, name, icon, entry: "View.tsx"}`，由 `client/desktop` 以 `@plugins/…` import），
+  **与浏览器扩展无关**。此前脚手架只给了一个含义模糊的空 `client/plugin/` 占位符，导致
+  wavely / steward 把 MV3 扩展放了进去、trend 另起 `collector/extension/`——三家三个落点。
+  `README.client.md` 现已把三者写清楚，浏览器扩展的正式位置是 `client/extension/`。
+- 回归两层：`tests/` **50 用例**（jest，纯逻辑，独立 config——kit 是 ESM 需
+  `--experimental-vm-modules`，不并进主 gate 以免给 127 套既有 CJS 用例挂实验标志）；
+  `e2e/` **18 用例**（playwright，真 Chrome 装 sample 扩展，自带假 Router 故**不需要活栈**）。
+  E2E 覆盖的是单元测试结构上够不到的那层：kit 在真 MV3 service worker 里是否求值、队列是否
+  真的落盘、**CDP 强杀 worker 后条目是否仍在并能被唤醒补投**、真 `crypto.subtle` 上的挑战响应。
 
 > **下游 action**：无（纯新增，不动任何既有行为）。已有插件的三家可按
-> `client/extension/README.md` §6 迁移——`createRpc` 相对原版只有一处变化：重登钩子从写死的
+> `client/extension-kit/README.md` §6 迁移——`createRpc` 相对原版只有一处变化：重登钩子从写死的
 > "拿存着的密码再登一次"改成可注入的 `reauth`，用 `createPasswordAuth()` 即逐字等价。
-> trend 迁移后**顺带获得它现在完全没有的队列**。
+> trend 迁移后**顺带获得它现在完全没有的队列**；三家可顺手把扩展从 `client/plugin/`
+> 挪到 `client/extension/`（两者 upgrade 都不碰，挪不挪都不影响升级，只是名正言顺）。
 
 > **有意留白**：① passport 设备线——三家都在用内部员工账号 + 明文密码存
 > `chrome.storage.local` 才能自动重登，而 `user.passport.device.issue`/`verify`（设备令牌换

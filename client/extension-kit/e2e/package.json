@@ -1,0 +1,14 @@
+{
+  "name": "solo-extension-kit-e2e",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "真浏览器 E2E：把 sample 扩展装进 Chrome，验 kit 在真 MV3 service worker 里的行为。",
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

@@ -1,0 +1,17 @@
+/* 刻意朴素：sample 的价值在接线，不在样式。你自己的扩展照着项目设计系统改。 */
+:root { color-scheme: light dark; }
+body { width: 300px; margin: 0; padding: 12px; font: 13px/1.5 -apple-system, system-ui, sans-serif; }
+h1 { font-size: 13px; margin: 0 0 10px; letter-spacing: .04em; text-transform: uppercase; opacity: .7; }
+section { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+label { font-size: 11px; opacity: .7; }
+label.row, .row { flex-direction: row; display: flex; align-items: center; gap: 6px; }
+input[type=text], input[type=password], select { padding: 5px 6px; font: inherit; border-radius: 5px;
+  border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; }
+button { padding: 6px 10px; font: inherit; border-radius: 5px; border: 0; cursor: pointer;
+  background: #2563eb; color: #fff; }
+button.secondary { background: transparent; border: 1px solid rgba(128,128,128,.4); color: inherit; }
+button:disabled { opacity: .5; cursor: default; }
+#msg { margin: 0; font-size: 12px; min-height: 1.5em; }
+#msg.err { color: #ef4444; }
+.ok { color: #10b981; margin: 0 0 4px; }
+.muted { opacity: .6; font-size: 11px; margin: 4px 0 0; }

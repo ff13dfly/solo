@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SOLO Sample Collector</title>
+<link rel="stylesheet" href="popup.css">
+<body>
+  <h1>SOLO Sample Collector</h1>
+
+  <section>
+    <label for="endpoint">Router</label>
+    <select id="endpoint"></select>
+  </section>
+
+  <section id="login-box">
+    <label for="name">账号</label>
+    <input id="name" type="text" autocomplete="username">
+    <label for="password">密码</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <label class="row"><input id="remember" type="checkbox"> 记住密码（明文存本机，见 README）</label>
+    <button id="login">登录</button>
+  </section>
+
+  <section id="ready-box" hidden>
+    <p class="ok">已登录</p>
+    <label for="method">上报方法</label>
+    <input id="method" type="text" placeholder="yourservice.capture.create">
+    <button id="capture">采当前页并上报</button>
+    <div class="row">
+      <button id="drain" class="secondary">补送队列</button>
+      <button id="logout" class="secondary">退出</button>
+    </div>
+    <p id="stats" class="muted"></p>
+  </section>
+
+  <p id="msg"></p>
+  <script type="module" src="popup.js"></script>
+</body>

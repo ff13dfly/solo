@@ -11,15 +11,24 @@ client/
 ├── publish/               预构建 bundle（mobile 由 run.sh 自动 serve）
 │   └── mobile.v{{SOLO_VERSION}}.tar.gz
 ├── mobile/                移动端 / PWA 源码（Solo 源码树中开发）
-├── extension/             ⚙️ [Solo] 浏览器插件 kit —— upgrade.sh 整目录覆盖，别改
-├── plugin/                🧩 [Project] 你自己的插件（manifest / popup / 站点 adapter）
+├── extension-kit/         ⚙️ [Solo] 浏览器插件 kit + sample —— upgrade.sh 整目录覆盖，别改
+├── extension/             🧩 [Project] 你自己的浏览器扩展（manifest / popup / 站点 adapter）
+├── plugin/                🖥 桌面客户端的视图插件 —— 与浏览器扩展**无关**
 └── README.md
 ```
 
-> **`extension/` 与 `plugin/` 的分工，等同于 `api/library/` 与 `api/apps/`。**
-> 传输、重试、持久化队列、图片规格化、会话——这些每家都一样的东西在 `extension/`，
-> 随升级到达；manifest、DOM 选择器、字段映射这些站点知识在 `plugin/`，永不被覆盖。
-> 改错边界的代价见 `client/extension/README.md` §2。
+> **`extension-kit/` 与 `extension/` 的分工，等同于 `api/library/`+`api/sample/` 与 `api/apps/`。**
+> 传输、重试、持久化队列、图片规格化、会话——这些每家都一样的东西在 `extension-kit/`，随升级到达；
+> manifest、DOM 选择器、字段映射这些站点知识在 `extension/`，永不被覆盖。
+> 起步：把 `client/extension-kit/sample/` 的文件抄进 `client/extension/`，再跑
+> `bash client/extension-kit/sync.sh client/extension/`（kit 必须复制进扩展根内部——
+> Chrome 扩展的根是封闭的树，越界 import 会让 service worker **起得来但完全不工作且不报错**）。
+> 之后 `upgrade.sh` 只刷新 `client/extension/kit/`，你的其余文件永不被动。
+> 改错边界的代价见 `client/extension-kit/README.md` §2。
+
+> 🔴 **`plugin/` 不是浏览器扩展。** 它是**桌面客户端**（Tauri）按需 `import()` 的 React 视图插件，
+> manifest 形如 `{id, name, icon, entry: "View.tsx"}`，与 MV3 的 `manifest_version: 3` 是两套东西。
+> 早期文档没写清楚，已有派生项目把 MV3 扩展放进了 `plugin/`——那是**将错就错**，新项目请用 `extension/`。
 
 > **desktop 不在脚手架范围内。** 桌面端应用独立开发、独立发布，不通过 `run.sh` 管理。
 

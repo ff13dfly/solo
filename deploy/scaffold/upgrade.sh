@@ -18,7 +18,7 @@
 # Overwrites ([Solo]-owned, whole-artifact replace):
 #   api/publish/solo.v{ver}.js   .solo-version
 #   api/library  api/sample  api/autocheck      (whole-dir replace)
-#   client/extension/                     (whole-dir replace — browser-extension kit)
+#   client/extension-kit/                 (whole-dir replace — browser-extension kit + sample)
 #   docs/  (README index + authoring/{service,events,workflows}.md + workflow-examples/)
 #       (version-pinned authoring contracts — re-templated, engine-accurate; stale = wrong.
 #        Pre-docs/ projects' old api/AUTHORING.*.md + workflows/ are migrated here and removed.)
@@ -27,12 +27,14 @@
 #       (stale-version tarballs of these two pruned first)
 #
 # NEVER touches ([Project]-owned):
-#   .env  .keypair  api/seed.json  api/apps/  portal/operator/  client/plugin/
-#       (client/plugin/ = the project's own extension: manifest, popup, site adapters,
-#        DOM selectors. The upgradeable half lives in client/extension/ — same split as
-#        api/library (Solo) vs api/apps (project). Getting this boundary wrong is what
-#        froze portal/operator/ on day one: it is scaffolded once and never re-synced,
-#        so every Solo-side fix to it has to be back-filled by hand in each project.)
+#   .env  .keypair  api/seed.json  api/apps/  portal/operator/  client/extension/  client/plugin/
+#       (client/extension/ = the project's OWN browser extension: manifest, popup, site
+#        adapters, DOM selectors. The upgradeable half is client/extension-kit/ — same
+#        split as api/library+api/sample (Solo) vs api/apps (project). Getting this
+#        boundary wrong is what froze portal/operator/ on day one: scaffolded once, never
+#        re-synced, so every Solo-side fix has to be back-filled by hand in each project.
+#        client/plugin/ is a DIFFERENT thing — desktop-client view plugins, loaded by
+#        client/desktop as @plugins/<id>/<entry>.tsx; nothing to do with browsers.)
 #   deploy/services.json  deploy/solo-services.json  deploy/seed.json  e2e/
 #   portal/publish/operator.*.tar.gz  (operator is source-distributed — team's)
 #
@@ -151,20 +153,46 @@ for d in library sample autocheck; do
     fi
 done
 
-# 3c. Browser-extension kit (client/extension/) — whole-dir replace, same contract as
-#     api/library: [Solo] owns it, fixes must reach existing projects on upgrade.
+# 3c. Browser-extension kit (client/extension-kit/) — whole-dir replace, same contract as
+#     api/library + api/sample: [Solo] owns it, fixes must reach existing projects on upgrade.
 #     @why a separate block instead of extending 3b's loop: 3b is rooted at api/, and this
 #     one has to create client/ for projects scaffolded before the kit existed.
-#     The project's OWN extension (manifest, popup, site adapters, selectors) lives in
-#     client/plugin/ and is never touched — see the ownership header.
-if [ -d "$SOLO_DIR/client/extension" ]; then
+#     The project's OWN extension lives in client/extension/ and is never touched
+#     (and client/plugin/ is desktop-client plugins) — see the ownership header.
+if [ -d "$SOLO_DIR/client/extension-kit" ]; then
     if [ $DRY -eq 0 ]; then
         mkdir -p "$PROJ/client"
-        rm -rf "$PROJ/client/extension"
-        cp -r "$SOLO_DIR/client/extension" "$PROJ/client/extension"
-        rm -rf "$PROJ/client/extension/node_modules"
+        rm -rf "$PROJ/client/extension-kit"
+        cp -r "$SOLO_DIR/client/extension-kit" "$PROJ/client/extension-kit"
+        rm -rf "$PROJ/client/extension-kit/node_modules" \
+               "$PROJ/client/extension-kit/e2e/node_modules" \
+               "$PROJ/client/extension-kit/e2e/test-results" \
+               "$PROJ/client/extension-kit/e2e/playwright-report"
+        # sample/kit/ is a sync product (gitignored in Solo). Regenerate from the copy we
+        # just landed rather than trusting Solo's working tree — a fresh clone has none,
+        # which would leave the sample silently unloadable.
+        rm -rf "$PROJ/client/extension-kit/sample/kit"
+        mkdir -p "$PROJ/client/extension-kit/sample/kit"
+        cp "$PROJ/client/extension-kit"/lib/*.js "$PROJ/client/extension-kit/sample/kit/"
     fi
-    REPORT+=("extension kit -> client/extension/  (whole-dir replace)")
+    REPORT+=("extension kit -> client/extension-kit/  (whole-dir replace)")
+
+    # 3c-2. If the project actually HAS an extension, refresh the kit copy embedded in it.
+    #   @why a copy inside the extension and not an import out of client/extension-kit/:
+    #   a Chrome extension root is a closed tree — `import '../../…'` past the root does
+    #   not load, and it fails in the worst possible way: the service worker registers
+    #   fine and reports nothing, but the module never evaluates, so every call silently
+    #   goes nowhere (measured 2026-08-20). Hence one copy inside each extension root.
+    #   Only the kit/ subdir is replaced; everything else in client/extension/ is the
+    #   project's and is never touched.
+    if [ -f "$PROJ/client/extension/manifest.json" ]; then
+        if [ $DRY -eq 0 ]; then
+            rm -rf "$PROJ/client/extension/kit"
+            mkdir -p "$PROJ/client/extension/kit"
+            cp "$SOLO_DIR/client/extension-kit"/lib/*.js "$PROJ/client/extension/kit/"
+        fi
+        REPORT+=("extension kit -> client/extension/kit/  (embedded copy refreshed)")
+    fi
 fi
 
 # 3d. Authoring / contract docs pack (docs/) — version-pinned, engine-accurate; re-template + replace.
@@ -295,8 +323,9 @@ echo "Changes:"
 for line in "${REPORT[@]}"; do echo "   • $line"; done
 echo ""
 echo "Left untouched ([Project]-owned): .env .keypair api/seed.json api/apps/ portal/operator/"
-echo "   client/plugin/ deploy/services.json deploy/solo-services.json deploy/seed.json e2e/"
-echo "   (client/extension/ IS Solo-owned and was replaced — put your adapters in client/plugin/)"
+echo "   client/extension/ client/plugin/ deploy/services.json deploy/solo-services.json"
+echo "   deploy/seed.json e2e/"
+echo "   (client/extension-kit/ IS Solo-owned and was replaced — your extension goes in client/extension/)"
 
 # --- 6. Post-upgrade self-check (only when actually written) ---
 if [ $DRY -eq 0 ]; then

@@ -1,0 +1,11 @@
+{
+    "manifest_version": 3,
+    "name": "SOLO Sample Collector",
+    "version": "1.0.0",
+    "description": "SOLO 插件 kit 的可运行示例：配置 Router → 登录 → 采当前页 → 入队上报。抄它当起点。",
+    "permissions": ["storage", "alarms", "activeTab"],
+    "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
+    "optional_host_permissions": ["http://*/*", "https://*/*"],
+    "background": { "service_worker": "background.js", "type": "module" },
+    "action": { "default_popup": "popup/popup.html", "default_title": "SOLO Sample Collector" }
+}

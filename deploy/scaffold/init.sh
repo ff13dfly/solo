@@ -90,6 +90,7 @@ mkdir -p "$NEW_DIR/client/publish"
 mkdir -p "$NEW_DIR/client/mobile"
 mkdir -p "$NEW_DIR/client/plugin"
 mkdir -p "$NEW_DIR/client/extension"
+mkdir -p "$NEW_DIR/client/extension-kit"
 
 log_info "Directory structure created"
 
@@ -210,15 +211,24 @@ rsync -a \
   "$SOLO_DIR/portal/operator/" "$NEW_DIR/portal/operator/"
 log_info "Copied: portal/operator (source — run  npm install  to set up)"
 
-# Browser-extension kit: [Solo]-owned, whole-dir replaced by upgrade.sh (unlike
-# client/plugin/, which is the project's own extension and never touched). Ship it at
-# init so a project that later wants an extension already has the upgradeable half.
-rsync -a --exclude='node_modules' "$SOLO_DIR/client/extension/" "$NEW_DIR/client/extension/"
-log_info "Copied: client/extension (Solo-owned kit — adapters go in client/plugin/)"
+# Browser-extension kit + sample: [Solo]-owned, whole-dir replaced by upgrade.sh.
+# The project's OWN extension goes in client/extension/ (never touched); client/plugin/
+# is a different thing entirely (desktop-client view plugins). Ship the kit at init so a
+# project that later wants an extension already has the upgradeable half in place.
+# sample/kit/ is a sync product (gitignored in Solo) — never carry the source tree's copy:
+# a fresh Solo clone has none at all, which would ship a silently broken sample. Regenerate
+# it from the destination's own lib/ so it is correct regardless of Solo's working-tree state.
+rsync -a --exclude='node_modules' --exclude='sample/kit' \
+  --exclude='test-results' --exclude='playwright-report' \
+  "$SOLO_DIR/client/extension-kit/" "$NEW_DIR/client/extension-kit/"
+mkdir -p "$NEW_DIR/client/extension-kit/sample/kit"
+cp "$NEW_DIR/client/extension-kit"/lib/*.js "$NEW_DIR/client/extension-kit/sample/kit/"
+log_info "Copied: client/extension-kit (Solo-owned kit + runnable sample — your extension goes in client/extension/)"
 
 touch "$NEW_DIR/portal/system/.gitkeep"
 touch "$NEW_DIR/client/mobile/.gitkeep"
 touch "$NEW_DIR/client/plugin/.gitkeep"
+touch "$NEW_DIR/client/extension/.gitkeep"
 log_info "Created: portal/README.md, client/README.md (with placeholder subdirs)"
 
 # --- 8. Frontend bundles (build-is-source-of-truth) ---
