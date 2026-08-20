@@ -102,7 +102,7 @@ bash deploy/scaffold/init.sh <project-name>
 | 生成初始 admin 密码 | `api/seed.json` + 明文写入 `SETUP.md` |
 | 生成随机 `JWT_SECRET` | 写入 `.env` |
 | 复制 `library/` / `autocheck/` / `sample/` | `api/` 下对应目录 |
-| 复制契约文档包 | `docs/`（`README.md` 索引 + `authoring/{service,events,workflows}.md` + `workflow-examples/`；详见下方「契约文档包」） |
+| 复制契约文档包 | `docs/`（`README.md` 索引 + `authoring/{modeling,service,events,workflows}.md` + `workflow-examples/`；详见下方「契约文档包」） |
 | 复制守门 skill | `.claude/skills/solo-service/`（建/改服务的 Claude Code 技能，收口 `autocheck`；详见下方「契约文档包」） |
 | 复制 `portal/operator` 源码（Vite/React） | `portal/operator/`（团队直接改 UI；`cd portal/operator && npm install`） |
 | 构建 + 复制前端 bundle（operator/system/mobile） | `portal/publish/*.tar.gz` + `client/publish/*.tar.gz`（版本钉 `.solo-version`；详见下方「前端 bundle 分发」） |
@@ -308,14 +308,15 @@ cd /path/to/<project> && bash deploy/run.sh
 
 ## 契约文档包（docs/）
 
-脚手架把"怎么写"所需的全部信息都下发到了项目根的 **`docs/`**，`docs/README.md` 是手册唯一入口。三份指南都与执行引擎**逐字段对齐**，让下游团队或下游仓里的 AI **只凭脚手架交付的信息**就能写出 wire 兼容的产物，无需回读 Solo 源码：
+脚手架把"怎么写"所需的全部信息都下发到了项目根的 **`docs/`**，`docs/README.md` 是手册唯一入口。四份指南都与执行引擎**逐字段对齐**，让下游团队或下游仓里的 AI **只凭脚手架交付的信息**就能写出 wire 兼容的产物，无需回读 Solo 源码：
 
+- **`docs/authoring/modeling.md`** — **动代码前的第一步**：把业务整理成「服务 × 实体」。先对着 core 已有能力扫一遍（多数需求不必新建服务），再用三个是非题判实体边界（能否单独创建/删除/列表）与服务边界（典型用例的跨服务往返次数 / 能否单独摘除）。**autocheck 校验的是 wire 契约、不是设计——划分错了照样全绿**，所以这一步没有门禁兜底，只能靠判据。
 - **`docs/authoring/service.md`** — 在 `api/apps/` 下写一个 Router 能识别/转发的服务：方法命名、introspection 声明 ↔ index 注册、library factory、权限与数据约束。
 - **`docs/authoring/events.md`** — 服务级事件与自动化：`_event`（事实扇出）/ `_tasks`（副作用派发）/ 四种触发源 / 重投幂等。
 - **`docs/authoring/workflows.md`** — orchestrator workflow 的**声明式 JSON** 语法（逐字段对齐 runner）：按顺序经 Router 调一串 `{service}.{entity}.{action}`，步骤间用 `$input/$config/$step/$context` 变量传值、用 JsonLogic 条件分支；含 step 结构、resolver、input_schema、触发与事件订阅、`create → PENDING_REVIEW → approve → ACTIVE` 生命周期，以及 5 个最常见的坑。
 - **`docs/authoring/workflow-examples/`** — 三个可跑 workflow 示例（只用脚手架自带的 `sample` + 核心 `notification`，起栈即可试）：sync 单步、多步链路 + 条件、事件触发。
 
-> **为什么要单独下发**：方法"词汇"（有哪些方法、参数、返回）运行时就能查到——Router 内省后把 capability 目录写进 Redis（`system:capability:list` 全量目录 + `AGENT:CAPABILITY_SNAPSHOT:ZH|EN` 给 AI 的语义快照）。但拼成合法请求 / workflow 的"语法"只在 Solo 源码/协议里。这份契约以前散落在 `api/` 与 `workflows/` 两处，现在**统一收进 `docs/`**，一个入口讲清服务 / 事件 / 工作流三件事。
+> **为什么要单独下发**：方法"词汇"（有哪些方法、参数、返回）运行时就能查到——Router 内省后把 capability 目录写进 Redis（`system:capability:list` 全量目录 + `AGENT:CAPABILITY_SNAPSHOT:ZH|EN` 给 AI 的语义快照）。但拼成合法请求 / workflow 的"语法"只在 Solo 源码/协议里。这份契约以前散落在 `api/` 与 `workflows/` 两处，现在**统一收进 `docs/`**，一个入口讲清形态 / 服务 / 事件 / 工作流四件事。
 >
 > ⚠️ Solo 仓 `docs/protocol/zh/*` 是更宏大的协议草案，其中 `$resolved`/`$consensus`/字符串 `condition`/`agent_consensus` 等当前引擎并不执行。**以下发的 `docs/authoring/*` 为准。**
 

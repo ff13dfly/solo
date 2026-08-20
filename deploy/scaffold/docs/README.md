@@ -5,8 +5,8 @@
 # {{PROJECT_NAME}} · 文档 / 契约手册
 
 > 这是 **{{PROJECT_NAME}}**（基于 Solo v{{SOLO_VERSION}} 脚手架）的唯一手册入口。
-> 下面三份「编写指南」由 Solo 随脚手架下发、**与执行引擎逐字段对齐**——一个 AI 或人**只凭这里的信息**就能写出 wire 兼容的服务、事件、工作流。
-> 它们是版本钉死的（`.solo-version`）契约，`bash deploy/upgrade.sh` 升级时会**整体重下发**——不要手改这三份，会被覆盖。
+> 下面四份「编写指南」由 Solo 随脚手架下发、**与执行引擎逐字段对齐**——一个 AI 或人**只凭这里的信息**就能把业务整理成服务形态，并写出 wire 兼容的服务、事件、工作流。
+> 它们是版本钉死的（`.solo-version`）契约，`bash deploy/upgrade.sh` 升级时会**整体重下发**——不要手改这四份，会被覆盖。
 
 ---
 
@@ -14,12 +14,14 @@
 
 | 你要做的事 | 看哪份 | 一句话 |
 |------------|--------|--------|
+| **决定该写哪些服务**（动代码前的第一步） | [`authoring/modeling.md`](./authoring/modeling.md) | 把业务整理成「服务 × 实体」：先查 core 已有什么，再用三个是非题判实体边界与服务边界。**门禁查的是 wire 契约、不是设计，划分错了照样全绿**——所以这一步只能靠判据。 |
 | 在 `api/apps/` 下**写一个新服务** | [`authoring/service.md`](./authoring/service.md) | Router 能识别/转发的服务长什么样：方法命名、introspection 声明 ↔ index 注册、library factory、权限与约束。 |
 | 让服务**发/收事件、做自动化** | [`authoring/events.md`](./authoring/events.md) | `_event`（事实扇出）/ `_tasks`（副作用派发）/ 四种触发源 / 重投幂等。 |
 | **写一条编排工作流** | [`authoring/workflows.md`](./authoring/workflows.md) | orchestrator 引擎对齐的 workflow 语法；配套 [`authoring/workflow-examples/`](./authoring/workflow-examples/) 三个可跑示例（sync 单步 / 多步+条件 / 事件触发）。 |
 
 > 方法**词表**（有哪些 `{service}.{entity}.{action}` 可调）在运行时可发现：Router 的能力目录写在 Redis 里。
-> 这三份补的是**语法/契约**——词表查得到，但怎么拼成合法请求要看这里。
+> 后三份补的是**语法/契约**——词表查得到，但怎么拼成合法请求要看这里；
+> `modeling.md` 补的是更前面那一步的**形态**——语法全对但划分错了，是门禁拦不住的错误。
 
 ---
 

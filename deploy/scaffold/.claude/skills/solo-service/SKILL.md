@@ -19,6 +19,10 @@ inside the contract and ends on a gate that proves it.
 
 Before writing anything, read — in this order:
 
+0. **`docs/authoring/modeling.md`** — FIRST, and only if the service boundaries aren't settled yet:
+   which services should exist at all, and which nouns are entities vs fields. **autocheck validates the
+   wire contract, not the design** — a wrongly-partitioned set of services passes every gate below.
+   Skip only when you're modifying an existing service whose shape is already decided.
 1. **`docs/README.md`** → **`docs/authoring/service.md`** — the service contract, distilled from
    and aligned to the engine. **§0/§4「先复用别重写」** is the most important part.
 2. **`api/sample/`** — a complete, runnable service. **Copy it and adapt** — do not start from blank.

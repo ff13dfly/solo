@@ -176,12 +176,12 @@ log_info "Copied: autocheck, library, sample"
 mkdir -p "$NEW_DIR/docs/authoring/workflow-examples"
 sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" -e "s|{{SOLO_VERSION}}|$SOLO_VERSION|g" \
     "$SCRIPT_DIR/docs/README.md" > "$NEW_DIR/docs/README.md"
-for _doc in service.md events.md workflows.md; do
+for _doc in modeling.md service.md events.md workflows.md; do
     sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" -e "s|{{SOLO_VERSION}}|$SOLO_VERSION|g" \
         "$SCRIPT_DIR/docs/authoring/$_doc" > "$NEW_DIR/docs/authoring/$_doc"
 done
 cp "$SCRIPT_DIR/docs/authoring/workflow-examples/"*.json "$NEW_DIR/docs/authoring/workflow-examples/"
-log_info "Copied: docs/ (README index + authoring/{service,events,workflows}.md + $(ls "$SCRIPT_DIR/docs/authoring/workflow-examples/"*.json | wc -l | tr -d ' ') workflow examples)"
+log_info "Copied: docs/ (README index + authoring/{modeling,service,events,workflows}.md + $(ls "$SCRIPT_DIR/docs/authoring/workflow-examples/"*.json | wc -l | tr -d ' ') workflow examples)"
 
 # --- 6b. Agent skill: solo-service (the contract, ENFORCED) ---
 # The authoring docs (6a) are the readable contract; this Claude Code skill makes it executable.

@@ -10,7 +10,31 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 ## [Unreleased]
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
-> 暂无。
+
+### Added — 契约文档包补上「划分」这一层：`docs/authoring/modeling.md`
+
+> 缺口：下发包此前只回答「怎么写一个服务」，不回答「该写哪些服务」。`docs/README.md` 自己
+> 划的界就是「补的是语法/契约」，守门 skill 也写明只在 `creating OR modifying a microservice
+> under api/apps/` 时触发——即**已经决定要建这个服务之后**。于是从业务需求到服务/实体划分
+> 这一步，框架不下发任何东西。这一层没有门禁兜底：**autocheck 校验的是 wire 契约、不是设计，
+> 一套划分错误的服务可以全绿通过**，对「AI 照着 skill 写」的场景尤其危险。
+
+- **新增 `deploy/scaffold/docs/authoring/modeling.md`**（下发第 4 份 authoring 契约）。内容全部
+  收敛成**可判定的判据**，不写「视情况而定」：§0 core 能力对照表（多数需求不必新建服务）；
+  §2.1 实体三问（能否单独创建 / 单独删除 / 单独列表——三个「否」就是字段不是实体）；
+  §2.2 用框架红线「服务间禁止直接互调」反推服务边界（典型用例跨服务往返 ≥2 次且总是同一批
+  服务 ⇒ 应合并）；§2.3 单独摘除测试（能从 `services.json` 删掉而其余照常 ⇒ 可独立成服务）；
+  §4 体检信号附 Solo 自身 13 服务实测基线（实体数 0–4、中位 1；方法数 3–54）。
+- **接线 8 处**（漏一处就静默不下发/不同步）：`init.sh` 与 `upgrade.sh` 的 `_doc` 下发循环、
+  两者的清单注释与报告文案、`docs/README.md` 索引表、`scaffold/README.md` 契约包章节、
+  `SETUP.template.md`、`check-doc-drift.js` 的存在性校验（CI 现强制它必须在）。
+- **守门 skill 的阅读顺序加了第 0 步**：边界未定时先读 modeling.md；改存量服务可跳过。
+
+> 验证：`init.sh` 与 `upgrade.sh` 两条路径均**端到端实跑**（新建项目下发 + 存量项目删档后重下发），
+> 模板变量渲染零残留；`check-doc-drift.js` 绿。
+>
+> **下游 action：无**（升级后 `docs/authoring/` 会多出 `modeling.md`，建新服务前建议先读；
+> 既有服务不受影响，无迁移动作）。
 
 ---
 

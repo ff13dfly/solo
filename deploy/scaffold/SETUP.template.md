@@ -45,6 +45,6 @@ rm SETUP.md
 - **让服务发/收事件、做自动化**：看 **`docs/authoring/events.md`** —— `_event`（事实扇出）/ `_tasks`（副作用派发）/ 四种触发源 / 重投幂等。
 - **写编排工作流**：看 **`docs/authoring/workflows.md`**（引擎对齐的语法 + `docs/authoring/workflow-examples/` 可跑示例）。
 
-> 这套契约（`docs/`：README 索引 + `authoring/{service,events,workflows}.md` + 示例）随版本下发、与执行引擎逐字段对齐（升级时 `upgrade.sh` 会整体同步，别手改）。
+> 这套契约（`docs/`：README 索引 + `authoring/{modeling,service,events,workflows}.md` + 示例）随版本下发、与执行引擎逐字段对齐（升级时 `upgrade.sh` 会整体同步，别手改）。
 > Solo 仓 `docs/protocol/zh/*` 是更宏大的内部草案（含未实现项），照着写以本 `docs/` + 代码为准。
 > Solo 内部服务的端口分配见 `deploy/solo-services.json`（本项目专属，升级不覆盖）。

@@ -145,7 +145,7 @@ for (const rel of README_TEMPLATES) {
 }
 
 // ── 5. 脚手架契约文档包（docs/）：必须存在，且 workflow 示例对引擎合法 ──────
-// init.sh 把 docs/{README.md,authoring/{service,events,workflows}.md,authoring/workflow-examples/*.json}
+// init.sh 把 docs/{README.md,authoring/{modeling,service,events,workflows}.md,authoring/workflow-examples/*.json}
 // 下发给每个新项目，让下游 AI/人只凭脚手架就能写出 wire 兼容的服务/事件/workflow。这里守三件事：
 //   (a) 文档包还在（README 索引 + service/events/workflows 三份 + 至少一个示例）——别在重构脚手架时漏带；
 //   (b) 每个示例对照 orchestrator create()/runner 的硬规则仍然合法——示例若教错，
@@ -154,7 +154,7 @@ const WF_KIT = path.join(ROOT, 'deploy/scaffold/docs/authoring');
 const WF_EXAMPLES = path.join(WF_KIT, 'workflow-examples');
 let wfExampleCount = 0;
 // (a) whole-pack presence: README index + the three engine-aligned authoring guides.
-for (const _rel of ['docs/README.md', 'docs/authoring/service.md', 'docs/authoring/events.md', 'docs/authoring/workflows.md']) {
+for (const _rel of ['docs/README.md', 'docs/authoring/modeling.md', 'docs/authoring/service.md', 'docs/authoring/events.md', 'docs/authoring/workflows.md']) {
     if (!fs.existsSync(path.join(ROOT, 'deploy/scaffold', _rel))) {
         errors.push(`deploy/scaffold/${_rel} 缺失——脚手架契约文档包未下发（init.sh 第 6a 步会复制 docs/）`);
     }
@@ -229,4 +229,4 @@ if (errors.length) {
     console.error('\n修复：更新 CLAUDE.md §2 表格 / deploy/services.json，或同步 introspection 声明 ↔ index.js 注册。');
     process.exit(1);
 }
-console.log(`✅ 文档漂移检查通过：CLAUDE.md §2 ↔ services.json（${serviceNames.size} 服务 + 端口）+ config.js portFor 兜底 ↔ services.json 端口一致（端口单一真源）+ 各服务 introspection ↔ index 注册一致 + 脚手架 README 无硬编码 bundle 版本 + 契约文档包就位（docs/README + authoring/{service,events,workflows}.md + ${wfExampleCount} workflow 示例，引擎合法）+ 下游守门 skill 就位（solo-service，含 autocheck 门禁）。`);
+console.log(`✅ 文档漂移检查通过：CLAUDE.md §2 ↔ services.json（${serviceNames.size} 服务 + 端口）+ config.js portFor 兜底 ↔ services.json 端口一致（端口单一真源）+ 各服务 introspection ↔ index 注册一致 + 脚手架 README 无硬编码 bundle 版本 + 契约文档包就位（docs/README + authoring/{modeling,service,events,workflows}.md + ${wfExampleCount} workflow 示例，引擎合法）+ 下游守门 skill 就位（solo-service，含 autocheck 门禁）。`);

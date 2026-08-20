@@ -19,7 +19,7 @@
 #   api/publish/solo.v{ver}.js   .solo-version
 #   api/library  api/sample  api/autocheck      (whole-dir replace)
 #   client/extension-kit/                 (whole-dir replace — browser-extension kit + sample)
-#   docs/  (README index + authoring/{service,events,workflows}.md + workflow-examples/)
+#   docs/  (README index + authoring/{modeling,service,events,workflows}.md + workflow-examples/)
 #       (version-pinned authoring contracts — re-templated, engine-accurate; stale = wrong.
 #        Pre-docs/ projects' old api/AUTHORING.*.md + workflows/ are migrated here and removed.)
 #   .claude/skills/solo-service/SKILL.md   (Solo-owned authoring guardrail skill — re-templated)
@@ -243,13 +243,13 @@ rm -f "$_readme_tmp"
 
 if [ $DRY -eq 0 ]; then
     mkdir -p "$PROJ/docs/authoring/workflow-examples"
-    for _doc in service.md events.md workflows.md; do
+    for _doc in modeling.md service.md events.md workflows.md; do
         sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" -e "s|{{SOLO_VERSION}}|$SOLO_VERSION|g" \
             "$SCRIPT_DIR/docs/authoring/$_doc" > "$PROJ/docs/authoring/$_doc"
     done
     cp "$SCRIPT_DIR/docs/authoring/workflow-examples/"*.json "$PROJ/docs/authoring/workflow-examples/"
 fi
-REPORT+=("authoring   → docs/authoring/{service,events,workflows}.md + examples  (version-pinned contracts, whole-file re-sync)")
+REPORT+=("authoring   → docs/authoring/{modeling,service,events,workflows}.md + examples  (version-pinned contracts, whole-file re-sync)")
 
 # 3d-migrate. Pre-docs/ projects shipped these Solo-owned authoring files at api/AUTHORING.*.md
 #     and workflows/. Now consolidated under docs/ (above), so upgrade would otherwise leave the
