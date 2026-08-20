@@ -353,7 +353,10 @@ if [ $DRY -eq 0 ]; then
     # 重建 tarball——它恰恰此前是自检唯一跳过的那个。这里把失配放大成 ACTION,并附
     # 可直接复制的重建命令(「知道该重建」和「知道怎么重建」之间隔着一次翻源码)。
     # 背景:solo/docs/feedback/done/scaffold-startup-guards-fallout.md §③ + patch-upgrade-consumer-gaps.md §三
-    _op_port=$(grep -E '^[[:space:]]*PORTAL_OPERATOR_PORT=' "$PROJ/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
+    # 走共享解析器：此前这里是 grep | cut | tr，**不剥引号** —— .env 里按规范写成
+    # PORTAL_OPERATOR_PORT='3600' 时会取成带引号的 '3600'，于是端口比对永远不相等。
+    # api/library/ 在本脚本第 146 行就已整目录覆盖完，此处一定取得到 env.js。
+    _op_port=$(node "$PROJ/api/library/env.js" "$PROJ/.env" PORTAL_OPERATOR_PORT 2>/dev/null || true)
     _op_tars=$(ls "$PROJ/portal/publish/operator.v"*.tar.gz 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ' || true)
     if [ -f "$PROJ/portal/publish/operator.v${SOLO_VERSION}.tar.gz" ]; then
         log_info "operator: operator.v${SOLO_VERSION}.tar.gz (matches .solo-version)"

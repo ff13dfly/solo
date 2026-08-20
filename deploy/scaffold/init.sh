@@ -450,16 +450,38 @@ GATEWAY_SECRET_KEY=$GATEWAY_SECRET_KEY
 # EMAIL_FROM=noreply@example.com
 #
 # SMTP channel（也可不配这里，改用 gateway.smtp.create 建多账号、发送时传 smtpId）:
+# 换邮箱厂商只改下面三行即可，不需要写任何适配器 —— SMTP 是标准协议，各家说同一套话。
+#   Gmail   smtp.gmail.com   587 + SECURE=false（或 465 + true）
+#   163     smtp.163.com     465 + SECURE=true
+#   QQ      smtp.qq.com      465 + SECURE=true
+#   Outlook smtp.office365.com 587 —— 基本认证已被微软停用，只剩 OAuth2，当前不支持
 # EMAIL_SMTP_HOST=smtp.example.com
 # EMAIL_SMTP_PORT=587
 # EMAIL_SMTP_SECURE=false
 # EMAIL_SMTP_USER=user@example.com
-# EMAIL_SMTP_PASS=yourpassword
+#
+# ⚠️ PASS 多半不是你的登录密码：Gmail 要"应用专用密码"（须先开两步验证），
+#    163/QQ 要"授权码"（在邮箱设置里单独开 SMTP 服务）。填错的报错是
+#    535-5.7.8 Username and Password not accepted —— 它和"密码失效""被风控"
+#    完全同一个症状，不指向具体哪里错。
+#    Gmail 的应用专用密码全是小写字母，抄的时候当心 l(小写L) / I(大写i) / 1 同形。
+# EMAIL_SMTP_PASS=应用专用密码或授权码
+#
+# 可选：透传给 nodemailer 的其余 transport 选项（JSON 对象，解析失败会当场报错）。
+# 用于 host/port/secure 表达不了的开关：requireTLS、tls 的 rejectUnauthorized/ciphers、
+# pool + rateLimit（各家限速不同）、name（EHLO 名）、各类 timeout。
+# ⚠️ 它覆盖不了 host/port/secure/auth —— 显式字段永远优先（安全边界）。
+# ⚠️ 必须用单引号包住：本文件有两类消费者，run.sh 走 shell source 会把裸值里的双引号
+#    剥掉（变成 {requireTLS:true}，不再是合法 JSON），而 dotenv 不会 —— 两边解析不一致。
+#    加单引号后两条路拿到的都是原样 JSON。
+# EMAIL_SMTP_OPTIONS='{"requireTLS":true}'
 #
 # HTTP API channel —— body 形状 = Resend 兼容（{from,to,subject,text,html}）。
-# SendGrid / SES 的 body 形状不同，换它们需要在 logic/email.js 加适配器，光改 URL 不通。
+# 这里与 SMTP 相反：每家 body 形状不兼容，SendGrid / SES 需要在 logic/email.js 的
+# API_PROVIDERS 加适配器并设 EMAIL_API_PROVIDER，光改 URL 不通。
 # EMAIL_API_KEY=re_xxxx
 # EMAIL_API_URL=https://api.resend.com/emails
+# EMAIL_API_PROVIDER=resend
 
 # SMS —— channel: auto | aliyun | twilio | mock
 # auto = aliyun if SMS_ALIYUN_KEY_ID set, twilio if SMS_TWILIO_SID set, else mock

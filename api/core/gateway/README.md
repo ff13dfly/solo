@@ -62,7 +62,8 @@ EMAIL_SMTP_PORT=587                    # 587 配 SECURE=false（STARTTLS）／46
 EMAIL_SMTP_SECURE=false
 EMAIL_SMTP_USER=you@example.com
 EMAIL_SMTP_PASS=<授权码/应用专用密码>   # 多数厂商不收登录密码，见下表
-EMAIL_SMTP_OPTIONS={"requireTLS":true} # 可选：透传 nodemailer 其余选项（JSON 对象）
+EMAIL_SMTP_OPTIONS='{"requireTLS":true}'  # 可选：透传 nodemailer 其余选项。⚠️ 必须单引号：
+                                       # run.sh 走 shell source 会剥掉裸值里的双引号
 
 # sms
 SMS_CHANNEL=auto                       # auto|aliyun|twilio|mock

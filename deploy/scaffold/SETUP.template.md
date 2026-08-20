@@ -44,6 +44,13 @@ rm SETUP.md
   **第一原则：先复用，别重写** —— auth/实体 CRUD/分类/索引这些 `api/library/` 都给好了（目录见 **`api/library/README.md`**），`require` 进来挂到自己命名空间即可。模板是 `api/sample/`，注册在 `deploy/services.json`（端口 8900–8999）。
 - **让服务发/收事件、做自动化**：看 **`docs/authoring/events.md`** —— `_event`（事实扇出）/ `_tasks`（副作用派发）/ 四种触发源 / 重投幂等。
 - **写编排工作流**：看 **`docs/authoring/workflows.md`**（引擎对齐的语法 + `docs/authoring/workflow-examples/` 可跑示例）。
+- **要发邮件 / 短信**：配置位在 **`.env` 的 “Outbound gateway” 段**（已带全部注释位，逐项说明填什么）。
+  🔴 **不配就是 `mock`**——`gateway.email.send` 照样返回 `{success:true}` 加一个随机 messageId，
+  但**什么都没真发出去**。验收必须看返回里的 `provider` 字段：`smtp`/`api` 才算发了，`mock` 等于没发。
+  换邮箱厂商只改 `EMAIL_SMTP_HOST/PORT/SECURE` 三行，**不需要写适配器**（SMTP 是标准协议）；
+  但多数厂商的 `EMAIL_SMTP_PASS` 不收登录密码——Gmail 要应用专用密码、163/QQ 要授权码，
+  填错一律报 `535-5.7.8`，那个报错不告诉你错在哪。⚠️ 本条与 HTTP API 通道相反：那边换厂商
+  （SendGrid/SES）**需要**在 `logic/email.js` 的 `API_PROVIDERS` 加适配器。
 
 > 这套契约（`docs/`：README 索引 + `authoring/{modeling,service,events,workflows}.md` + 示例）随版本下发、与执行引擎逐字段对齐（升级时 `upgrade.sh` 会整体同步，别手改）。
 > Solo 仓 `docs/protocol/zh/*` 是更宏大的内部草案（含未实现项），照着写以本 `docs/` + 代码为准。

@@ -67,6 +67,7 @@ module.exports = {
         '<rootDir>/library/tests/contract.test.js',
         '<rootDir>/library/tests/generator.test.js',
         '<rootDir>/library/tests/crypto.test.js',
+        '<rootDir>/library/tests/env.test.js',
         '<rootDir>/library/tests/router-auth.test.js',
         '<rootDir>/library/tests/jsonrpc.test.js',
         '<rootDir>/library/tests/jsonlogic.test.js',

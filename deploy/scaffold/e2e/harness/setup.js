@@ -16,19 +16,15 @@ const fs = require('fs');
 const { createClient } = require('redis');
 const { ADMIN_TOKEN } = require('./identity');
 const ctxFile = require('../lib/context');
+const env = require('../../api/library/env');
 
 // ── config ──────────────────────────────────────────────────────────────────
 
+// 用共享解析器，别在这里手写正则。此前这里是 /^([A-Z_][A-Z0-9_]*)=(.*)$/ + trim，
+// **不剥引号**：`REDIS_PASSWORD='abc'` 会取成带引号的 `'abc'`，拿去认证就是 AUTH failed，
+// 而报错跟引号毫无关联感。library/env.js 的输出与服务侧的 dotenv 逐字节一致。
 function loadEnvFile() {
-    const envPath = path.join(__dirname, '../../.env');
-    const vars = {};
-    try {
-        fs.readFileSync(envPath, 'utf8').split('\n').forEach((line) => {
-            const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-            if (m) vars[m[1]] = m[2].trim();
-        });
-    } catch { /* .env optional */ }
-    return vars;
+    return env.read(path.join(__dirname, '../../.env'));   // 文件不存在时返回 {}（.env 可选）
 }
 
 function getRouterPort() {
