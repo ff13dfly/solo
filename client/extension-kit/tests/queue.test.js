@@ -137,8 +137,8 @@ describe('drain —— 投递语义', () => {
         });
         await q.enqueue(item(1));
         const stat = await q.drain();
-        expect(stat.nextWakeMs).toBe(30_000);     // 第一档退避
-        expect(wakes).toEqual([30_000]);
+        expect(stat.nextWakeMs).toBe(5_000);      // 第一档退避
+        expect(wakes).toEqual([5_000]);
     });
 
     test('drain 可重入：并发两次不会重复发送', async () => {
@@ -157,6 +157,43 @@ describe('drain —— 投递语义', () => {
         const [a, b] = await Promise.all([q.drain(), q.drain()]);
         expect(maxParallel).toBe(1);
         expect(a.sent + b.sent).toBe(2);          // 合计两条，不是四条
+    });
+});
+
+describe('retry_after —— 服务端说什么时候能再来就听它的', () => {
+    const err = (retry_after) => Object.assign(new Error('rl'), { code: -32029, data: { retry_after } });
+
+    test('带 retry_after 时用它，而不是本地那张固定退避表', async () => {
+        const clock = fakeClock();
+        const q = createQueue({ backend: memoryArea(), now: clock.now, send: async () => { throw err(7); } });
+        await q.enqueue(item(1));
+        expect((await q.drain()).nextWakeMs).toBe(7000);      // 默认第一档是 5000，服务端说 7s 就听它的
+    });
+
+    test('下限 1 秒 —— retry_after:0 会让队列立刻再撞一遍，正是限流最不该收到的', async () => {
+        const clock = fakeClock();
+        const q = createQueue({ backend: memoryArea(), now: clock.now, send: async () => { throw err(0); } });
+        await q.enqueue(item(1));
+        expect((await q.drain()).nextWakeMs).toBe(1000);
+    });
+
+    test('上限 1 小时 —— 防一个离谱的值把条目永久停住', async () => {
+        const clock = fakeClock();
+        const q = createQueue({ backend: memoryArea(), now: clock.now, send: async () => { throw err(999999) } });
+        await q.enqueue(item(1));
+        expect((await q.drain()).nextWakeMs).toBe(3600 * 1000);
+    });
+
+    test('没有 / 非法的 retry_after 回落到本地退避表', async () => {
+        const clock = fakeClock();
+        for (const bad of [undefined, 'soon', NaN, null]) {
+            const q = createQueue({
+                backend: memoryArea(), now: clock.now,
+                send: async () => { throw Object.assign(new Error('x'), { code: -32029, data: { retry_after: bad } }); },
+            });
+            await q.enqueue(item(1));
+            expect((await q.drain()).nextWakeMs).toBe(5_000);
+        }
     });
 });
 

@@ -50,9 +50,22 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
   **与浏览器扩展无关**。此前脚手架只给了一个含义模糊的空 `client/plugin/` 占位符，导致
   wavely / steward 把 MV3 扩展放了进去、trend 另起 `collector/extension/`——三家三个落点。
   `README.client.md` 现已把三者写清楚，浏览器扩展的正式位置是 `client/extension/`。
-- 回归两层：`tests/` **50 用例**（jest，纯逻辑，独立 config——kit 是 ESM 需
+- 🔴 **`rpc.attempt()`（新增）+ 队列尊重 `retry_after`：把「重试」收敛成只有一层**。
+  此前队列的 `send` 走 `rpc.call`，而两者各有一张退避表，**会相乘**——实测一个条目跑满队列的
+  6 次尝试要发 **36 次 fetch、耗时 135 秒**（`-32029` 场景 22.5s/6 次，Router 连不上 36.9s/18 次）。
+  135 秒全程占着 service worker（MV3 的 worker 本就朝不保夕），`drain()` 期间整条队列被它堵着，
+  而那 36 次多数打在一个**已经在限流**的端点上，只会让限流档位更深。
+  `attempt` = 一次逻辑尝试：**不做瞬态退避**，但保留网络层快速重试（抖动时端点并没在限流）
+  与会话失效 reauth（否则 token 一过期队列里每条都白撞一轮）。改后同场景 **6 次 fetch / 0 秒**。
+  判据写进文档：**调用方自己有没有重试机制——有就用 `attempt`，没有才用 `call`**。
+  另：`RpcError` 现在带 `data`，队列据此尊重 Router `-32029` 下发的 `data.retry_after`
+  （秒，下限 1s 上限 1h）——服务端知道自己的窗口，本地退避表只是猜。
+  队列默认退避同步调成 **5s → 20s → 80s → 5.3m → 16m（封顶）**（原 30s 起、2 倍）：失败现在
+  会瞬间落到队列这一层，而人点一下「采集」走的是同一条路，一次网络抖动不该让他静默等半分钟；
+  倍率改用 4 是为了在 5 秒起步的同时把总窗口留到约 23 分钟（2 倍只剩 2.6 分钟就判死信）。
+- 回归两层：`tests/` **59 用例**（jest，纯逻辑，独立 config——kit 是 ESM 需
   `--experimental-vm-modules`，不并进主 gate 以免给 127 套既有 CJS 用例挂实验标志）；
-  `e2e/` **18 用例**（playwright，真 Chrome 装 sample 扩展，自带假 Router 故**不需要活栈**）。
+  `e2e/` **20 用例**（playwright，真 Chrome 装 sample 扩展，自带假 Router 故**不需要活栈**）。
   E2E 覆盖的是单元测试结构上够不到的那层：kit 在真 MV3 service worker 里是否求值、队列是否
   真的落盘、**CDP 强杀 worker 后条目是否仍在并能被唤醒补投**、真 `crypto.subtle` 上的挑战响应。
 

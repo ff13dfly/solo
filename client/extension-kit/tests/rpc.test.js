@@ -90,6 +90,54 @@ describe('raw / call', () => {
     });
 });
 
+describe('attempt —— 给自带重试的调用方（队列）用', () => {
+    test('🔴 瞬态错误不退避重试：一次逻辑尝试就交回调用方', async () => {
+        const h = harness({ responses: [errRes(-32029)] });
+        await expect(h.rpc.attempt('demo.ping', {})).rejects.toMatchObject({ code: -32029 });
+        expect(h.calls.length).toBe(1);          // call() 在这里会打 6 次
+    });
+
+    test('网络层的快速重试保留（链路抖动时端点并没在限流）', async () => {
+        jest.useFakeTimers();
+        const boom = () => { throw new TypeError('Failed to fetch'); };
+        const h = harness({ responses: [boom, boom, okRes({ ok: 1 })] });
+        const p = h.rpc.attempt('demo.ping', {});
+        await jest.advanceTimersByTimeAsync(5000);
+        expect(await p).toEqual({ ok: 1 });
+        expect(h.calls.length).toBe(3);
+        jest.useRealTimers();
+    });
+
+    test('会话失效仍会 reauth 并重放一次 —— 否则 token 一过期，队列里每条都白撞一轮', async () => {
+        let reauthed = 0;
+        const h = harness({
+            responses: [errRes(UNAUTHENTICATED), okRes({ ok: 1 })],
+            reauth: async () => { reauthed++; },
+        });
+        expect(await h.rpc.attempt('demo.ping', {})).toEqual({ ok: 1 });
+        expect(reauthed).toBe(1);
+    });
+
+    test('reauth 之后仍失败就抛出，不继续兜（重试是调用方的事）', async () => {
+        const h = harness({
+            responses: [errRes(UNAUTHENTICATED), errRes(UNAUTHENTICATED)],
+            reauth: async () => {},
+        });
+        await expect(h.rpc.attempt('demo.ping', {})).rejects.toMatchObject({ code: UNAUTHENTICATED });
+        expect(h.calls.length).toBe(2);
+    });
+});
+
+describe('RpcError 携带 data', () => {
+    test('error.data 原样带出 —— 队列靠 retry_after 决定下次什么时候再试', async () => {
+        const h = harness({ responses: [{ ok: true, json: async () => ({
+            error: { code: -32029, message: 'rl', data: { retry_after: 12 } },
+        }) }] });
+        await expect(h.rpc.attempt('demo.ping', {}))
+            .rejects.toMatchObject({ code: -32029, data: { retry_after: 12 } });
+    });
+});
+
 describe('reauth —— 取代写死的「拿存着的密码再登一次」', () => {
     test('-32001 触发 reauth，然后重放原请求', async () => {
         let reauthed = 0;

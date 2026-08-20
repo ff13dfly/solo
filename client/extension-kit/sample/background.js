@@ -42,7 +42,10 @@ reauth = createPasswordAuth({
 
 const queue = createQueue({
     backend: local,
-    send: (item) => rpc.call(item.method, item.params),
+    // 🔴 `attempt` 不是 `call`：重试策略归队列（持久、扛得住 worker 被回收），
+    //    rpc 只负责把这一次请求尽力发出去。用 call 会让两层退避相乘——实测一个条目
+    //    跑满 6 次尝试要发 36 次 fetch、耗时 135 秒，全程占着 service worker。
+    send: (item) => rpc.attempt(item.method, item.params),
     // 🔴 chrome.alarms 是队列在 worker 被回收后还能醒过来的唯一途径。
     //    Chrome 会把过短的延迟夹到最小值（打包扩展约 1 分钟），所以别指望秒级精度。
     scheduleWake: (ms) => chrome.alarms.create('solo-queue', { when: Date.now() + ms }),

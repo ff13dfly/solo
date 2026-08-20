@@ -26,7 +26,7 @@ test('kit 的各模块确实是同一份实现（不是被谁掉包成桩）', a
     expect(shape.queue).toEqual(
         ['clearDead', 'drain', 'enqueue', 'listDead', 'listPending', 'retryDead', 'stats'],
     );
-    expect(shape.rpc).toEqual(['call', 'login', 'raw', 'sha256']);
+    expect(shape.rpc).toEqual(['attempt', 'call', 'login', 'raw', 'sha256']);
 });
 
 test('chrome.alarms / chrome.storage 权限到位（manifest 声明与实际可用一致）', async ({ serviceWorker }) => {

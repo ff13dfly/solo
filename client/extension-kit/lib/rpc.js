@@ -36,10 +36,16 @@ const NETWORK_RETRIES = 2;
 const TRANSIENT_RETRIES = 5;
 
 export class RpcError extends Error {
-    constructor(code, message) {
+    /**
+     * @param data 服务端的 `error.data`。**别丢**——Router 的 `-32029` 把
+     *             `{ retry_after: <秒> }` 放在这里，队列靠它决定下次什么时候再试，
+     *             丢了就只能用本地那张固定退避表去猜服务端的窗口。
+     */
+    constructor(code, message, data) {
         super(`[${code}] ${message}`);
         this.name = 'RpcError';
         this.code = code;
+        this.data = data;
     }
 }
 
@@ -99,12 +105,16 @@ export function createRpc({ getEndpoint, getToken, setToken, reauth, fetchImpl }
         }
         if (!res.ok) throw new RpcError(-32099, `Router HTTP ${res.status}`);
         const { result, error } = await res.json();
-        if (error) throw new RpcError(error.code, error.message);
+        if (error) throw new RpcError(error.code, error.message, error.data);
         return result;
     }
 
     /**
-     * 带重登与退避的调用。**写操作全部经这里。**
+     * 带重登与退避的调用 —— **给「有人在等结果」的交互式调用用**。
+     *
+     * 🔴 **入队的上行不要用它，用 `attempt()`**：两层退避会相乘（实测一条 135 秒 / 36 次
+     *    fetch，见 attempt 的注释）。判据很简单：**调用方自己有没有重试机制**，有就用
+     *    `attempt`，没有才用 `call`。
      *
      * ⚠️ 这里的自动重试对**非幂等**方法是危险的：一次网络抖动可能变成两次写入。
      *    经验做法是让写方法自带幂等键（ingress 的 `request_id`、实体的业务唯一键），
@@ -129,6 +139,34 @@ export function createRpc({ getEndpoint, getToken, setToken, reauth, fetchImpl }
     }
 
     /**
+     * **一次逻辑尝试** —— 给自带重试机制的调用方用（队列就是）。
+     *
+     * 与 `call()` 的唯一区别：**不做瞬态错误的退避重试**。会话失效仍然会 reauth 一次
+     * 并重放（否则 token 一过期，队列里每条都要白撞一轮），网络层的快速重试也保留
+     * （那 800ms/1600ms 两次是为链路抖动准备的，且抖动时端点并没在限流）。
+     *
+     * @why 存在的理由是实测出来的（2026-08-20）：`call()` 的退避表与队列的退避表会**相乘**。
+     *      一个条目跑满队列的 6 次尝试，实际发出 **36 次 fetch、耗时 135 秒**，全程占着
+     *      service worker——而 MV3 的 worker 本来就朝不保夕，且 `drain()` 期间整条队列
+     *      被它堵着。更糟的是这 36 次里多数是打在一个**已经在限流**的端点上，只会让限流
+     *      档位更深（跨项目通则：「限流是分档加深的，打得越多限得越深、恢复越慢」）。
+     *
+     *      分工因此是清楚的：**重试策略归队列**（它是持久的，扛得住 worker 被回收），
+     *      rpc 只负责「把这一次请求尽力发出去」。
+     */
+    async function attempt(method, params) {
+        try {
+            return await raw(method, params, await getToken());
+        } catch (e) {
+            if (e.code === UNAUTHENTICATED && reauth) {
+                await reauth();
+                return raw(method, params, await getToken());   // 重放一次，之后交给调用方
+            }
+            throw e;
+        }
+    }
+
+    /**
      * 挑战响应登录（内部员工账号）。成功后 token 只留在 background，不进页面进程。
      * @why 留在 kit 里是因为派生过来的两个插件都要它，且 salt/challenge 的派生方式
      *      写错了症状是"密码错"——最容易怀疑到无关的地方去。
@@ -143,7 +181,7 @@ export function createRpc({ getEndpoint, getToken, setToken, reauth, fetchImpl }
         return out;
     }
 
-    return { call, raw, login, sha256 };
+    return { call, attempt, raw, login, sha256 };
 }
 
 /**

@@ -31,8 +31,17 @@ const DEFAULTS = {
     maxItems: 500,
     maxDead: 100,
     maxAttempts: 6,
-    /** 退避：30s → 1m → 2m → 4m → 8m → 16m（封顶）。 */
-    backoffMs: (attempts) => Math.min(30_000 * 2 ** (attempts - 1), 16 * 60_000),
+    /**
+     * 退避：**5s → 20s → 80s → 5.3m → 16m（封顶）**。
+     *
+     * @why 第一档特意压到 5 秒：自从 send 改用 `rpc.attempt`（不再吃掉 22 秒的瞬态退避），
+     *      失败会**瞬间**落到队列这一层。而人点一下「采集」是同一条路径——一次 1 秒的
+     *      网络抖动，用户会看到「0 sent」然后静默等到下一次唤醒。5 秒是「人还没走开」的量级。
+     * @why 倍率用 4 不是 2：既要 5 秒起步，又要给「Router 正在重启」这类真故障留足窗口。
+     *      2 倍的话 6 次尝试总共只有 2.6 分钟就判死信（比压之前的 15.5 分钟还短）；
+     *      4 倍下总窗口约 23 分钟，两头都照顾到。
+     */
+    backoffMs: (attempts) => Math.min(5_000 * 4 ** (attempts - 1), 16 * 60_000),
 };
 
 /**
@@ -46,7 +55,11 @@ const PERMANENT = [-32600, -32601, -32602, -32005, -32002];
 /**
  * @param {object}   opts
  * @param {object}   opts.backend        存储后端（storage.js 的 chromeArea/memoryArea）
- * @param {function} opts.send           (item) => Promise<any>  真正发出去；抛错即失败
+ * @param {function} opts.send           (item) => Promise<any>  真正发出去；抛错即失败。
+ *                                    🔴 **它自己不该重试**——重试策略归本队列（它是持久的，
+ *                                    扛得住 worker 被回收）。用 `rpc.attempt()` 而不是
+ *                                    `rpc.call()`：后者的退避表与这里的会相乘，实测一个条目
+ *                                    跑满 6 次尝试要发 36 次 fetch、耗时 135 秒。
  * @param {function} [opts.scheduleWake] (delayMs) => void  下次该醒的时间（接 chrome.alarms）
  * @param {function} [opts.isPermanent]  (err) => boolean   覆盖默认的永久失败判据
  * @param {function} [opts.now]          () => number       注入时钟，测试用
@@ -144,7 +157,10 @@ export function createQueue(opts) {
                     continue;
                 }
 
-                const delay = cfg.backoffMs(attempts);
+                // 服务端说了什么时候能再来，就听它的——它知道自己的窗口，本地那张固定
+                // 退避表只是猜。Router 的 -32029 把秒数放在 error.data.retry_after
+                // （router/handlers/jsonrpc.js: RATE_LIMIT_EXCEEDED）。
+                const delay = retryAfterMs(err) ?? cfg.backoffMs(attempts);
                 await mutate(backend, cfg.key, (cur) => (cur || []).map((it) => (
                     it.idemKey === item.idemKey
                         ? { ...it, attempts, nextAttemptAt: now() + delay, lastError: errText(err) }
@@ -210,6 +226,17 @@ export function createQueue(opts) {
             return dead.length;
         },
     };
+}
+
+/**
+ * 服务端下发的重试时刻（毫秒）。没有 / 不合法则返回 null，交给本地退避表。
+ * @why 下限 1 秒：`retry_after: 0`（或负数）会让队列在下一次唤醒时立刻再撞一遍，
+ *      正好是限流最不该收到的行为。上限 1 小时：防一个离谱的值把条目永久停在队列里。
+ */
+function retryAfterMs(err) {
+    const sec = err && err.data && err.data.retry_after;
+    if (typeof sec !== 'number' || !Number.isFinite(sec)) return null;
+    return Math.min(Math.max(sec, 1), 3600) * 1000;
 }
 
 function errText(err) {

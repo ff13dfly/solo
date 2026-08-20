@@ -78,6 +78,30 @@ test('🔴 service worker 被回收后，未送出的条目仍在，唤醒后照
     await page.close();
 });
 
+test('🔴 限流不把端点打爆：一次 drain 只发一次请求', async ({ serviceWorker, router }) => {
+    // sample 的 send 用的是 rpc.attempt 而不是 rpc.call。改回 call 的话，这里会看到 6 次
+    //（实测一个条目跑满队列的 6 次尝试要发 36 次 fetch、耗时 135 秒，全程占着 service
+    // worker，而且多数是打在一个已经在限流的端点上——只会让限流档位更深）。
+    router.reply(() => ({ error: { code: -32029, message: 'rate limited' } }));
+    await enqueue(serviceWorker, 'k1');
+
+    const started = Date.now();
+    await serviceWorker.evaluate(() => globalThis.__solo.queue.drain());
+
+    expect(router.calls).toHaveLength(1);
+    expect(Date.now() - started).toBeLessThan(5_000);      // 用 call 的话这里要 22.5s
+});
+
+test('尊重服务端下发的 retry_after，而不是本地猜的退避档', async ({ serviceWorker, router }) => {
+    router.reply(() => ({ error: { code: -32029, message: 'rl', data: { retry_after: 9 } } }));
+    await enqueue(serviceWorker, 'k1');
+    const stat = await serviceWorker.evaluate(() => globalThis.__solo.queue.drain());
+    // 区间而不是等值：nextWakeMs = 排定时刻 - 此刻，真实时钟下中间必然过掉几毫秒。
+    // （单元测试用假时钟，那边才断言等于。这条在单独跑时曾侥幸通过、全量跑时才现形。）
+    expect(stat.nextWakeMs).toBeGreaterThan(8_000);
+    expect(stat.nextWakeMs).toBeLessThanOrEqual(9_000);    // 默认第一档是 5000，这里听服务端的 9s
+});
+
 test('重试时排上 chrome.alarms —— 这是 worker 死后唯一的唤醒途径', async ({ serviceWorker, router }) => {
     // 非永久错误 → 队列退避 → scheduleWake → chrome.alarms.create
     //
