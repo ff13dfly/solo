@@ -223,10 +223,50 @@ if (!fs.existsSync(SKILL)) {
     }
 }
 
+// ── 7. e2e harness 的服务目录 == services.json ────────────────────────
+// 为什么守这条：services.json 是服务清单的单一真源，但 e2e/harness/catalog.js 自己
+// 抄了一份（端口以它为权威，setup.js 按它设每服务 PORT env）。两边靠人手同步，
+// 漏了不会报错——只是那个服务在 full 档里**从不被拉起**，于是它的 e2e 覆盖静默为零。
+// 实例：mcp（services.json 自 v1.1.x 就有，2026-08-20 审计时发现 catalog 里一直缺）。
+//   (a) services.json 的每个服务都必须在 SERVICES 里，且 path/port 一致；
+//   (b) 除 router 外都必须进 PROFILES.full，否则列了也起不来。
+// catalog 允许**多出** collection/market —— 它们是仅供内部测试的服务，不在 services.json。
+{
+    let catalog;
+    try {
+        catalog = require(path.join(ROOT, 'e2e/harness/catalog.js'));
+    } catch (e) {
+        errors.push(`e2e/harness/catalog.js 读取失败：${e.message}`);
+        catalog = null;
+    }
+    if (catalog) {
+        // catalog 在 require 时对每个 port 加了 E2E_PORT_OFFSET，比对前还原。
+        const OFF = catalog.PORT_OFFSET || 0;
+        const cat = catalog.SERVICES || {};
+        const full = new Set(catalog.PROFILES?.full || []);
+        for (const svc of services) {
+            const c = cat[svc.name];
+            if (!c) {
+                errors.push(`e2e/harness/catalog.js 的 SERVICES 缺 "${svc.name}"——services.json 有它，e2e full 档却永远不会拉起它（该服务的 e2e 覆盖为零）`);
+                continue;
+            }
+            if ((c.port - OFF) !== svc.port) {
+                errors.push(`e2e catalog 的 "${svc.name}" 端口 ${c.port - OFF} ≠ services.json 的 ${svc.port}`);
+            }
+            if (c.path !== svc.path) {
+                errors.push(`e2e catalog 的 "${svc.name}" path "${c.path}" ≠ services.json 的 "${svc.path}"`);
+            }
+            if (svc.name !== 'router' && !full.has(svc.name)) {
+                errors.push(`e2e catalog 的 PROFILES.full 缺 "${svc.name}"——列进 SERVICES 但没进 full 档，等于不跑`);
+            }
+        }
+    }
+}
+
 // ── 报告 ──────────────────────────────────────────────────────────────
 if (errors.length) {
     console.error('❌ 文档漂移检查未通过：\n' + errors.map(e => `   • ${e}`).join('\n'));
     console.error('\n修复：更新 CLAUDE.md §2 表格 / deploy/services.json，或同步 introspection 声明 ↔ index.js 注册。');
     process.exit(1);
 }
-console.log(`✅ 文档漂移检查通过：CLAUDE.md §2 ↔ services.json（${serviceNames.size} 服务 + 端口）+ config.js portFor 兜底 ↔ services.json 端口一致（端口单一真源）+ 各服务 introspection ↔ index 注册一致 + 脚手架 README 无硬编码 bundle 版本 + 契约文档包就位（docs/README + authoring/{modeling,service,events,workflows}.md + ${wfExampleCount} workflow 示例，引擎合法）+ 下游守门 skill 就位（solo-service，含 autocheck 门禁）。`);
+console.log(`✅ 文档漂移检查通过：CLAUDE.md §2 ↔ services.json（${serviceNames.size} 服务 + 端口）+ config.js portFor 兜底 ↔ services.json 端口一致（端口单一真源）+ 各服务 introspection ↔ index 注册一致 + 脚手架 README 无硬编码 bundle 版本 + 契约文档包就位（docs/README + authoring/{modeling,service,events,workflows}.md + ${wfExampleCount} workflow 示例，引擎合法）+ 下游守门 skill 就位（solo-service，含 autocheck 门禁）+ e2e harness catalog ↔ services.json（服务清单不漏、端口/path 一致、全部进 full 档）。`);

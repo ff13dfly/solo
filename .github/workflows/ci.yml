@@ -130,7 +130,7 @@ jobs:
         run: npx jest -c jest.ci.config.js --ci --runInBand
 
   e2e:
-    name: Full-stack e2e (live mesh, 54 suites)
+    name: Full-stack e2e (live mesh, 66 suites)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -162,7 +162,7 @@ jobs:
       - name: install e2e deps (standalone project)
         working-directory: e2e
         run: npm ci
-      - name: full-stack regression (harness boots Router + 13 services + mock chain)
+      - name: full-stack regression (harness boots Router + 15 services + mock chain)
         working-directory: e2e
         run: npx jest --runInBand
 

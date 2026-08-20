@@ -29,6 +29,11 @@
 
 - **可运行模板**：`api/sample/` —— 一个最小但完整的服务，照着改最快。
 - **共享库目录**：`api/library/`（`jsonrpc` / `logger` / `entity` / `permit` / …）—— 别重新发明 library 已经发的轮子。
+- **浏览器插件**：`client/README.md` —— 数据要从网页里取、动作要落回网页上时走这条路。
+  `client/extension-kit/`（[Solo] 传输/重试/持久化队列/图片规格化/会话，随升级刷新）
+  + `client/extension/`（[Project] 你的 manifest / DOM 选择器 / 字段映射，永不被覆盖）；
+  `extension-kit/sample/` 是可直接跑起来的完整扩展，抄它起步。
+  ⚠️ `client/plugin/` 是**桌面客户端的视图插件**，与浏览器扩展是两回事。
 - **静态自检**：`bash deploy/precheck.sh` —— 写完服务先过 autocheck，红线（声明 ↔ 注册不同步等）当场暴露。
 
 > ⚠️ Solo 源码仓里有更宏大的 `docs/protocol/zh/*` 内部设计草案（含**未实现**的协议）。那是 SOLO 维护者视角、**不随脚手架下发**。

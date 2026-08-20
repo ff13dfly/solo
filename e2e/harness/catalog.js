@@ -23,6 +23,7 @@ const SERVICES = {
     notification:  { path: 'core/notification/index.js',  port: 8040 },
     gateway:       { path: 'core/gateway/index.js',       port: 8020 },
     ingress:       { path: 'core/ingress/index.js',       port: 8070 },
+    mcp:           { path: 'core/mcp/index.js',           port: 8091 },
     orchestrator:  { path: 'core/orchestrator/index.js',  port: 8820 },
     storage:       { path: 'apps/storage/index.js',       port: 8750 },
     fulfillment:   { path: 'apps/fulfillment/index.js',   port: 8050 },
@@ -41,7 +42,7 @@ const PROFILES = {
     // 全档:整栈 + workers + bot token(P5 事件链;需 redis-stack).
     full: [
         'administrator', 'user', 'storage', 'planner', 'fulfillment', 'approval',
-        'gateway', 'nexus', 'notification', 'ingress', 'orchestrator', 'collection', 'market',
+        'gateway', 'nexus', 'notification', 'ingress', 'mcp', 'orchestrator', 'collection', 'market',
         // agent runs with AI_PROVIDER=mock (offline, deterministic) for the nexus
         // context-assembly → LLM autorun loop (66-nexus-autorun). See harness/setup.js.
         'agent',
