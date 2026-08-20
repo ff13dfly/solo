@@ -18,8 +18,8 @@ name: CI
 #            2026-06-11). Excluded suites (external-API agent tests, script-style
 #            "tests", validator's open OOM bug) are tracked in jest.ci.config.js.
 #   e2e    — full-stack black-box regression (e2e/ standalone project): boots the
-#            REAL 13-service mesh + mock-listener chain against redis-stack and
-#            runs all 54 suites. This is the gate that catches "behavior changed,
+#            REAL 15-service mesh + mock-listener chain against redis-stack and
+#            runs all 66 suites. This is the gate that catches "behavior changed,
 #            tests didn't" drift the hermetic subset can't see (toFix §6.x).
 #   portal-tsc — type-check both portals (system + operator). Cheap, no mesh.
 #   frontend-build — build the EXACT artifacts init.sh ships (deploy/build-frontend.sh

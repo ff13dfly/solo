@@ -10,6 +10,23 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 ## [Unreleased]
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
+> 暂无。
+
+---
+
+## [v1.2.1] — 2026-08-20
+
+> **patch 步进**：没有新交付物，全是只加不破的修补与文档。`api/` 的运行代码零改动
+> （仅两处注释里的文档路径跟着归档动作改了），既有服务、方法、前端一个字节都没动。
+> 两条主线：① 契约文档包补上「划分」这一层——下发第 4 份 authoring 契约，回答「该写哪些
+> 服务」而不只是「怎么写一个服务」；② 一轮 e2e 体系审计，修掉一处**静默**的服务清单漂移
+> （`mcp` 自 v1.1.x 就在 `services.json` 里，却从未被 e2e full 档拉起，它的 e2e 覆盖一直是零），
+> 并把这类漂移收进 CI 守门——下次再漏就是红的，不用等下一次人工审计。
+>
+> 门禁（runbook §3）：主 CI 白名单 **127 套 / 2018 测试**，绿 126 / 2016（仅剩 2 例是
+> `agent.decide` 的 LIVE Gemini 活体测试因外部模型漂移失败，与 v1.1.16/17 · v1.2.0 同一组、
+> 与本版无关）；static 全闸绿（autocheck per-service ×15 + `--lib` + doc-drift + error-codes
+> + lockfile hygiene）；`deploy/build.sh` 5.3M 产物。
 
 ### Added — 契约文档包补上「划分」这一层：`docs/authoring/modeling.md`
 
@@ -35,6 +52,54 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 >
 > **下游 action：无**（升级后 `docs/authoring/` 会多出 `modeling.md`，建新服务前建议先读；
 > 既有服务不受影响，无迁移动作）。
+
+### Fixed — `mcp` 在 e2e 目录里缺席；catalog ↔ `services.json` 现由 CI 守门
+
+> 现象不是报错，是**沉默**：`e2e/harness/catalog.js` 的 `SERVICES` 是 `services.json` 的一份
+> 手抄副本（e2e 侧以它为端口权威，`harness/setup.js` 按它给每个服务设 `PORT` env）。两边靠
+> 人手同步，漏一个不会有任何提示——那个服务只是**在 full 档里从不被拉起**，于是它的 e2e
+> 覆盖静默为零。`mcp` 就这样漏了一整条 v1.1.x 线。
+
+- **`e2e/harness/catalog.js` 补 `mcp`**（`core/mcp/index.js` : 8091）并列进 `PROFILES.full`。
+- **`deploy/check-doc-drift.js` 新增第 7 条守门**（CI static 闸）：`services.json` 的每个服务
+  都必须在 catalog 的 `SERVICES` 里、**端口与 `path` 一致**、且（`router` 除外）**必须进
+  `PROFILES.full`**——「列进 SERVICES 但没进 full 档」等于没跑，也算红。比对前会还原
+  `E2E_PORT_OFFSET`。catalog 允许**多出** `collection` / `market`（仅供内部测试、不在
+  `services.json`）。
+- **`.github/workflows/ci.yml`** 的 e2e job 名与顶部说明数字对齐现状（54 → **66** 套、
+  13 → **15** 服务）。
+- **`e2e/README.md` 标明它写于规划期**：正文的「尚未实现」与 §14 的「17 套」是 2026-06-03
+  首次落地快照，**当前覆盖以 `e2e/suites/` 目录与 CI 的 e2e job 为准**；顺带记下用例序号
+  重号（`54 / 66 / 67 / 69 / 70` 各两套）是**刻意不改**的——每个文件自洽、文件间不共享状态，
+  重排只换来阅读顺序，却要打断 git 的文件历史追踪。
+- 审计全文收进 `docs/feedback/e2e-audit-service-drift-and-suite-hygiene.md`。
+
+> **下游 action：无**（`e2e/` 与 `deploy/check-doc-drift.js` 都是 SOLO 自身的门禁，不随脚手架下发）。
+
+### Added — 脚手架文档两处补充：客户端插件指针 + 「要不要拆文件」的判据
+
+- **`docs/README.md` 加 `client/` 浏览器插件的指针**：数据要从网页里取、动作要落回网页上时
+  走这条路——`client/extension-kit/`（[Solo]，随升级刷新）+ `client/extension/`（[Project]，
+  永不被覆盖），`extension-kit/sample/` 是可直接跑起来的完整扩展。并点明
+  **`client/plugin/` 是桌面客户端的视图插件，与浏览器扩展是两回事**（名字太像，已经有人认错）。
+  `authoring/modeling.md` 的 §0 能力对照表同步加一行。
+- **`authoring/modeling.md` 澄清「服务体量 ≠ 单文件体量」**，并新增 **★ 要不要拆文件：看变更
+  频率，不看行数**：行数是现象不是判据，两条 `git log` 现查命令（近 60 次提交里被改过几次 /
+  最后一次改动）才是。拆分的收益**全部落在未来的改动上**，所以变更频率是收益的分母，分母
+  接近零、再长的文件也不值得拆。附 `orchestrator` 实例（最厚的 `runner.js` 806 行，近 60 次
+  提交里只被改过 1 次）——结论是**机会性重构**：真需要动时顺手拆，别专门开一刀。
+
+> **下游 action：无**（升级后 `docs/` 里这两份会多出上述内容；既有服务不受影响）。
+
+### Removed — `client/desktop/public/static/table.png`（1.17MB 业务遗留物）
+
+2026-05-07 从 yaki 拷 client 目录时一起带进来的采购订单扫描件，与 SOLO 框架无关：全仓库零
+引用，却因为在 `public/` 下每次构建都被原样拷进 `dist/`；图上还有真实商业信息与个人手机号，
+而本仓库已公开发布。删除后 `public/` 随之为空（Vite 的 `public/` 是可选目录，构建不受影响）。
+
+> ⚠️ **历史里那份 blob 仍在**（含已推送到 GitHub 的 `40c818a`），本次只移除工作区文件、未改写历史。
+>
+> **下游 action：无**（仓库内一份零引用的遗留图片，不在任何下发产物里）。
 
 ---
 

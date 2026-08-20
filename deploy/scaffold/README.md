@@ -26,7 +26,7 @@
 
 ```
 new-project/
-├── .solo-version                Solo bundle 版本标记（如 v1.2.0）
+├── .solo-version                Solo bundle 版本标记（形如 `v1.2.3`，内容以你实际下发的版本为准）
 ├── .env                         环境变量（REDIS_URL、JWT_SECRET、ROUTER_PUBLIC_KEY...）
 ├── .keypair                     Router Ed25519 私钥
 ├── package.json                 项目 identity + npm 依赖（私有 apps 用）
@@ -37,6 +37,7 @@ new-project/
 ├── docs/                        [Solo] 契约文档包 —— 手册唯一入口；让 AI/人只凭脚手架写 wire 兼容的服务/事件/工作流
 │   ├── README.md                手册索引
 │   └── authoring/
+│       ├── modeling.md          动代码前：把业务整理成「服务 × 实体」
 │       ├── service.md           怎么写 Router 能识别的服务
 │       ├── events.md            发/收事件、触发自动化
 │       ├── workflows.md         引擎对齐的 workflow 语法参考
@@ -44,7 +45,7 @@ new-project/
 │
 ├── api/
 │   ├── publish/
-│   │   └── solo.v1.2.0.js       [Solo] 单文件 bundle，黑盒，升级时整体覆盖
+│   │   └── solo.v<版本>.js      [Solo] 单文件 bundle（版本 = .solo-version），黑盒，升级时整体覆盖
 │   │
 │   ├── library/                 [Solo] 共享工具库（jsonrpc / logger / ports / ...）
 │   ├── autocheck/               [Solo] 静态检查工具，AI 开发时使用
