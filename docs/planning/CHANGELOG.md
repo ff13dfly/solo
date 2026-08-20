@@ -255,7 +255,7 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ### Added — per-app env + `bindAddr()` 监听网卡控制 + redis 模块第三档（2026-08-14 批）
 
-> 来源：runner 部署 N100 实测，`docs/feedback/run-sh-no-per-app-env.md`（详细 triage 在文内）。
+> 来源：runner 部署 N100 实测，`docs/feedback/done/run-sh-no-per-app-env.md`（详细 triage 在文内）。
 
 - `deploy/services.json` 支持 per-app `env`（如 `{ "env": { "BIND_ADDR": "0.0.0.0" } }`），
   「哪个服务对外」变成声明在项目里、跟着 git 走的事实。

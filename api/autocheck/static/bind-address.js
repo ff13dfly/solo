@@ -10,7 +10,7 @@
  *      2026-08-14 一个 runner 部署踩到：两个私有服务只想暴露其中一个，最后只能靠
  *      机器上的 nftables 规则兜——那份知识不在仓库里、`nft flush ruleset` 一条命令
  *      静默解除、加新服务时也没有任何东西提醒你回去改防火墙。
- *      （docs/feedback/run-sh-no-per-app-env.md）
+ *      （docs/feedback/done/run-sh-no-per-app-env.md）
  *
  *      接上 bindAddr() 后，"哪个服务对外"变成 `.env` / `deploy/services.json` 里
  *      声明、跟着 git 走的事实：

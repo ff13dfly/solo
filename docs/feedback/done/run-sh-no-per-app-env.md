@@ -86,7 +86,7 @@ sudo tailscale serve --bg --yes --tcp 8422 tcp://127.0.0.1:8422
 ```
 127.0.0.1:8421         git   —— OS 层面就够不到
 127.0.0.1:8422         coder
-100.64.251.83:8422     tailscaled 的转发器（tailnet 地址，不是 0.0.0.0）
+100.x.y.z:8422         tailscaled 的转发器（tailnet 地址，不是 0.0.0.0）
 ```
 
 `--tcp` 是 raw TCP 转发、不解析 HTTP，所以 WebSocket 不受影响（终端会话已端到端

@@ -45,7 +45,7 @@ function urlFor(name, fallbackPort) {
 //      storage are all reachable from outside the moment the process starts, and the
 //      only way to stop it is a machine-level firewall. "Which service is exposed" is a
 //      deployment decision that belongs in the project, not in some host's nftables.
-//      (Reported from a runner deploy, 2026-08-14 — see docs/feedback/run-sh-no-per-app-env.md.)
+//      (Reported from a runner deploy, 2026-08-14 — see docs/feedback/done/run-sh-no-per-app-env.md.)
 //
 // Resolution: <SERVICE>_BIND_ADDR > BIND_ADDR > undefined.
 //
