@@ -89,6 +89,7 @@ mkdir -p "$NEW_DIR/portal/system"
 mkdir -p "$NEW_DIR/client/publish"
 mkdir -p "$NEW_DIR/client/mobile"
 mkdir -p "$NEW_DIR/client/plugin"
+mkdir -p "$NEW_DIR/client/extension"
 
 log_info "Directory structure created"
 
@@ -208,6 +209,12 @@ rsync -a \
   --exclude='package-lock.json' \
   "$SOLO_DIR/portal/operator/" "$NEW_DIR/portal/operator/"
 log_info "Copied: portal/operator (source — run  npm install  to set up)"
+
+# Browser-extension kit: [Solo]-owned, whole-dir replaced by upgrade.sh (unlike
+# client/plugin/, which is the project's own extension and never touched). Ship it at
+# init so a project that later wants an extension already has the upgradeable half.
+rsync -a --exclude='node_modules' "$SOLO_DIR/client/extension/" "$NEW_DIR/client/extension/"
+log_info "Copied: client/extension (Solo-owned kit — adapters go in client/plugin/)"
 
 touch "$NEW_DIR/portal/system/.gitkeep"
 touch "$NEW_DIR/client/mobile/.gitkeep"

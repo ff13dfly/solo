@@ -10,7 +10,47 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 ## [Unreleased]
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.1.x`）。
-> 暂无。
+
+### Added — 浏览器插件 kit（`client/extension/`）+ 客户端所有权边界
+
+> 来源：实扫三个派生项目各自手搓的 MV3 插件（wavely `erp/client/plugin/` v1.2.9 ·
+> steward `client/plugin/` · trend `collector/extension/`）。**`wavely/lib/rpc.js` 与
+> `steward/lib/rpc.js` 逐行 diff：逻辑差异 0 处**，实质差异只有 `deviceId` 一个字符串；
+> `endpoints.js`、`mock/serve.sh` 同样是复制品。与 v1.1.16 收编 `run.sh` 前端注册表同构。
+>
+> 更麻烦的是**修复不回流**：steward 的 `endpoints.js` 记着一条 🔴（"wavely 踩过默认值漂移，
+> 症状是登录成功但什么都读不到"），**而 wavely 自己的文件里没有这条**——抄的人拿到了教训，
+> 被抄的人还在原地等着回归。
+
+- **`client/extension/`（新增，[Solo] 所有）**：`rpc`（网络层失败归一化 -32099 + 退避重试 +
+  会话失效重登）· `endpoints`（地址单一真源，不猜尾斜杠）· `session`（token 存 local/session
+  的策略收口）· `image`（分块 base64 + 逐级降质，对齐 `storage.asset.upload` 的 5MB 上限）·
+  `storage`（chrome.storage 适配 + 串行化读改写）。ESM、零依赖、零构建。
+- **`queue`（全新，三家一个都没有）**：持久化发送队列，**熬过 MV3 service worker 休眠**。
+  实扫三家 `chrome.alarms` 引用数全为 0；trend 的采集是 `for` 循环里串行 3N 次 await，
+  **worker 一睡就断在中间且无队列 = 永久静默丢数据**。语义为 **at-least-once**：条目只有
+  确认成功才出队，故 `idemKey` 必填（对应 ingress 的 `(source, request_id)` 与实体业务键）；
+  溢出 / 永久失败 / 重试用尽**一律进死信，不静默丢**。
+- 🔴 **所有权边界（本次的关键决定）**：`client/extension/` 进 `upgrade.sh` 整目录覆盖清单，
+  `client/plugin/`（manifest / popup / 站点 adapter / 选择器）维持 [Project] 所有、永不覆盖
+  ——等同 `api/library/` 与 `api/apps/` 的分工。**边界必须在第一版就对**：`portal/operator/`
+  正是反例（scaffold 拷一次、永不再同步，v1.1.17 的下游 action ② 就是在还这笔债）。
+  `init.sh` 同步下发。
+- 回归：`client/extension/tests/` 50 用例 5 套，**独立 jest config**（kit 是 ESM，需
+  `--experimental-vm-modules`；不并进主 gate，避免为它给 127 套既有 CJS 用例挂实验标志）。
+
+> **下游 action**：无（纯新增，不动任何既有行为）。已有插件的三家可按
+> `client/extension/README.md` §6 迁移——`createRpc` 相对原版只有一处变化：重登钩子从写死的
+> "拿存着的密码再登一次"改成可注入的 `reauth`，用 `createPasswordAuth()` 即逐字等价。
+> trend 迁移后**顺带获得它现在完全没有的队列**。
+
+> **有意留白**：① passport 设备线——三家都在用内部员工账号 + 明文密码存
+> `chrome.storage.local` 才能自动重登，而 `user.passport.device.issue`/`verify`（设备令牌换
+> 24h 会话、可按人吊销、`$owner` 自动行隔离）本就是为外部客户端设计的，**实扫三家对
+> `user.passport.*` 的引用数是 0**——不是选错了，是没人知道这条路；② schema / 枚举下发
+> （`ingress.dataSchema` 现在只在服务端拒绝、客户端看不见；wavely 把 catalog 的
+> `ColorwayKey` 枚举抄了一份在插件里，服务端加一个色值它就静默旧了）。两项都要新增 RPC 方法，
+> 而方法一旦发布撤不回来（runbook §5），等第二个实例出现、形状清楚了再定。
 
 ---
 

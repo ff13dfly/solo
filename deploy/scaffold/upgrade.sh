@@ -18,6 +18,7 @@
 # Overwrites ([Solo]-owned, whole-artifact replace):
 #   api/publish/solo.v{ver}.js   .solo-version
 #   api/library  api/sample  api/autocheck      (whole-dir replace)
+#   client/extension/                     (whole-dir replace — browser-extension kit)
 #   docs/  (README index + authoring/{service,events,workflows}.md + workflow-examples/)
 #       (version-pinned authoring contracts — re-templated, engine-accurate; stale = wrong.
 #        Pre-docs/ projects' old api/AUTHORING.*.md + workflows/ are migrated here and removed.)
@@ -27,6 +28,11 @@
 #
 # NEVER touches ([Project]-owned):
 #   .env  .keypair  api/seed.json  api/apps/  portal/operator/  client/plugin/
+#       (client/plugin/ = the project's own extension: manifest, popup, site adapters,
+#        DOM selectors. The upgradeable half lives in client/extension/ — same split as
+#        api/library (Solo) vs api/apps (project). Getting this boundary wrong is what
+#        froze portal/operator/ on day one: it is scaffolded once and never re-synced,
+#        so every Solo-side fix to it has to be back-filled by hand in each project.)
 #   deploy/services.json  deploy/solo-services.json  deploy/seed.json  e2e/
 #   portal/publish/operator.*.tar.gz  (operator is source-distributed — team's)
 #
@@ -144,6 +150,22 @@ for d in library sample autocheck; do
         REPORT+=("source dir  → api/$d/  (whole-dir replace)")
     fi
 done
+
+# 3c. Browser-extension kit (client/extension/) — whole-dir replace, same contract as
+#     api/library: [Solo] owns it, fixes must reach existing projects on upgrade.
+#     @why a separate block instead of extending 3b's loop: 3b is rooted at api/, and this
+#     one has to create client/ for projects scaffolded before the kit existed.
+#     The project's OWN extension (manifest, popup, site adapters, selectors) lives in
+#     client/plugin/ and is never touched — see the ownership header.
+if [ -d "$SOLO_DIR/client/extension" ]; then
+    if [ $DRY -eq 0 ]; then
+        mkdir -p "$PROJ/client"
+        rm -rf "$PROJ/client/extension"
+        cp -r "$SOLO_DIR/client/extension" "$PROJ/client/extension"
+        rm -rf "$PROJ/client/extension/node_modules"
+    fi
+    REPORT+=("extension kit -> client/extension/  (whole-dir replace)")
+fi
 
 # 3d. Authoring / contract docs pack (docs/) — version-pinned, engine-accurate; re-template + replace.
 #     Distilled contracts that track the execution engine, so a stale copy is WRONG; re-sync the
@@ -274,6 +296,7 @@ for line in "${REPORT[@]}"; do echo "   • $line"; done
 echo ""
 echo "Left untouched ([Project]-owned): .env .keypair api/seed.json api/apps/ portal/operator/"
 echo "   client/plugin/ deploy/services.json deploy/solo-services.json deploy/seed.json e2e/"
+echo "   (client/extension/ IS Solo-owned and was replaced — put your adapters in client/plugin/)"
 
 # --- 6. Post-upgrade self-check (only when actually written) ---
 if [ $DRY -eq 0 ]; then

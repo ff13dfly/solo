@@ -1,0 +1,10 @@
+{
+  "name": "solo-extension-kit",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Browser-extension kit — framework-owned client lib for SOLO-derived projects",
+  "scripts": {
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest"
+  }
+}

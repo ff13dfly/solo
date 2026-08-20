@@ -11,9 +11,15 @@ client/
 ├── publish/               预构建 bundle（mobile 由 run.sh 自动 serve）
 │   └── mobile.v{{SOLO_VERSION}}.tar.gz
 ├── mobile/                移动端 / PWA 源码（Solo 源码树中开发）
-├── plugin/                插件（各插件独立子目录，独立开发发布）
+├── extension/             ⚙️ [Solo] 浏览器插件 kit —— upgrade.sh 整目录覆盖，别改
+├── plugin/                🧩 [Project] 你自己的插件（manifest / popup / 站点 adapter）
 └── README.md
 ```
+
+> **`extension/` 与 `plugin/` 的分工，等同于 `api/library/` 与 `api/apps/`。**
+> 传输、重试、持久化队列、图片规格化、会话——这些每家都一样的东西在 `extension/`，
+> 随升级到达；manifest、DOM 选择器、字段映射这些站点知识在 `plugin/`，永不被覆盖。
+> 改错边界的代价见 `client/extension/README.md` §2。
 
 > **desktop 不在脚手架范围内。** 桌面端应用独立开发、独立发布，不通过 `run.sh` 管理。
 
