@@ -58,6 +58,11 @@ EMAIL_FROM=noreply@example.com
 EMAIL_API_KEY=re_xxxx                  # api 通道（Resend 兼容）
 EMAIL_API_PROVIDER=resend              # API_PROVIDERS 里的适配器名
 EMAIL_SMTP_HOST=smtp.example.com       # smtp 通道（也可改用 gateway.smtp.create 建多账号）
+EMAIL_SMTP_PORT=587                    # 587 配 SECURE=false（STARTTLS）／465 配 true
+EMAIL_SMTP_SECURE=false
+EMAIL_SMTP_USER=you@example.com
+EMAIL_SMTP_PASS=<授权码/应用专用密码>   # 多数厂商不收登录密码，见下表
+EMAIL_SMTP_OPTIONS={"requireTLS":true} # 可选：透传 nodemailer 其余选项（JSON 对象）
 
 # sms
 SMS_CHANNEL=auto                       # auto|aliyun|twilio|mock
@@ -70,6 +75,25 @@ SMS_TWILIO_FROM=+15551234567
 ```
 
 > 变量名以 `config.js` 为准；脚手架下发的 `.env` 模版（`deploy/scaffold/init.sh`）已带全部注释位。
+
+> **换邮箱厂商不需要写 adapter。** SMTP 是 RFC 5321 标准协议，Gmail / 163 / QQ / Outlook /
+> SES-SMTP 说的是同一套话——换一家只改 `HOST/PORT/SECURE`，代码零改动。这与 `api` 通道
+> 刻意相反：那边每家 body 形状不兼容，才必须在 `API_PROVIDERS` 里加适配器。
+> 厂商之间真正的差异只有两处：
+>
+> | 厂商 | host / port | `PASS` 填什么 |
+> |---|---|---|
+> | Gmail | `smtp.gmail.com` 587(STARTTLS) / 465 | **应用专用密码**（需先开两步验证；全小写，当心 `l`/`I`/`1`）|
+> | 163 | `smtp.163.com` 465(secure) / 994 | **授权码**（在邮箱设置里单独开 SMTP 服务）|
+> | QQ | `smtp.qq.com` 465(secure) / 587 | **授权码**，同上 |
+> | Outlook / M365 | `smtp.office365.com` 587 | ⚠️ 基本认证已停用，**只剩 OAuth2**——唯一需要改代码的一家（`logic/smtp.js` 的 `auth` 形状要分叉），目前未支持 |
+>
+> `EMAIL_SMTP_OPTIONS`（env 路）与 `gateway.smtp` 实体的 `options` 字段（实体路）走**同一套
+> 合并规则**（`logic/smtp.js` 的 `buildTransportOptions`）：`options` 先铺底、显式字段后盖，
+> 所以 **options 覆盖不了 `host/port/secure/auth`**——这是安全边界，否则一条账号记录就能把
+> 凭据发去任意服务器。可用它设 `requireTLS`、`tls:{rejectUnauthorized,ciphers,servername}`、
+> `pool`+`rateLimit`（各家限速不同）、`name`（EHLO）、各类 timeout。
+
 
 ## 调用示例
 

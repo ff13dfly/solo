@@ -8,6 +8,8 @@
  *   a 4xx. Adding one means adding an adapter to `API_PROVIDERS` below, not just a URL.
  */
 const crypto = require('crypto');
+// 建 transporter 的选项合并规则只此一份（含"为什么不按邮箱厂商分 adapter"的判据）。
+const { buildTransportOptions } = require('./smtp');
 
 // Lazy-initialized SMTP transporter
 let _smtpTransporter = null;
@@ -22,12 +24,9 @@ function resolveChannel(cfg) {
 async function getSmtpTransporter(cfg) {
     if (_smtpTransporter) return _smtpTransporter;
     const nodemailer = require('nodemailer');
-    _smtpTransporter = nodemailer.createTransport({
-        host: cfg.smtp.host,
-        port: cfg.smtp.port,
-        secure: cfg.smtp.secure,
-        auth: { user: cfg.smtp.user, pass: cfg.smtp.pass }
-    });
+    // 合并规则与实体路共用同一个函数（logic/smtp.js buildTransportOptions），两边
+    // 各写一遍就会漂——env 路支持 requireTLS/tls 而实体路不支持，是最难查的那种不一致。
+    _smtpTransporter = nodemailer.createTransport(buildTransportOptions(cfg.smtp));
     await _smtpTransporter.verify();
     return _smtpTransporter;
 }

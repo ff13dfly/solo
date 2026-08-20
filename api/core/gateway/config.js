@@ -2,6 +2,30 @@ require('dotenv').config();
 const pkg = require('./package.json');
 const { portFor, urlFor } = require('../../library/ports');
 
+/**
+ * EMAIL_SMTP_OPTIONS：透传给 nodemailer.createTransport 的补充选项，JSON 对象字符串。
+ * 例：EMAIL_SMTP_OPTIONS='{"requireTLS":true,"tls":{"rejectUnauthorized":false}}'
+ *
+ * 合并规则见 logic/smtp.js `buildTransportOptions`：host/port/secure/auth 由显式字段
+ * 决定，这里覆盖不了。用途是 requireTLS / tls / pool+rateLimit / name(EHLO) / 各类
+ * timeout —— 换邮箱厂商靠 host+port+secure 就够了，**不需要为每家写 adapter**。
+ *
+ * 解析失败当场抛：一个被静默忽略的 tls 选项，表现是"连不上"，会把排查方向引到网络上去。
+ */
+function parseSmtpOptions(raw) {
+    if (!raw) return undefined;
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    } catch (e) {
+        throw new Error(`EMAIL_SMTP_OPTIONS 不是合法 JSON：${e.message}（原值前 40 字符：${String(raw).slice(0, 40)}）`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('EMAIL_SMTP_OPTIONS 必须是 JSON 对象，例如 \'{"requireTLS":true}\'');
+    }
+    return parsed;
+}
+
 module.exports = {
   serviceName: process.env.SERVICE_NAME || 'gateway',
   category: 'system',
@@ -31,7 +55,10 @@ module.exports = {
             port: parseInt(process.env.EMAIL_SMTP_PORT || '587', 10),
             secure: process.env.EMAIL_SMTP_SECURE === 'true',
             user: process.env.EMAIL_SMTP_USER || '',
-            pass: process.env.EMAIL_SMTP_PASS || ''
+            pass: process.env.EMAIL_SMTP_PASS || '',
+            // 补充 transport 选项（见文件头 parseSmtpOptions）；实体路的同名字段在
+            // gateway.smtp 实体上，两条路共用同一套合并规则。
+            options: parseSmtpOptions(process.env.EMAIL_SMTP_OPTIONS)
         },
         api: {
             key: process.env.EMAIL_API_KEY || '',

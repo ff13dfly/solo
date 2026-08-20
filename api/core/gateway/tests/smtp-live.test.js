@@ -91,12 +91,17 @@ liveSmtp('gateway SMTP — LIVE 连接与认证', () => {
 liveSend('gateway SMTP — LIVE 投递', () => {
     const stamp = () => new Date().toISOString();
 
-    test('env 路：email.send 真的把信发出去，provider === smtp', async () => {
-        const r = await emailProvider.send(cfg, {
+    // ⚠️ 必须走 M.email.send()，不能图省事直接调 emailProvider.send()。
+    //    后者绕过 logic/index.js 的处理器，于是 delivery ledger（GATEWAY:DELIVERY 记录）、
+    //    审计 insert、幂等键这一整层都没被走到——而真实调用方走的正是处理器。
+    //    2026-08-20 第一版就是这么写的，对账时才发现 WAL 里只有实体路的记录、env 路一条没有。
+    test('env 路（不带 smtpId）：走 email.send 处理器发出，provider === smtp 且落审计', async () => {
+        const M = createLogic(makeFakeRedis(), { serviceName: 'gateway', config: baseConfig, logger });
+        const r = await M.email.send({
             to: process.env.EMAIL_LIVE_TO,
             subject: `[solo] LIVE env 路 ${stamp()}`,
-            content: '由 logic/email.js sendSmtp() 发出（env 配置路径）。',
-            html: '<p>由 <code>logic/email.js</code> <code>sendSmtp()</code> 发出（env 配置路径）。</p>',
+            content: '由 logic/index.js 的 email.send 处理器 → emailProvider(env 配置) 发出。',
+            html: '<p>由 <code>logic/index.js</code> 的 <code>email.send</code> 处理器 → emailProvider（env 配置）发出。</p>',
         });
         expect(r.provider).toBe('smtp');      // ← 不是 'mock'，信真的走了
         expect(r.success).toBe(true);

@@ -120,7 +120,7 @@ module.exports = [
     { name: 'gateway.echo', params: ['data'], returns: ['echo'], returns_schema: [{ name: 'echo', type: 'object', required: true }], description: 'Echo input data', ai: false },
 
     // --- SMTP Account Management ---
-    { name: 'gateway.smtp.create', params: ['name', 'host', 'port', 'secure', 'user', 'pass', 'from'], returns: ['id', 'status', 'createdAt'], returns_schema: SMTP_RETURN, description: 'Create SMTP account (pass encrypted at rest)', ai: false },
+    { name: 'gateway.smtp.create', params: ['name', 'host', 'port', 'secure', 'user', 'pass', 'from', 'options'], returns: ['id', 'status', 'createdAt'], returns_schema: SMTP_RETURN, description: 'Create SMTP account (pass encrypted at rest). options = extra nodemailer transport settings (requireTLS/tls/pool/name/timeouts) merged under the explicit fields; a different mail provider needs only host/port/secure, not a new adapter.', ai: false },
     { name: 'gateway.smtp.get',    params: ['id'], returns: ['id', 'status'], returns_schema: SMTP_RETURN, description: 'Get SMTP account by ID (pass omitted)', ai: false },
     { name: 'gateway.smtp.list',   params: [], returns: ['items', 'total'], returns_schema: LIST_RETURN, description: 'List SMTP accounts (pass omitted)', ai: false },
     { name: 'gateway.smtp.update', params: ['id'], returns: ['id', 'status', 'updatedAt'], returns_schema: SMTP_RETURN, description: 'Update SMTP account fields', ai: false },

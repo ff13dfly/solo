@@ -10,6 +10,7 @@ module.exports = {
             secure:      { type: 'boolean',  description: 'Use TLS (true for port 465)' },
             user:        { type: 'string',   description: 'Auth username / email address', required: true },
             from:        { type: 'string',   description: 'Default sender address (e.g. noreply@example.com)', required: true },
+            options:     { type: 'object',   description: 'Extra nodemailer transport options merged UNDER the explicit fields (requireTLS, tls:{rejectUnauthorized,ciphers,servername}, pool/rateLimit, name for EHLO, timeouts). host/port/secure/auth always win — see logic/smtp.js buildTransportOptions. Switching mail providers needs only host/port/secure, not a per-provider adapter.' },
             status:      { type: 'enum',     options: ['ACTIVE', 'DELETED'], description: 'Account status' },
             createdAt:   { type: 'datetime', description: 'Creation timestamp' },
             updatedAt:   { type: 'datetime', description: 'Last update timestamp' }
