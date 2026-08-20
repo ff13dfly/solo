@@ -390,13 +390,22 @@ if [ -f "$CHANGELOG_FILE" ] && [ "$OLD_VER" != "$NEW_VER" ]; then
         printf "${RED}  [%s] %s${NC}\n" "$_nver" "$_ntxt"
     done < <(awk -v old="$OLD_VER" '
         function vnum(v,   a) { gsub(/^v/, "", v); split(v, a, "."); return (a[1]+0)*1000000 + (a[2]+0)*1000 + (a[3]+0) }
-        BEGIN { oldn = vnum(old) }
+        BEGIN {
+            oldn = vnum(old)
+            # 「无」哨兵：值恰好是"无"时不弹横幅。要求它是一个**词**（后面跟空白/标点/行尾），
+            # 否则 "无法自动迁移…" / "无需改代码，但要重启…" 这类**真动作**会被当成"无"漏掉。
+            # ⚠️ 全角标点必须逐个列出：awk 的 [[:punct:]] 只认 ASCII，各 locale 下都不命中
+            #    「。」——于是「下游 action：无。」会被判成真有动作，给下游弹一条**假的**
+            #    ACTION REQUIRED（2026-08-20 写 v1.2.1 条目时实测踩到）。
+            # ⚠️ 用**交替**而不是字符组 [。，…]：mawk（Debian/Ubuntu 默认）是字节序引擎，
+            #    多字节字符放进字符组会退化成"字节集合"，交替则两种引擎语义一致。
+            NONE = "：[[:space:]]*无([[:space:]]|[[:punct:]]|。|，|、|；|：|！|？|（|）|「|」|【|】|《|》|…|$)"
+        }
         /^## \[v[0-9]+\.[0-9]+\.[0-9]+\]/ { match($0, /v[0-9]+\.[0-9]+\.[0-9]+/); ver = substr($0, RSTART, RLENGTH); vern = vnum(ver); next }
         # Only the actual field line "下游 action：<...>" is a signal — not prose that
-        # merely mentions the words. Skip when the value is the "无" sentinel (matched as
-        # a token so "无法"/"无需" in a real action text are NOT mistaken for "none").
+        # merely mentions the words.
         ver && vern > oldn && /下游[[:space:]]*action[[:space:]]*：/ {
-            if ($0 ~ /：[[:space:]]*无([[:space:]]|[[:punct:]]|$)/) next
+            if ($0 ~ NONE) next
             line = $0
             sub(/^[ >*-]+/, "", line)
             print ver "|" line

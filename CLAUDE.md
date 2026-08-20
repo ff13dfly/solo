@@ -95,14 +95,28 @@ Router 是系统唯一入口，承载 auth / routing / permission / event 等核
 
 ```bash
 cd api
+# 🔴 别用 6379——本机那个常驻实例不是空的，也不归 solo（2026-08-20 实测 15.8 万个 key：
+#    COMMODITY:PRODUCT / COMMODITY:QR 为主，还夹着 STORAGE:ASSET、AUTHORITY:EMPLOYEE）。
+#    测试会往库里写、套件间还会清 key，跑在它上面既可能毁掉别人的数据，也已经反过来
+#    污染过它——库里那些 SALE_TEST:ORDER / WALTEST:ITEM 就是历次照本节跑测试留下的残留。
+#    **测试永远另起一个专用实例**，端口现挑（判据：lsof 一扫没人监听）、跑完关掉。
 # ⚠️ 必须用 redis-stack-server（带 RedisJSON）——普通 redis-server 会让 walarchiver/
 #    orchestrator/storage/nexus 等依赖 RedisJSON 的套在 JSON.SET/stream 上挂死（非报错，是无限等）。
-redis-stack-server --port 6379 --daemonize yes --save ""   # 测试需要 Redis（CI 用 redis/redis-stack-server）
+TESTPORT=6399   # 刻意落在项目段 6379–6389 之外：这是临时刮擦库，不该吃掉「下一个项目」的号
+lsof -nP -iTCP:$TESTPORT -sTCP:LISTEN || \
+  redis-stack-server --port $TESTPORT --daemonize yes --save "" --dbfilename solo-test-$TESTPORT.rdb
 # ⚠️ 必须带 REDIS_URL——ci.yml 的 jest job 设了它，本地裸跑没有；agent 等服务 config
 #    兜底是 6699（dev 栈端口），漏设则相关套件对空端口无限重连（无报错、CPU 趋零的挂死，
 #    2026-07-23 实踩：35 分钟无进展）。
-REDIS_URL=redis://localhost:6379 npx jest -c jest.ci.config.js --ci --runInBand   # CI 绿色子集（115 套/1814 测试，2026-07-23 实跑绿 19.5s，--runInBand 防 MockRouter 并发 flaky）
+REDIS_URL=redis://localhost:$TESTPORT npx jest -c jest.ci.config.js --ci --runInBand
+redis-cli -p $TESTPORT shutdown nosave   # 跑完关掉，别在机器上再留一个常驻测试库
 ```
+
+> 白名单子集当前 **128 套 / 2024 测试**，稳定绿 **127 套**（2026-08-20 实跑 20–35s；其中
+> `core/gateway/tests/smtp-live.test.js` 是 LIVE 套，没配 `EMAIL_SMTP_*` 就整套 skip）。唯一红的那套
+> 是 `core/agent` 的 **LIVE Gemini 活体测试**——它真打外部模型，**同一份代码连跑两次分别挂 2 例和
+> 3 例**，逐次波动、与改动无关。判据：只要「失败的套 = 1，且它是 agent 的 LIVE 套」就是这个已知项，
+> 别去追。`--runInBand` 是必需的，防 MockRouter 并发 flaky。**这些数字会旧，以实跑输出为准。**
 
 ⚠️ 仓库里很多 `*.test.js` 不是 hermetic 的：`core/agent/**` 要外部 LLM API；e2e/rbac/integration 要全栈；部分是 `process.exit` 脚本。CI 用 `jest.ci.config.js` 的**白名单**只跑已验证通过的子集（剩余硬化项见 `BACKLOG.md §5`）。
 

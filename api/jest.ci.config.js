@@ -33,6 +33,9 @@ module.exports = {
         '<rootDir>/core/gateway/tests/send-validation.test.js',
         '<rootDir>/core/gateway/tests/delivery.test.js',
         '<rootDir>/core/gateway/tests/relay-features.test.js',
+        // LIVE：没有 EMAIL_SMTP_* 凭据时整套 skip（同 core/agent 的 LIVE 惯例），
+        // 所以进白名单只是让它在 CI 里被解析/防腐，不会真发信。
+        '<rootDir>/core/gateway/tests/smtp-live.test.js',
         '<rootDir>/core/user/tests/passport.test.js',
         '<rootDir>/core/user/tests/passport-otp.test.js',
         '<rootDir>/core/user/tests/role.test.js',

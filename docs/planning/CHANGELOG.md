@@ -10,7 +10,52 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 ## [Unreleased]
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
-> 暂无。
+
+### Added — gateway SMTP 出站路径的 LIVE 测试（`core/gateway/tests/smtp-live.test.js`）
+
+> 补的是一处**零覆盖**：既有的套覆盖了 SMTP 的外围——`25-gateway` 验账号 CRUD 与密码加密落库、
+> `63-gateway` 把 host 指向 `127.0.0.1:1` 验连不上时的结构化错误、`returns-contract` 验返回契约
+> （走 mock）——但 `logic/email.js` 的 `sendSmtp()` 与 `logic/smtp.js` 的 `getTransporter()`
+> **从来没有对着一台真 SMTP 服务器执行过**。而这条路径的失败是**静默**的：`resolveChannel()`
+> 在 `EMAIL_SMTP_HOST` 为空时回落 mock，mock 同样返回 `{success:true}`，于是只断言 `success`
+> 的验收会永远绿着、而一封信都没发出去。
+
+- 两级门（照 `core/agent/tests/decide.test.js:127` 的 LIVE 惯例）：有 `EMAIL_SMTP_HOST/USER/PASS`
+  才跑连接与认证；**再有 `EMAIL_LIVE_TO` 才真投递**——不会因为环境里恰好有凭据就往谁的信箱塞信。
+- 四条断言：`resolveChannel` 必须是 `smtp`（防静默回落）· env 路 `verify()` 通过 ·
+  **实体路**「加密落库的密码解出来还能真连上」（`smtp.create` → `smtp.test`，这是 25-gateway
+  与本套之间此前没人验的接缝：加密往返坏了，两边各自的测试仍然全绿）· 投递后
+  `provider === 'smtp'`。
+- 凭据缺席时留一条**可见的 skip 记录**，免得「全绿」被读成「发信验过了」。
+- 已进 `jest.ci.config.js` 白名单：CI 没有凭据 → 整套 skip，只起解析防腐的作用，不会发信。
+
+- **实测接通**（2026-08-20，Gmail + 应用专用密码，经 Clash 代理出境）：认证约 12–17s、
+  带投递的完整档约 44–50s，比同仓任何一套慢一个量级，`TIMEOUT` 因此设 45s。首次接通踩的坑
+  已写进文件头：应用专用密码**全小写**，Google 展示字体里 `l`/`I`/`1` 几乎同形，读错一个字母
+  的表现是 `535-5.7.8 BadCredentials`——**和"密码失效/被风控"完全同一个症状**，无从区分。
+
+> **下游 action：无**（纯测试新增，不影响任何运行代码）。
+
+### Fixed — `upgrade.sh` 的「下游 action：无」哨兵漏判全角标点，会弹**假的** ACTION REQUIRED
+
+> `deploy/scaffold/upgrade.sh` 升级后会扫 CHANGELOG，把比消费者旧版本新的每条非「无」的
+> `下游 action` 弹成红色 ACTION REQUIRED。判「无」的正则是
+> `：[[:space:]]*无([[:space:]]|[[:punct:]]|$)`——要求「无」是个**词**，这样
+> `无法自动迁移…` / `无需改代码，但要重启…` 这类**真动作**不会被当成「无」漏掉，方向是对的。
+> 问题在终止符集合不全：**awk 的 `[[:punct:]]` 只认 ASCII**，`zh_CN.UTF-8` / `en_US.UTF-8` / `C`
+> 三种 locale 下都不命中「。」。于是一条老老实实的 **「下游 action：无。」会被判成真有动作**，
+> 给下游弹一条不存在的 ACTION REQUIRED——横幅喊狼来了几次，真有破坏性变更时就没人看了。
+> （2026-08-20 写 v1.2.1 的 CHANGELOG 条目时实测撞上。）
+
+- 全角标点改为**逐个显式列出**：`。，、；：！？（）「」【】《》…`，并把正则提到 `BEGIN` 里
+  的 `NONE` 变量，让那段判据带得动注释。
+- **用交替 `(。|，|…)` 而不是字符组 `[。，…]`**：mawk（Debian/Ubuntu 默认 awk）是**字节序**引擎，
+  多字节字符放进字符组会退化成「字节集合」，可能误命中别的汉字；交替是序列匹配，两种引擎语义一致。
+- 方向保持不变（**宁可多弹、不可漏弹**）：`无法` / `无需` / `无须` / `无论` 开头的真动作仍照弹。
+- 验证：15 条正反用例矩阵 × `zh_CN.UTF-8` / `en_US.UTF-8` / `C` 三种 locale **全对**；再用补丁后的
+  awk 块实扫构造的 CHANGELOG fixture 与真实 CHANGELOG，结果符合预期。
+
+> **下游 action：无**（下次 `upgrade.sh` 生效；此前那条假横幅本就不该出现，忽略即可）。
 
 ---
 
