@@ -17,7 +17,10 @@ export interface RpcResponse<T> {
 
 function redirectToLogin() {
   clearSession();
-  window.location.replace('/login');
+  // Vite 的 BASE_URL：默认构建是 '/'，子路径构建（vite build --base /system/）是
+  // '/system/'。裸写 '/login' 的话，portal 挂在 solo.w3os.net/system/ 下时会跳到
+  // 站点根，落进别的 app（或 404）。BASE_URL 自带结尾斜杠，直接拼即可。
+  window.location.replace(`${import.meta.env.BASE_URL}login`);
 }
 
 export const callRpc = async <T>(method: string, params: any = {}): Promise<T> => {

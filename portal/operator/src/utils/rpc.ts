@@ -61,7 +61,8 @@ export const callRpc = async <T>(method: string, params: any = {}): Promise<T> =
       // -32604 (Forbidden) should just show an error message.
       if (response.data.error.code === -32001) {
         clearSession();
-        window.location.href = '/login';
+        // BASE_URL 而非裸 '/login'：子路径构建（--base /operator/）下裸路径会跳出本 app。
+        window.location.href = `${import.meta.env.BASE_URL}login`;
       }
       throw new RpcError(response.data.error.message, response.data.error.code, response.data.error.data);
     }
