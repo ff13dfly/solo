@@ -11,6 +11,23 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+（暂无）
+
+---
+
+## [v1.2.2] — 2026-08-24
+
+> **patch 步进**：只加不破的修补与增量，无新交付物。四条代码线：① `api/library/env.js`
+> 把「自己读 .env 的脚本」收敛成一份实现（框架级，随 bundle/脚手架下发）；② gateway SMTP
+> 透传 nodemailer 选项，换邮箱厂商不再写 adapter；③ jsonlogic `resolveParams` 数组塌陷修复
+> （带数组参数的 action 此前根本传不进去）；④ portal/mobile 子路径构建适配。
+> 另有 SMTP LIVE 测试、`upgrade.sh` 哨兵修复与一批规划/runbook 文档。
+>
+> 门禁（runbook §3）：主 CI 白名单 **130 套 / 2108 测试**，绿 129 / 2102（唯一红的是
+> `agent.decide` 的 LIVE Gemini 活体测试已知波动项，与 v1.2.0/v1.2.1 同一组、与本版无关）；
+> static 全闸绿（autocheck per-service ×15 + `--lib` + doc-drift + error-codes）；
+> `deploy/build.sh` 5.3M 产物。
+
 ### Added — gateway SMTP 出站路径的 LIVE 测试（`core/gateway/tests/smtp-live.test.js`）
 
 > 补的是一处**零覆盖**：既有的套覆盖了 SMTP 的外围——`25-gateway` 验账号 CRUD 与密码加密落库、
@@ -56,6 +73,73 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
   awk 块实扫构造的 CHANGELOG fixture 与真实 CHANGELOG，结果符合预期。
 
 > **下游 action：无**（下次 `upgrade.sh` 生效；此前那条假横幅本就不该出现，忽略即可）。
+
+### Added — `api/library/env.js`：「自己读 .env 的脚本」收敛成一份实现
+
+> 一份 .env 有三类消费者（dotenv / shell `source` / 自写正则的脚本），第③类每出现一次就
+> 重踩引号坑：`KEY='abc'` 用裸正则取到的是**带引号的** `'abc'`，拿去认证就是 401，而报错
+> 完全不指向引号。仓库实测两处（`upgrade.sh:356` 的 grep|cut、e2e harness 的正则+trim），
+> 都在 `deploy/scaffold/` 里、随项目下发给每个消费者。
+
+- 契约只有一条：**输出与 `dotenv.parse()` 逐字节一致**（连怪癖一起照抄：裸值 `#` 截断、
+  只有双引号展开 `\n`、引号未闭合原样保留）。零依赖（e2e 是独立 npm 项目，包不了 dotenv）；
+  带 CLI `node api/library/env.js <file> <KEY>` 供 shell 调用方。
+- 两处调用点已改走它；测试 66 条（42 手写边界 + 300 份随机语料与 dotenv 逐用例差分 +
+  变异测试堵盲区）。
+- 顺带补脚手架邮件配置缺口：`init.sh` 的 .env 模版补 `EMAIL_SMTP_OPTIONS` /
+  `EMAIL_API_PROVIDER` + 四厂商 host/port 速查；示例一律单引号（裸值被 shell source
+  剥掉双引号后不再是合法 JSON）。
+
+> **下游 action：无**（`upgrade.sh` 升级自动获得；项目里自写正则解析 .env 的脚本**建议**
+> 改走 `api/library/env.js` 的 CLI，非强制）。
+
+### Added — gateway SMTP 透传 nodemailer 选项，换邮箱厂商不再需要写 adapter
+
+> SMTP 是标准协议，换厂商只改 host/port/secure，属配置不该落代码。真正的缺口是字段面太窄：
+> `createTransport` 此前写死 4 个字段，`requireTLS` / `tls.*` / `pool` / 各类 timeout
+> 一个都传不进去。
+
+- `logic/smtp.js` 新增 `buildTransportOptions()`，**env 路**（`EMAIL_SMTP_OPTIONS`，JSON、
+  解析失败当场抛）与**实体路**（`gateway.smtp` 实体的 `options` 字段）都接上。
+- 🔴 合并方向是安全边界：`options` 先铺底、显式字段后盖——options 劫持不了
+  host/port/secure/auth。
+- README 补 `EMAIL_SMTP_*` 全组 + 换厂商判据表（Gmail 应用专用密码 / 163·QQ 授权码 /
+  Outlook 仅 OAuth2、暂未支持）。
+
+> **下游 action：无**（不配 `options` 行为不变）。
+
+### Fixed — jsonlogic `resolveParams` 数组塌陷；fulfillment `instance.list` 补 `sourceId` 声明
+
+> steward 反馈（DOM 提取链路，2026-08-22 triage）落地：数组此前走 `Object.entries` 塌成
+> `{"0":...,"1":...}`——**任何带数组参数的 action（如 `agent.chat` 的 `messages`）都传不
+> 进去**；现数组保持身份逐元素递归，并补 `@attention`（字符串不做插值，引用上下文只能整
+> 字段 `{"var":"path"}`）。`fulfillment.instance.list` 声明 `sourceId` 精确过滤——客户端
+> 幂等探测入口（`instance.create` 不按 sourceId 去重，先 list 后建）。
+
+- 新增 runbook `docs/runbook/browser-extension-ai-extraction.md`（插件 + Fulfillment + AI
+  的 DOM 提取端到端配方），extension-kit README / docs 索引 / protocol/zh/extraction.md
+  挂指针。
+- 遗留三条框架级登记 BACKLOG（instance.create 无 sourceId 幂等、agent 文本方法 4000 字符
+  上限、`pending_callbacks` 死字段）。
+
+> **下游 action：无**（随 bundle 下发；此前数组参数根本传不进去，无人依赖塌陷形态）。
+
+### Fixed — portal 与 mobile 子路径构建（BASE_URL 路由与 config.js 存根）
+
+> portal（operator/system）路由 basename 与 rpc 基址跟随 Vite `BASE_URL`，mobile 补
+> `public/config.js` 存根——部署在子路径（如 `/portal/`）下不再路由 404 / 打错 Router。
+
+> **下游 action：无**（根路径部署行为不变）。
+
+### Added — 规划/反馈文档：v2 bridge 交互模式规格 + 对外推送面（WS 门铃）语义拍板
+
+> ① `docs/planning/v2-bridge-interaction.md`（草案）：主箱—子箱协同运行模式——下行
+> **存档确认制**（回执 = 已存档、幂等键去重）、**定期拉取**（统计采集兼航线心跳）、门铃
+> 三通道，失败语义与撤除保证；`VERSION.v2.md` 同步落地试验田三条采纳（同机跨网格里程碑、
+> 握手带版本、§3.6 A 组 #1/#4 背书）。② WS 门铃 triage：notify-only + 可见性默认全关、
+> 按流 env 白名单，登记 BACKLOG §3（实现属 router 待授权批次）。
+
+> **下游 action：无**（纯规划/反馈文档，bridge 未动工）。
 
 ---
 
