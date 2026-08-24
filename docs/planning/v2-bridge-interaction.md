@@ -62,7 +62,7 @@
 
 | 层 | 指标 | 现成度 |
 |---|---|---|
-| **L0 活着吗** | ping 的 status / version / uptime；**三处版本对齐**（`.solo-version` = git tag = 线上 ping version） | ping 全箱现成；对齐比对待写。⚠️ 别用 `system.service.list` 的版本（注册默认值，colony 实测为假） |
+| **L0 活着吗** | ping 的 status / version / uptime；**三处版本对齐**（`.solo-version` = git tag = 线上 bundle 版本） | ping 全箱现成；⚠️ **但线上 bundle 版本目前 wire 上拿不到**——core 服务 ping 报的是内联冻结的 0.1.0，`system.service.list` 的版本也是注册默认值（colony 实测为假）。前置 = `BACKLOG.md` §3「bundle 运行时自报版本」（build 注入 + `/health` 透出） |
 | **L1 机器回路** | 事件流**窗口斜率**、DLQ 深度、relay token `lastRefreshAt` 是否前进 | colony 判据成文；nexus/notification 的 `/metrics` 已挂 gauge |
 | **L2 人工闸门积压** | **等人的事几件、最老的等了几天**（各箱语义自定，形状统一） | finance `pipeline.overview`、runner `coder.task.stats` 已是此形状；steward / colony 各补一个小只读方法 |
 

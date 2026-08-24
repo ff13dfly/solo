@@ -137,7 +137,10 @@ SOLO_A 的 `bridge` 服务把请求分发到下游 SOLO_{1..n}，形成级联。
   bridge 侧版本不齐时至少 log、可配 fail fast。动机：单网格时代版本漂移只影响自己，联邦后变成**两个网格间的
   不对称**，会被误诊为联邦 bug（试验田第一条航线 overview v1.1.14 → runner v1.2.1 当场就跨版本）；同运营者
   可人肉 `upgrade.sh` 对齐，跨运营方**无权替对方升级**，判据必须在握手第一现场。成本低——capability.list
-  本就是握手第一步。
+  本就是握手第一步。⚠️ **前置（2026-08-24 核实）：运行时目前不知道自己的 bundle 版本**——各服务内联的
+  per-service `package.json` 冻结在 0.1.0，router config 无 version 字段，`.solo-version` 只被 run.sh
+  用来选文件、不进运行时。须先落 [`BACKLOG.md`](./BACKLOG.md) §3「bundle 运行时自报版本」
+  （build 注入 + `library/health.js` 透出，不碰 router），否则握手拿不出这个字段。
 - **预检是优化、不是边界**：缓存会过期（B 删方法 / 改 schema / 撤 permit），B 的 `checkAccess` + 校验**永远权威**（fail-closed）。
   预检 miss 或下游 `METHOD_NOT_FOUND` → **优雅降级回"裸转发让 B 拒"** + 顺手刷新缓存。最坏退化成裸转发，本就安全。
 - **为什么内网都预检了、跨网格更要**：跨网格被拒不免费——真网络往返 + 一次签名 + 污染 B 的限流/日志 + 错误归因差。
