@@ -36,6 +36,7 @@
 
 - [`bot-bootstrap.md`](./runbook/bot-bootstrap.md) —— 系统 bot 账号初始化
 - [`nexus-agent-bootstrap.md`](./runbook/nexus-agent-bootstrap.md) —— 注册 AI agent(Sentinel)
+- [`browser-extension-ai-extraction.md`](./runbook/browser-extension-ai-extraction.md) —— 浏览器插件 + Fulfillment + AI DOM 提取配方
 - [`test-handoff.md`](./runbook/test-handoff.md) —— 跨机器测试协作单
 - [`upgrade-v1.0-to-v1.1.md`](./runbook/upgrade-v1.0-to-v1.1.md) —— 消费项目从 SOLO v1.0 升 v1.1(seed-registry / redis-stack / 破坏点)
 - [`release-and-branching.md`](./runbook/release-and-branching.md) —— 发版 / 分支 / cherry-pick / 兼容纪律(有消费者后怎么不混乱)

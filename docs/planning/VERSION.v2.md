@@ -76,6 +76,17 @@ SOLO_A 的 `bridge` 服务把请求分发到下游 SOLO_{1..n}，形成级联。
 >
 > **2026-07-12 回写**：**平行处理（水平铺开分担负载）同样走这个形状**——同一运营者铺 N 套网格，
 > 各网格仍在同一信任域内，跨信任域那部分依赖（actor-claim 全量）因此不成立，见 §3.4-②。
+>
+> **2026-08-24 回写**：主箱—子箱的**协同运行模式**独立成文：[`v2-bridge-interaction.md`](./v2-bridge-interaction.md)
+> ——本节管机制（一次请求怎么过边界），那篇管运行模式（三条通道：下行**存档确认制** /
+> **定期拉取**兼航线心跳 / 门铃；失败语义与撤除保证）。子箱收到下行指令即存档并回执「已存档」，
+> 执行由子箱自己的状态机异步推进——由此子箱不依赖主箱运行，主箱撤除无痕。
+>
+> **2026-08-23 回写**：**A 线有了第一块试验田（用户拍板）——同运营者自项目 mesh**：overview 作主入口，
+> 下游为 runner / colony / steward / finance / trend 等既有 SOLO 网格，全部同信任域，正好落在本节
+> 「最轻档」上（§3.4-②④ 条件件均不触发）；第一条航线 overview → runner（捕获条目派发为任务），
+> 两网格同机（见 §3.4-④ 的 loopback bridge 里程碑）。场景输入与规格建议见
+> [`../feedback/v2-bridge-first-testbed-own-mesh.md`](../feedback/v2-bridge-first-testbed-own-mesh.md)。
 
 ```
        ┌─────────── SOLO_A ───────────┐         ┌──── SOLO_B ────┐
@@ -122,6 +133,11 @@ SOLO_A 的 `bridge` 服务把请求分发到下游 SOLO_{1..n}，形成级联。
 - **缓存下游能力表做预检**——bridge 缓存 SOLO_B 的 `system.capability.list`（复用 Router `updateCapabilityMap` 的 60s 刷新），
   过边界前先查：方法存在 + ai/public 暴露 + 命中 A 的窄 permit（有 schema 顺手校 params）。这正是 SOLO 内网 `_task` 已有的纵深
   （`api/router/handlers/tasks.js:103-122` 拿 `CAPABILITY_MAP` 预检，注释："prevent propagation of malformed data"）。
+- **握手带版本（2026-08-23 定，来自试验田反馈）**——capability 握手（或信封）附带下游 bundle 版本 / 协议版本，
+  bridge 侧版本不齐时至少 log、可配 fail fast。动机：单网格时代版本漂移只影响自己，联邦后变成**两个网格间的
+  不对称**，会被误诊为联邦 bug（试验田第一条航线 overview v1.1.14 → runner v1.2.1 当场就跨版本）；同运营者
+  可人肉 `upgrade.sh` 对齐，跨运营方**无权替对方升级**，判据必须在握手第一现场。成本低——capability.list
+  本就是握手第一步。
 - **预检是优化、不是边界**：缓存会过期（B 删方法 / 改 schema / 撤 permit），B 的 `checkAccess` + 校验**永远权威**（fail-closed）。
   预检 miss 或下游 `METHOD_NOT_FOUND` → **优雅降级回"裸转发让 B 拒"** + 顺手刷新缓存。最坏退化成裸转发，本就安全。
 - **为什么内网都预检了、跨网格更要**：跨网格被拒不免费——真网络往返 + 一次签名 + 污染 B 的限流/日志 + 错误归因差。
@@ -141,8 +157,13 @@ SOLO_A 的 `bridge` 服务把请求分发到下游 SOLO_{1..n}，形成级联。
 3. **环路 / 深度刹车跨网格（必做）**：A→B→A 联邦回环。depth 计数器要跨 bridge hop 存活
    （relay 转发 `X-Trace-Id`/`X-Trace-Depth`，但跨网格下游 Router 默认会 mint 新链）——否则无限联邦回环。
    纯拓扑问题，与信任模型无关，平行网格同样会踩。
-4. **TLS / 数据主权**：跨机传输要 TLS——**多机部署硬化已拉回 v1.1.x**（VERSION.md §4），是 bridge 的硬前置，
-   不占 v2 排期。跨信任域时哪些数据能过 bridge：在 bridge egress 做 fieldmask/redact（同运营者平行网格可全通，条件依赖）。
+4. **TLS / 数据主权（TLS 收窄为跨机档条件前置，2026-08-23）**：**跨机**传输要 TLS——多机部署硬化已拉回
+   v1.1.x（VERSION.md §4），不占 v2 排期。但它只前置**跨机档**：**「同机跨网格（loopback bridge）」立为
+   A 线第一个里程碑形态**——两个 Router 在同一台机器的不同端口（独立 Router / Redis / keypair，跨网格但不跨机），
+   TLS 天然不触发，而信封签名 / 窄 permit / 环路刹车 / 能力表预检**照常需要、照常可测**（试验田第一条航线
+   overview → runner 即此形态，见 §3.1 回写）。⚠️ 别把「同机」误当「同网格」而跳过签名与 permit——loopback
+   可信是 v1.1 的**单网格**假设，跨网格后哪怕 loopback 也不继承。跨信任域时哪些数据能过 bridge：在 bridge
+   egress 做 fieldmask/redact（同运营者平行网格可全通，条件依赖）。
 
 > **一句话：认证用 mesh 公钥签名（消掉了共享秘密托管那块）、授权用窄 permit；同运营者平行网格只欠
 > "多机 TLS（v1.1.x）+ 环路刹车"两块地基，跨运营方联邦才追加 actor-claim + fieldmask 两块条件件。**
@@ -166,6 +187,11 @@ SOLO_A 的 `bridge` 服务把请求分发到下游 SOLO_{1..n}，形成级联。
 > 与「取决于未定选项」（C 组）；另有一类不是设计漏洞、但会被实现者踩坑的**实现陷阱**（D 组）。
 >
 > 烈度 🔴 高 / 🟠 中 / ⚪ 低。状态 **缺**=设计未提及 / **半**=提及但未解 / **选**=仅在某未定选项下成立。
+>
+> **2026-08-23 回写**：A 组 #1（缺 `aud`）与 #4（public 绕过窄 permit）在试验田（§3.1 回写）的最轻档
+> **照样成立**——自家 mesh 全是登记同一把公钥的平行网格，正是 #1 的重放形状；下游 public 面（含 passport
+> 自助发证）对能触达 Router 的 peer 敞开。**两条须在第一条航线接通前立起来。**#2/#3 同信任域烈度下降，
+> 但试验田若长到 steward ↔ finance（finance 在第三方服务器上），#3 先回来。
 
 #### A. 设计真正漏掉的硬缺口（v2 开工前必补）
 

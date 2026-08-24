@@ -134,6 +134,8 @@ await queue.enqueue({
 await queue.drain();
 ```
 
+> 📖 **端到端高级配方**：如何结合 Fulfillment 状态机与 AI Agent 服务实现全自动网页 DOM 结构化提取？详见 [`docs/runbook/browser-extension-ai-extraction.md`](../../docs/runbook/browser-extension-ai-extraction.md)。
+
 ---
 
 ## 4.5 `call` 还是 `attempt` —— 重试只能有一层

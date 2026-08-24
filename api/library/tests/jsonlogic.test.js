@@ -5,9 +5,11 @@
  * The module is pure: no redis, no network, no filesystem, no clock/random.
  * Every assertion below was verified against the actual module behavior
  * (json-logic-js as wrapped), so they describe what the code DOES, including
- * its quirks (e.g. arrays collapse to index-keyed objects in resolveParams,
- * and a `$`-prefixed key triggers jsonLogic.apply which throws because no
- * real JsonLogic operator starts with `$`).
+ * its quirks (e.g. a `$`-prefixed key triggers jsonLogic.apply which throws
+ * because no real JsonLogic operator starts with `$`). Arrays used to collapse
+ * to index-keyed objects in resolveParams — fixed 2026-08-22 (they now keep
+ * array identity and resolve per-element), see
+ * docs/feedback/runbook-browser-extension-ai-extraction-not-runnable.md §二.
  */
 const L = require('../jsonlogic');
 
@@ -134,10 +136,45 @@ describe('jsonlogic — resolveParams (per-field template evaluation)', () => {
         expect(L.resolveParams(true, {})).toBe(true);
     });
 
-    test('arrays are walked as objects and collapse to index keys (quirk)', () => {
-        // Object.entries on an array yields string index keys, and the result
-        // is a fresh plain object — this is the module's actual behavior.
-        expect(L.resolveParams([1, 2], {})).toEqual({ 0: 1, 1: 2 });
+    test('arrays keep array identity (top-level template)', () => {
+        const out = L.resolveParams([1, 2], {});
+        expect(Array.isArray(out)).toBe(true);
+        expect(out).toEqual([1, 2]);
+    });
+
+    test('array-valued fields stay arrays and resolve per-element', () => {
+        const out = L.resolveParams(
+            { messages: [{ role: 'system', content: 'x' }, { role: 'user', content: { var: 'dom' } }] },
+            { dom: '<html/>' },
+        );
+        expect(Array.isArray(out.messages)).toBe(true);
+        expect(out.messages).toEqual([
+            { role: 'system', content: 'x' },
+            { role: 'user', content: '<html/>' },
+        ]);
+    });
+
+    test('a {var} element directly inside an array is applied', () => {
+        expect(L.resolveParams({ ids: [{ var: 'a' }, 'lit'] }, { a: 7 })).toEqual({ ids: [7, 'lit'] });
+    });
+
+    test('nested arrays recurse without losing identity', () => {
+        const out = L.resolveParams({ grid: [[{ var: 'x' }], [1]] }, { x: 'v' });
+        expect(out).toEqual({ grid: [['v'], [1]] });
+        expect(Array.isArray(out.grid) && Array.isArray(out.grid[0])).toBe(true);
+    });
+
+    test('strings are NOT interpolated — {{...}} template syntax passes through verbatim', () => {
+        // Documented contract: only whole-field { var } / $-op objects are evaluated.
+        expect(L.resolveParams({ content: '页面:{{instance.meta.dom}}' }, { instance: { meta: { dom: 'real' } } }))
+            .toEqual({ content: '页面:{{instance.meta.dom}}' });
+    });
+
+    test('non-var JsonLogic operators (e.g. cat) are NOT evaluated in templates', () => {
+        // The heuristic only recognizes `var` / `$`-prefixed keys; a { cat: [...] }
+        // wrapper recurses as a plain object (its inner vars DO resolve).
+        expect(L.resolveParams({ content: { cat: ['URL: ', { var: 'u' }] } }, { u: 'x' }))
+            .toEqual({ content: { cat: ['URL: ', 'x'] } });
     });
 
     test('a falsy var key (empty string) is treated as a nested object, not evaluated', () => {

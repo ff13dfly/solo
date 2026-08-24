@@ -96,9 +96,10 @@ const methods = [
     {
         name: 'fulfillment.instance.list',
         params: [
-            { name: 'state',  type: 'string',  required: false, maxLength: 64, description: 'Filter by state' },
-            { name: 'limit',  type: 'number',  required: false, description: 'Page size' },
-            { name: 'offset', type: 'number',  required: false, description: 'Page offset' }
+            { name: 'state',    type: 'string',  required: false, maxLength: 64, description: 'Filter by state' },
+            { name: 'sourceId', type: 'string',  required: false, maxLength: 64, pattern: 'id', description: 'Filter by source order ID (exact match) — the client-side idempotency probe: look up whether an instance for this sourceId already exists before creating one (instance.create does NOT dedupe by sourceId)' },
+            { name: 'limit',    type: 'number',  required: false, description: 'Page size' },
+            { name: 'offset',   type: 'number',  required: false, description: 'Page offset' }
         ],
         description: 'List all fulfillment instances',
         returns_schema: LIST_RETURN,     // { items: instance[], total } — items always [] on empty
