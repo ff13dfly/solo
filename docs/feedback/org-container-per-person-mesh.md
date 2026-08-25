@@ -133,7 +133,7 @@ skill 一条都拦不到，因为它们不发生在改 `api/apps/` 的时刻。
 overview 侧未在只读区打任何 `[Project]` 补丁，也没有 divergence 债。
 §1 的缺口是在项目侧自己写一份 `CLAUDE.md` 绕过的（各派生项目本来就都这么做）。
 
-另有一份独立的缺陷报告见 [`scaffold-init-stale-solana-dep.md`](./scaffold-init-stale-solana-dep.md)
+另有一份独立的缺陷报告见 [`scaffold-init-stale-solana-dep.md`](./done/scaffold-init-stale-solana-dep.md)
 （`init.sh` 仍引用已移除的 `@solana/web3.js`），那份是实测缺陷，与本篇的场景反馈分开。
 
 ---

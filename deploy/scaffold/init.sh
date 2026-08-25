@@ -108,11 +108,21 @@ log_info "Bundle copied: api/publish/solo.v${SOLO_VERSION}.js"
 
 log_warn "Generating router keypair..."
 
+# tweetnacl + bs58, NOT @solana/web3.js. @why The runtime dropped the ~14MB
+# @solana dep (api/router/handlers/keypair.js — "it was the last consumer"), but
+# this build-time caller was not counted and kept requiring it out of solo's own
+# node_modules. It only survived on machines carrying a stale orphan copy of the
+# package: on a fresh clone (or after any `npm ci`) this line died with
+# `Cannot find module .../@solana/web3.js` and no project could be scaffolded.
+# See docs/feedback/done/scaffold-init-stale-solana-dep.md.
+# The 64-byte secretKey layout (32 seed + 32 public) is identical either way, so
+# .keypair files stay byte-compatible with projects scaffolded before this change.
 KEYPAIR_JSON=$(node -e "
-const { Keypair } = require('$SOLO_DIR/api/node_modules/@solana/web3.js');
-const kp = Keypair.generate();
+const nacl = require('$SOLO_DIR/api/node_modules/tweetnacl');
+const bs58 = require('$SOLO_DIR/api/node_modules/bs58');
+const kp = nacl.sign.keyPair();
 process.stdout.write(JSON.stringify({
-  pub: kp.publicKey.toBase58(),
+  pub: (bs58.default || bs58).encode(kp.publicKey),
   sec: Array.from(kp.secretKey)
 }));
 ")

@@ -117,7 +117,7 @@ fi
 unset PORT ROUTER_URL ADMINISTRATOR_SERVICE_URL
 
 # --- 2. Ensure npm dependencies ---
-# Private apps require redis / @solana/web3.js / etc. via api/library. If
+# Private apps require redis / tweetnacl / etc. via api/library. If
 # node_modules is missing or out of date, install before starting anything.
 
 if [ -f "$ROOT_DIR/package.json" ]; then

@@ -88,4 +88,53 @@ const { Keypair } = require('$SOLO_DIR/api/node_modules/@solana/web3.js');
 
 ---
 
-**处理结论**：待 triage。
+**处理结论**：**已落地 v1.2.4（2026-08-25）**，建议 1、2、5 采纳；3、4 记为待办。
+
+### 干净复现做了，结论比本篇记的更严重
+
+本篇 §来源自陈「⚠️ 未执行干净复现，结论是从锁文件推出的，请以一次干净复现收口」——
+这次收口了，方法是**把所有 `package.json` 拷进隔离目录跑真 `npm ci`**（不在仓库里跑，
+`npm ci` 会先清空 `node_modules`）。结果推翻了本篇 §一「`api/package-lock.json` 与
+package.json 一致」这一格：
+
+```
+npm error `npm ci` can only install packages when your package.json
+          and package-lock.json ... are in sync.
+npm error Missing: mcp@0.1.0 from lock file
+```
+
+**根依赖 18 项确实对得上，坏的是 workspace 清单**：`core/mcp`（v1.1.10 加的服务）
+从没进过 lock，`core/phaser`（目录早删）还留在里面；根 `package-lock.json` 更旧，
+缺 5 个 workspace。两个 lock 自 `40c818a`（首次公开发布）起就没重生成过。
+
+⇒ 于是 `npm ci` **在装依赖之前就整个拒绝**。本篇推断的「新树 635 个包、没有 @solana」
+那一步压根到不了；派生方看到的「预检查找不到 dotenv」也不是 dotenv 的问题，是
+npm ci 拒绝后什么都没装。
+
+### 🔴 连带发现：solo 自己的 CI 一直是红的
+
+`ci.yml` 的 7 个 job 里有 4 个第一步就是 `npm ci`（`working-directory: api`）。查 GitHub
+Actions 历史：**近期每一次运行都失败**，失败步骤全是 `Run npm ci` / `install api deps`。
+也就是说 CLAUDE.md §4 记的「P0 CI 已落地」名存实亡——jest 与 static gate 在 CI 上
+从来没真跑过，全靠本地手跑兜着。本篇 §四.5 说「在 CI 里加一道 npm ci 冒烟」，
+其实 CI 早就有这道，只是它一直红着没人看。
+
+### 落地内容
+
+1. **两个 lock 重生成**（`npm install --package-lock-only`，不动 `node_modules`），
+   各自用隔离目录的真 `npm ci` 验过：api 树 578 包、根树 385 包，均成功。
+2. **`init.sh` 改用 tweetnacl + bs58**（建议 1，不新增依赖）。实测新旧等价：
+   公钥 44 字符 base58、secretKey 64 字节，喂给 router 的 `fromSecretKey()` 公钥一致、
+   签名/验签往返通过 ⇒ **老项目的 `.keypair` 文件继续可用，不需要轮换密钥**。
+3. **`deploy/scaffold/package.json` 删掉 `@solana/web3.js`**（建议 2），
+   `run.sh` 里那句提到它的注释一并更正。
+4. **本机孤儿树清除**（建议 5 的前半）：`npm prune` 移除 164 个不在 lock 里的包，
+   `@solana/` 整棵（14MB）消失，顶层包数 445 → 405。清理后全量回归：CI 白名单
+   130 套 / 2108 测试绿、static 全闸绿、`build.sh` 产物正常。
+5. **`npm ci` 冒烟固化成发版门禁**（建议 5 的后半），连同「必须在隔离目录跑」的理由
+   写进项目 `CLAUDE.md` §6。
+
+### 未做，记为待办
+
+- **建议 3（init.sh 前置自检）**、**建议 4（失败时清理半成品目录 / 改进那句误导性提示）**
+  本轮没做。它们与本篇主缺陷正交，属于 init.sh 的健壮性改进，另开一轮。

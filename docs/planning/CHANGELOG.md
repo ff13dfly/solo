@@ -15,6 +15,67 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
+## [v1.2.4] — 2026-08-25
+
+> **patch 步进**：修一处**从首次公开发布起就存在**的构建期缺陷——两个 `package-lock.json`
+> 与 workspace 清单不同步，`npm ci` 整个拒绝安装。后果有两层：① 干净环境下 `init.sh`
+> 建不出新项目；② **solo 自己的 CI 一直是红的**，7 个 job 里 4 个第一步就挂在 `npm ci`。
+> 同批拔掉 `init.sh` 里最后一处 `@solana/web3.js` 残留。
+>
+> 门禁：CI 白名单 **130 套 / 2108 全绿**（2103 passed / 5 skipped）；static 全闸绿；
+> `build.sh` 产物正常；两个 lock **各自用隔离目录的真 `npm ci` 验过**（api 树 578 包、
+> 根树 385 包）。
+
+### Fixed — 🔴 `package-lock.json` 与 workspace 清单不同步，`npm ci` 直接拒绝安装
+
+> ```
+> npm error `npm ci` can only install packages when your package.json
+>           and package-lock.json ... are in sync.
+> npm error Missing: mcp@0.1.0 from lock file
+> ```
+> `api/package-lock.json` 里**没有 `core/mcp`**（v1.1.10 加的服务，lock 从没重生成），
+> 却还留着 `core/phaser`（目录早已删除）；根 `package-lock.json` 更旧，缺 5 个 workspace。
+> 两个 lock 自 `40c818a`（首次公开发布）以来一次都没更新过。
+>
+> **根依赖 18 项其实是对得上的**——坏的是 workspace 清单，所以只比对 `dependencies`
+> 看不出问题，这也是它藏了这么久的原因。派生方看到的「预检查找不到 dotenv」不是 dotenv
+> 的问题：npm ci 在装任何东西之前就整个拒绝了，什么都没装。
+
+- 两个 lock 用 `npm install --package-lock-only` 重生成（不动 `node_modules`）。
+- **连带修好 CI**：`ci.yml` 有 4 个 job 第一步是 `npm ci`（`working-directory: api`），
+  GitHub Actions 历史上近期每一次运行都失败，失败步骤全是 `Run npm ci` / `install api deps`。
+  也就是说 CLAUDE.md §4 记的「P0 CI 已落地」此前名存实亡——jest 与 static gate 在 CI 上
+  从来没真跑过，全靠本地手跑兜着。
+- **新增发版门禁**：隔离目录跑真 `npm ci` 冒烟，写进 `CLAUDE.md` §6.1。
+  ⚠️ 关键是**不能在仓库里跑** `npm ci`——它会先清空 `node_modules`。做法是把所有
+  `package.json` + lock 拷进临时目录再跑，验的是锁文件本身，不动工作树。
+
+### Fixed — `init.sh` 生成 Router 密钥仍 require 已移除的 `@solana/web3.js`
+
+> 运行时早已把 Ed25519 换成 tweetnacl + bs58（`api/router/handlers/keypair.js`：
+> "it was the last consumer"），但**构建期的 `init.sh` 没被算进那次瘦身**，仍在
+> `require('$SOLO_DIR/api/node_modules/@solana/web3.js')`。它在开发机上还能跑，只是因为
+> `api/node_modules/` 里躺着一份没人清的孤儿；换台机器、或任何人 `npm ci` 一次，
+> 建项目就死在这一步。来源：[`../feedback/done/scaffold-init-stale-solana-dep.md`](../feedback/done/scaffold-init-stale-solana-dep.md)
+> （2026-08-20 报告，本轮 triage 时用干净复现收口，并推翻了它对锁文件的判断）。
+
+- `init.sh` 改用 `nacl.sign.keyPair()` + `bs58.encode()`，**不新增任何依赖**（两者本就在
+  `api/package.json` 里）。实测等价：公钥 44 字符 base58、secretKey 64 字节
+  （32 seed + 32 public），喂给 router 的 `fromSecretKey()` 公钥一致、签名/验签往返通过
+  ⇒ **已有项目的 `.keypair` 文件继续可用，不需要轮换密钥**。
+- `deploy/scaffold/package.json` 删掉 `@solana/web3.js`（新项目不再白装 14MB）；
+  `run.sh` 里提到它的注释一并更正。
+- 本机 `api/node_modules` 用 `npm prune` 清掉 164 个不在 lock 里的孤儿包
+  （`@solana/` 整棵 14MB 消失，顶层 445 → 405）；清理后全量回归验证如上。
+
+> **下游 action：** 已有项目**无动作**——本版只改构建期路径（`init.sh` / lock / CI），
+> 运行时代码零改动，`.keypair` 与已生成项目完全不受影响。**新建项目**受益：干净环境下
+> `npm ci` + `init.sh` 现在能一次跑通。若你的派生项目也维护自己的 lock，建议照
+> `CLAUDE.md` §6.1 那道隔离 `npm ci` 自查一次——同一个坑（新增 workspace 忘了重生成 lock）
+> 在任何 npm workspaces 仓库里都会复现，且只在干净环境暴露。
+
+---
+
 ## [v1.2.3] — 2026-08-25
 
 > **patch 步进**：一条线——storage 的默认字节后端从「一个没人启动的独立进程」改成

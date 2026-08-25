@@ -120,6 +120,42 @@ redis-cli -p $TESTPORT shutdown nosave   # 跑完关掉，别在机器上再留�
 
 ⚠️ 仓库里很多 `*.test.js` 不是 hermetic 的：`core/agent/**` 要外部 LLM API；e2e/rbac/integration 要全栈；部分是 `process.exit` 脚本。CI 用 `jest.ci.config.js` 的**白名单**只跑已验证通过的子集（剩余硬化项见 `BACKLOG.md §5`）。
 
+### 6.1 锁文件门禁：隔离目录跑真 `npm ci`（2026-08-25 定，v1.2.4）
+
+**动过任何 `package.json`（尤其新增/删除 workspace：`api/core/*`、`api/apps/*`、`api/router`、`api/sample`）之后，发版前必须验这一道。**
+
+```bash
+# 🔴 绝不在仓库里跑 npm ci —— 它第一件事就是清空 node_modules。
+#    要验的是「锁文件本身能不能装」，不是把工作树重装一遍。
+S=$(mktemp -d)
+cd /Users/fuu/Desktop/AI/solo/api
+cp package.json package-lock.json "$S/"
+# 只拷 package.json，不拷源码：npm ci 校验 workspace 清单靠的就是这些文件
+for f in $(find . -name package.json -not -path "*/node_modules/*" -mindepth 2 -maxdepth 3); do
+  mkdir -p "$S/$(dirname $f)"; cp "$f" "$S/$f"
+done
+cd "$S" && npm ci --ignore-scripts --no-audit --no-fund   # 期望：added <N> packages
+rm -rf "$S"
+```
+
+根 `package-lock.json` 同理（把 `api/**/package.json` 一起拷进去），**两个 lock 都要验**。
+坏了的修法：`npm install --package-lock-only`（重生成 lock，不动 `node_modules`），再验一遍。
+
+**为什么值得单列一道门**（v1.2.4 实测）：`api/package-lock.json` 从首次公开发布起就缺
+`core/mcp`、留着已删的 `core/phaser`，于是 `npm ci` 报
+`Missing: mcp@0.1.0 from lock file` 并**整个拒绝安装**。后果两层：干净环境下 `init.sh`
+建不出项目；**`ci.yml` 里 4 个 job 第一步就是 `npm ci`，GitHub Actions 一直全红**——
+§4 说的「P0 CI 已落地」名存实亡了一个多月，jest 与 static gate 在 CI 上从没真跑过。
+
+三个让它藏这么久的原因，值得记住：
+
+1. **根 `dependencies` 是对得上的**，坏的只是 workspace 清单——只比对依赖列表看不出来。
+2. **本地全绿**：`node_modules` 是历史累积的，早装好了；坏的只有「从 lock 重建」这条路。
+   同理，本机能跑不等于依赖声明是对的（`init.sh` 那处 `@solana/web3.js` 残留就是靠
+   `node_modules` 里一份孤儿苟活的，`npm prune` 一清就现形）。
+3. **CI 红了没人看**——本地手跑门禁反而掩盖了它。**推完之后顺手扫一眼 Actions**：
+   `curl -s "https://api.github.com/repos/ff13dfly/solo/actions/runs?per_page=3"`。
+
 ---
 
 ## 7. Router → 微服务通信约定（踩坑防坑）
