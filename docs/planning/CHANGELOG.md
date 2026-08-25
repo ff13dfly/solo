@@ -77,6 +77,22 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 - **复现方式值得记一笔**：本机全量 e2e 一直是绿的，是在 `git worktree` + `npm ci` 的
   **干净树**上才复现出来的——「本机能跑」的另一种形态，与本版另外几条同源。
 
+### Fixed — ui-e2e 的 mesh 步骤漏了 `working-directory`，CI 里跑的是个不存在的路径
+
+> `ci.yml` 顶层设了 `defaults.run.working-directory: api`，ui-e2e job 里每一步都显式
+> 覆盖过（`api` / `e2e` / `e2e/ui` / `portal/system` / `portal/operator`），**唯独
+> 「bring up mesh」这步漏了** ⇒ CI 里实际执行的是 `api/e2e/ui/scripts/meshup.js`，
+> 这个路径根本不存在。node 立刻以 `Cannot find module` 退出、错误进了后台日志，
+> 而下面那个 180 秒的等待循环注定等不到 readiness，最后报出来的是一句含糊的
+> `mesh failed to start`——**指向"mesh 起不来"，而真相是脚本压根没被执行**。
+>
+> 因此这个 job 从来没有真正跑过一次 UI e2e。本地怎么跑都对（在仓库根跑），只在 CI 里挂；
+> 复现只要一行：`cd api && node e2e/ui/scripts/meshup.js`。
+
+- 该步补上 `working-directory: .`。同时扫了一遍全文件，没有其它 `run:` 步骤有同类遗漏
+  （另外 3 处引用非 api 路径的都是 `uses: actions/upload-artifact`，其 `path:` 相对仓库根
+  解析，不受 `defaults.run` 影响）。
+
 ---
 
 ## [v1.2.4] — 2026-08-25

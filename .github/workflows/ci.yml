@@ -256,6 +256,11 @@ jobs:
         working-directory: e2e/ui
         run: npx playwright install --with-deps chromium
       - name: bring up mesh (13 services + admin & operator seed)
+        # working-directory: . —— 本工作流顶层设了 `defaults.run.working-directory: api`,
+        # 本 job 每一步都显式覆盖过,唯独这步漏了 ⇒ CI 里实际跑的是 `api/e2e/ui/scripts/
+        # meshup.js`(不存在),node 秒退进日志,下面 180 秒的等待循环注定等不到 readiness,
+        # 报出来的却是含糊的 "mesh failed to start"。本地怎么跑都对(仓库根),只在 CI 里挂。
+        working-directory: .
         run: |
           set -e
           ( node e2e/ui/scripts/meshup.js > /tmp/ui-meshup.log 2>&1 & )
