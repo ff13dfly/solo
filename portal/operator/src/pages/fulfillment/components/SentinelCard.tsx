@@ -23,7 +23,10 @@ export function SentinelCard({
   const isToggling = togglingId === id;
 
   return (
-    <div style={{
+    // data-test="watcher-row" —— e2e/ui 的 profile-watchers spec 靠它定位单个 sentinel
+    // 卡片。watcher 列表从内联 JSX 抽成本组件时这个钩子丢了,断言就变成了
+    // "element(s) not found",看着像 sentinel 没挂到 profile 上(真相是选择器没了着落)。
+    <div data-test="watcher-row" style={{
       position: 'relative',
       border: '1px solid var(--border-color)',
       borderRadius: '8px',

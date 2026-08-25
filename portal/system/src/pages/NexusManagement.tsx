@@ -426,6 +426,7 @@ export default function NexusManagement({ createTrigger }: { createTrigger?: num
                     {/* Actions Dropdown */}
                     <div className="relative shrink-0">
                       <button
+                        data-test="sentinel-menu"
                         className="text-text-secondary hover:text-accent p-1 transition-colors rounded hover:bg-white/5 cursor-pointer"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1040,7 +1041,7 @@ export default function NexusManagement({ createTrigger }: { createTrigger?: num
               )}
 
               {/* Autorun — AI decision via agent.decide */}
-              <div className={`border border-border rounded-md bg-white/[0.02] p-3 ${!ctxEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
+              <div data-test="ctx-autorun" className={`border border-border rounded-md bg-white/[0.02] p-3 ${!ctxEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -1079,7 +1080,7 @@ export default function NexusManagement({ createTrigger }: { createTrigger?: num
               </div>
 
               {/* Emit — declarative action: publish a decision event */}
-              <div className={`border border-border rounded-md bg-white/[0.02] p-3 mt-4 ${!ctxEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
+              <div data-test="ctx-emit" className={`border border-border rounded-md bg-white/[0.02] p-3 mt-4 ${!ctxEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input
                     type="checkbox"

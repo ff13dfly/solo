@@ -45,9 +45,17 @@ test('@autorun create AI sentinel via form → autorun + emit persist, EDIT roun
   await page.locator('[data-test="sentinel-role"]').fill('ops.e2e-autorun');
   await page.locator('[data-test="sentinel-subscriptions"]').fill('EVENT:E2E:AUTORUN');
 
+  // 表单已经分成三个标签页(Basic Info / Context & Prompt / AI & Action),
+  // 每个 tab 的内容是**条件渲染**的(`formActiveTab === '...'`),不切过去元素根本不在 DOM 里。
+  // 此前 spec 当它是一张平铺的表,填完 basic 就直接 check ctx-enable ⇒
+  // "waiting for locator([data-test=ctx-enable])" 一路等到 30s 超时。
+  const formTab = (name: RegExp) => page.getByRole('button', { name });
+
   // Enable context, then autorun (choices + threshold) and emit (stream + type + payload).
+  await formTab(/Context & Prompt/i).click();
   await page.locator('[data-test="ctx-enable"]').check();
 
+  await formTab(/AI & Action/i).click();
   const autorun = page.locator('[data-test="ctx-autorun"]');
   await autorun.locator('input[type="checkbox"]').check();
   await autorun.getByPlaceholder('approve, hold').fill('approve, hold');
@@ -75,7 +83,13 @@ test('@autorun create AI sentinel via form → autorun + emit persist, EDIT roun
   });
 
   // EDIT round-trip: reopen and confirm the editor re-loaded the values (no silent loss).
-  await page.locator(`div.grid`, { hasText: NAME }).first().getByRole('button', { name: /^EDIT$/ }).click();
+  // 动作收进了每张卡片的「⋯」菜单;`div.grid` 那种绑死样式类的选择器也一并换掉。
+  const card = page.locator(`[title="${NAME}"]`)
+    .locator('xpath=ancestor::div[.//button[@data-test="sentinel-menu"]][1]');
+  await card.locator('[data-test="sentinel-menu"]').click();
+  // 菜单项文本带 emoji 前缀(`✏️ EDIT`),`/^EDIT$/` 这种锚定写法匹配不上。
+  await page.getByRole('button', { name: /EDIT/i }).first().click();
+  await formTab(/AI & Action/i).click();
   await expect(page.locator('[data-test="ctx-autorun"]').getByPlaceholder('approve, hold')).toHaveValue('approve, hold');
   await expect(page.locator('[data-test="ctx-autorun"]').getByPlaceholder('0.7')).toHaveValue('0.7');
   await expect(page.locator('[data-test="ctx-emit"]').getByPlaceholder('EVENT:SENTINEL:RISK-REVIEW')).toHaveValue('EVENT:SENTINEL:E2E');

@@ -93,6 +93,37 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
   （另外 3 处引用非 api 路径的都是 `uses: actions/upload-artifact`，其 `path:` 相对仓库根
   解析，不受 `defaults.run` 影响）。
 
+### Fixed — UI e2e 的 10 个用例：portal 改版后 spec 没跟上（**首次真的跑起来才暴露**）
+
+> mesh 一能起来，UI 用例第一次真跑，10 个当场红。**本地同样红**——不是 CI 特有，
+> 是两个多月里 portal 改版、spec 没跟的累积漂移（README 记的上一次基线是 2026-06-30 的
+> 「49 passed / 0 failed」，此后没人能跑到）。逐个定位后**全部是测试侧问题，零产品缺陷**，
+> 与 2026-06-30 那次 triage 的结论一致。修完：**49 passed / 1 skipped / 0 failed（15.6s）**。
+
+- **`bot-accounts`（6 个）— `isVisible()` 在被裁剪的元素上返回 true 这个陷阱。**
+  动作按钮住进了「点选卡片才展开」的抽屉（收起时 `max-h-0 + overflow-hidden`）。
+  被裁掉的子元素**仍然有布局盒子**，所以 `isVisible()` 照样是 true ⇒ 「不可见才展开」
+  的写法永远不触发；随后点击落在被裁剪的按钮上，命中测试返回卡片，报
+  `<div data-test=bot-card> intercepts pointer events` 一路重试到 30s 超时。
+  判据改用卡片的 `selected` 类；行定位从 `xpath=..`（假设了早就变了的层级）
+  换成 `[data-test="bot-card"]:has(...)`。**6 失败/3.1 分钟 → 7 通过/11.4 秒。**
+- **`sentinel-provisioning`（2 个）** — 同款 `xpath=..` 假设；且动作已收进每张卡片的
+  「⋯」下拉菜单。改走菜单，并给触发器补 `data-test="sentinel-menu"`。
+  另注意 `data-test="sentinel-name"` 是**表单里的 input**，不是列表项名字（列表用
+  `title={sentinel.name}`）——这处混淆值得记一笔。
+- **`sentinel-autorun-emit`（1 个）** — 表单改成了三个标签页（Basic / Context & Prompt /
+  AI & Action），每页内容是条件渲染，不切过去元素根本不在 DOM 里；同时重构中丢了
+  `ctx-autorun` / `ctx-emit` 两个 testid。补回 testid + spec 先切标签页；
+  菜单项文本带 emoji 前缀（`✏️ EDIT`），`/^EDIT$/` 这种锚定写法也一并放宽。
+- **`profile-watchers`（1 个）** — watcher 列表抽成 `SentinelCard` 组件时丢了
+  `data-test="watcher-row"`，断言变成「element(s) not found」，看着像 sentinel 没挂上
+  profile。补回钩子。
+- 三处 portal 改动**只是加 `data-test` 属性**，零行为变更（`portal/system` 与
+  `portal/operator` 的 `tsc --noEmit` 均通过）。README §Page objects 本来就要求
+  「新界面 → 加 testid + page object」，这批是把重构时掉的钩子补回去。
+
+> **下游 action：无**（测试与 testid 属性，运行时行为不变）。
+
 ---
 
 ## [v1.2.4] — 2026-08-25

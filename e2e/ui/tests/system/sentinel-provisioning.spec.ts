@@ -82,7 +82,10 @@ test('@provisioning banner CREATE → INJECT → TOKEN column arms, banner clear
   ).toHaveCount(0, { timeout: 10_000 });
 
   // The bot row's TOKEN column now shows the armed sentinel identity.
-  const botRow = page.locator(`[title="${BOT_UID}"]`).locator('xpath=..');
+  // 用卡片自己的稳定钩子上溯,别再写 `xpath=..`——UID 那个 <span title> 外面套了
+  // 几层纯样式 div,上跳一层根本够不到 token 单元格(报 "element(s) not found",
+  // 看起来像徽章没渲染,其实是选择器假设的层级早变了)。同 bot-accounts.spec.ts。
+  const botRow = page.locator(`[data-test="bot-card"]:has([title="${BOT_UID}"])`);
   await expect(botRow.locator('[data-test="bot-token-state"]')).toContainText('SENTINEL', { timeout: 10_000 });
   await expect(botRow.locator('[data-test="bot-token-state"]')).toContainText('●');
 });
@@ -91,13 +94,24 @@ test('@provisioning /nexus shows BOT ● badge and PERMIT exposes the empty-perm
   await page.goto('/nexus/sentinels');
   await page.waitForLoadState('networkidle');
 
-  const row = page.locator(`[title="${BOT_UID}"]`).locator('xpath=..');
+  // NexusManagement 的 sentinel 卡片没有行级 data-test,用「最近的、含 identity-badge
+  // 的祖先 div」定位——与具体嵌套层数解耦,改版式不会再把这条断言打成"徽章不存在"。
+  const row = page.locator(`[title="${BOT_UID}"]`)
+    .locator('xpath=ancestor::div[.//*[@data-test="identity-badge"]][1]');
   await expect(row.locator('[data-test="identity-badge"]')).toContainText('BOT', { timeout: 10_000 });
   await expect(row.locator('[data-test="identity-badge"]')).toContainText('●');
 
   // PERMIT modal: the declared fetcher is NOT granted (banner-created bot = empty permit).
-  const sentinelRow = page.locator('div.grid', { hasText: SENTINEL_NAME }).first();
-  await sentinelRow.getByRole('button', { name: 'PERMIT' }).click();
+  // 动作已经收进每张卡片的「⋯」下拉菜单(NexusManagement 的 Actions Dropdown,
+  // `openMenuId === sentinel.id` 时才渲染),所以必须先开菜单再点 PERMIT。
+  // 卡片用 data-test="sentinel-name" 上溯定位,不要用 `div.grid` 这种绑死样式类的选择器
+  // ——它只要 Tailwind 类一动就失配,而报出来的是"找不到 PERMIT 按钮"。
+  // 列表里 sentinel 名字挂在 `title={sentinel.name}` 的 span 上
+  // (`data-test="sentinel-name"` 是**表单里的 input**,不是列表项——别搞混)。
+  const sentinelCard = page.locator(`[title="${SENTINEL_NAME}"]`)
+    .locator('xpath=ancestor::div[.//button[@data-test="sentinel-menu"]][1]');
+  await sentinelCard.locator('[data-test="sentinel-menu"]').click();
+  await page.getByRole('button', { name: /PERMIT/i }).first().click();
   const modal = page.locator('[data-test="sentinel-permit-modal"]');
   await expect(modal).toBeVisible();
   await expect(modal).toContainText(BOT_UID);
