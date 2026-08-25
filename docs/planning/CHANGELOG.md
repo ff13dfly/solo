@@ -11,7 +11,22 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
-（暂无）
+### Fixed — CI 剩余两道闸（v1.2.4 把 `npm ci` 修通后才露出来）
+
+> v1.2.4 修好 `npm ci` 之后，CI 第一次跑到了后面的步骤，于是暴露出两处**一直存在、
+> 但被 npm ci 的失败挡在前面从没执行过**的问题。**消费者零影响**（只动 devDependency
+> 与 lock，bundle 与运行时代码未变），故不单独发版，随下一个 tag 一起走。
+
+- **`core/orchestrator` 的 jest 版本离群导致 static 门禁必挂**：它声明 `^29.7.0`，
+  而 api 根与其余五个声明 jest 的服务都是 `^30.2.0`。版本不兼容 ⇒ npm 无法提升，
+  只能在 `core/orchestrator/node_modules/` 里嵌一份 jest 29 —— 而 autocheck 的红线
+  恰恰是「服务目录下不许有自己的 node_modules」。对齐到 `^30.2.0` 后嵌套树消失
+  （lock 少了 57 个重复包），per-service autocheck 15/15 通过，全量测试仍 130 套全绿。
+- **`e2e/package-lock.json` 同样陈旧**：`Missing: @emnapi/core@1.11.3 from lock file`
+  等一串，两个 e2e job 都挂在 `install e2e deps`。重生成并按 §6.1 隔离验过
+  （e2e 305 包、e2e/ui 4 包）。
+
+> **下游 action：无**（仅 CI 与本仓开发依赖）。
 
 ---
 
