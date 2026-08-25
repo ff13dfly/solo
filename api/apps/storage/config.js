@@ -1,7 +1,28 @@
 require('dotenv').config();
 const pkg = require('./package.json');
 const path = require('path');
-const { portFor } = require('../../library/ports');
+const { portFor, bindAddr } = require('../../library/ports');
+
+// --- local OSS backend: resolved BEFORE module.exports so the endpoint can be
+// derived from this service's own port. @why The default provider is `local`,
+// which serves bytes from api/apps/storage/oss/local-oss-server.js. That server
+// used to require a SEPARATE process on a fixed :8755 that only deploy/dev.sh
+// ever started — so every stack launched by deploy/run.sh (i.e. every production
+// deployment) had a 100%-broken upload path that only failed on first use, with
+// a bare ECONNREFUSED. See docs/feedback/done/storage-local-oss-server-never-started.md.
+// It is now mounted IN-PROCESS on this service's own port (index.js), so the
+// default config is self-consistent and there is no shared 8755 for two stacks
+// on one machine to collide on.
+const STORAGE_PORT = portFor('storage', 8750);
+const DEV_OSS_SECRET = 'solo-local-oss-dev-secret';
+const LOCAL_OSS_MOUNT = process.env.LOCAL_OSS_MOUNT_PATH || '/_oss';
+const STORAGE_ACCESS = process.env.STORAGE_ACCESS || 'public';
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '../../../uploads/assets');
+const LOCAL_OSS_SECRET = process.env.LOCAL_OSS_SECRET || DEV_OSS_SECRET;
+// The driver talks to the mount over loopback. A wildcard bind (or none) means
+// "reach me on 127.0.0.1"; an explicit per-service bind address is honoured.
+const _bind = bindAddr('storage');
+const OSS_HOST = (!_bind || _bind === '0.0.0.0' || _bind === '::') ? '127.0.0.1' : _bind;
 
 module.exports = {
   serviceName: process.env.SERVICE_NAME || 'storage',
@@ -75,7 +96,7 @@ module.exports = {
   },
 
   // Filesystem
-  uploadDir: process.env.UPLOAD_DIR || path.join(__dirname, '../../../uploads/assets'),
+  uploadDir: UPLOAD_DIR,
 
   // Debug
   debug: process.env.DEBUG !== 'false',
@@ -110,21 +131,41 @@ module.exports = {
   // ali-oss. Bytes never touch this service's disk — the provider serves them.
   storage: {
     provider: process.env.STORAGE_PROVIDER || 'local',            // 'local' | 'aliyun'
-    access: process.env.STORAGE_ACCESS || 'public',               // 'public' (CDN) | 'private' (signed)
+    access: STORAGE_ACCESS,                                       // 'public' (CDN) | 'private' (signed)
     signedUrlTtl: Number(process.env.STORAGE_SIGNED_URL_TTL) || 1800,
     // toFix §6.4 — per-asset authorization defaults.
     // defaultVisibility: applied when upload omits `visibility` ('public'|'internal'|'private').
     // routeSecret: HMAC secret gating the back-compat /file/:id route for non-public assets.
     defaultVisibility: process.env.STORAGE_DEFAULT_VISIBILITY || 'internal',
-    routeSecret: process.env.STORAGE_ROUTE_SECRET || process.env.LOCAL_OSS_SECRET || 'solo-local-oss-dev-secret',
+    routeSecret: process.env.STORAGE_ROUTE_SECRET || LOCAL_OSS_SECRET,
     thumbnails: {
       mode: process.env.STORAGE_THUMBNAIL_MODE || 'pregenerate'   // 'pregenerate' | 'off'
     },
     local: {
-      endpoint: process.env.LOCAL_OSS_ENDPOINT || 'http://localhost:8755',
+      // 127.0.0.1, never 'localhost': on a dual-stack host Node's happy-eyeballs
+      // dials ::1 AND 127.0.0.1 and, when both are refused, throws an
+      // AggregateError whose `message` is the EMPTY STRING — the caller sees
+      // {code:'ECONNREFUSED', message:''} with the host:port nowhere in sight.
+      // A literal IP keeps the real 'connect ECONNREFUSED 127.0.0.1:<port>'.
+      endpoint: process.env.LOCAL_OSS_ENDPOINT || `http://${OSS_HOST}:${STORAGE_PORT}${LOCAL_OSS_MOUNT}`,
       bucket: process.env.LOCAL_OSS_BUCKET || 'solo',
-      secret: process.env.LOCAL_OSS_SECRET || 'solo-local-oss-dev-secret',
-      publicBase: process.env.LOCAL_OSS_PUBLIC_BASE || undefined
+      secret: LOCAL_OSS_SECRET,
+      publicBase: process.env.LOCAL_OSS_PUBLIC_BASE || undefined,
+      // --- in-process mount (index.js) ---
+      // On by default; an explicit LOCAL_OSS_ENDPOINT means "someone else runs
+      // the object store" (a standalone deploy/local-oss.js, a shared box), so
+      // we don't also boot one. LOCAL_OSS_IN_PROCESS forces either way.
+      inProcess: process.env.LOCAL_OSS_IN_PROCESS
+        ? !['false', '0', 'no'].includes(String(process.env.LOCAL_OSS_IN_PROCESS).toLowerCase())
+        : !process.env.LOCAL_OSS_ENDPOINT,
+      mountPath: LOCAL_OSS_MOUNT,
+      root: process.env.LOCAL_OSS_ROOT || UPLOAD_DIR,
+      // Unsigned GET must be allowed exactly when this service hands out
+      // unsigned urls (access=public), or every public asset url 403s.
+      publicRead: process.env.LOCAL_OSS_PUBLIC_READ
+        ? process.env.LOCAL_OSS_PUBLIC_READ !== 'false'
+        : STORAGE_ACCESS === 'public',
+      isDevSecret: LOCAL_OSS_SECRET === DEV_OSS_SECRET
     },
     oss: {
       region: process.env.OSS_REGION || 'oss-cn-hangzhou',

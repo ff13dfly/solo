@@ -4,8 +4,10 @@
  * @why  Lets the storage service run the SAME OSS code path in dev/test as in
  *       prod: driver-local talks to this server exactly as driver-aliyun talks
  *       to real Aliyun OSS. It is NOT a Solo microservice — it has no Router
- *       auth, no introspection, no services.json entry. Start it from
- *       deploy/dev.sh (like Redis on 6699) or boot it in-process for jest.
+ *       auth, no introspection, no services.json entry. The storage service
+ *       MOUNTS it in-process (apps/storage/index.js) when provider=local, so
+ *       the default config needs no second process and no second port; it can
+ *       still run standalone (deploy/local-oss.js) for a shared/external store.
  *
  * @model  Objects live at `${root}/${key}` (key opaque, '/'-separated → nested
  *         dirs). The key comes from apps/storage/oss/keying.js, which is
@@ -158,7 +160,12 @@ function createLocalOssServer(opts = {}) {
     app.use(express.raw({ type: () => true, limit: bodyLimit }));
 
     app.use(async (req, res) => {
-        const url = new URL(req.originalUrl, 'http://local');
+        // req.url, NOT req.originalUrl: when this app is MOUNTED (app.use('/_oss',
+        // ossApp)) express strips the mount prefix from req.url only — originalUrl
+        // still carries it and would be parsed as the bucket ('_oss' !== 'solo' →
+        // 404 NoSuchBucket). For a top-level mount the two are identical, so this
+        // is behaviour-preserving for the standalone launcher.
+        const url = new URL(req.url, 'http://local');
         const pathname = decodeURIComponent(url.pathname);
 
         if (pathname === '/' || pathname === '') {

@@ -13,6 +13,24 @@ const http = require('http');
 const https = require('https');
 const presign = require('./presign');
 
+/**
+ * Wrap a transport-level failure so the target is never lost.
+ * @why A refused connection to a DUAL-STACK hostname gives Node's happy-eyeballs
+ *      an AggregateError whose `message` is the empty string (the per-address
+ *      messages hide in `.errors[]`). Callers then see {code:'ECONNREFUSED',
+ *      message:''} — no host, no port, nothing to grep for. Cost us a multi-round
+ *      hunt: docs/feedback/done/storage-local-oss-server-never-started.md §三.2.
+ */
+function transportError(e, method, urlStr) {
+    const detail = (e && Array.isArray(e.errors) && e.errors.length)
+        ? e.errors.map((x) => x && x.message).filter(Boolean).join('; ')
+        : (e && e.message);
+    const err = new Error(`[storage:local] ${method} ${urlStr} failed: ${detail || (e && e.code) || 'unknown transport error'}`);
+    if (e && e.code) err.code = e.code;
+    err.cause = e;
+    return err;
+}
+
 function httpRequest(urlStr, { method = 'GET', headers = {}, body = null } = {}) {
     return new Promise((resolve, reject) => {
         const u = new URL(urlStr);
@@ -22,7 +40,7 @@ function httpRequest(urlStr, { method = 'GET', headers = {}, body = null } = {})
             res.on('data', (c) => chunks.push(c));
             res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
         });
-        req.on('error', reject);
+        req.on('error', (e) => reject(transportError(e, method, urlStr)));
         if (body) req.write(body);
         req.end();
     });
@@ -33,7 +51,7 @@ function httpStream(urlStr, { method = 'GET', headers = {} } = {}) {
         const u = new URL(urlStr);
         const lib = u.protocol === 'https:' ? https : http;
         const req = lib.request(u, { method, headers }, (res) => resolve(res));
-        req.on('error', reject);
+        req.on('error', (e) => reject(transportError(e, method, urlStr)));
         req.end();
     });
 }
@@ -47,7 +65,7 @@ function notFound(key) {
 
 /**
  * @param {object} cfg
- * @param {string} cfg.endpoint        local-oss-server origin, e.g. http://localhost:8755
+ * @param {string} cfg.endpoint        local-oss-server origin, e.g. http://127.0.0.1:8750/_oss
  * @param {string} cfg.bucket
  * @param {string} cfg.secret          shared HMAC/Bearer secret
  * @param {string} [cfg.publicBase]    base for publicUrl (default `${endpoint}/${bucket}`)

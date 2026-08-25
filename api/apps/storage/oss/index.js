@@ -50,8 +50,26 @@ function createStorageProvider(storageConfig = {}, deps = {}) {
         if (!local.secret) {
             throw new Error('[storage] provider=local requires storage.local.secret (LOCAL_OSS_SECRET) — signed URLs are forgeable without it');
         }
+        // The scaffold's shipped dev secret is a PUBLIC CONSTANT (it is in the
+        // open-source repo). It is both the presign HMAC key and the Bearer token,
+        // so anyone can forge asset urls and — with the Bearer — list or bulk-delete
+        // the whole bucket. Tolerable in dev; never where signed urls are the
+        // security promise, hence the hard stop in private mode.
+        if (local.isDevSecret) {
+            const msg = 'storage.local.secret is still the shipped dev default — set LOCAL_OSS_SECRET to a per-project random value (openssl rand -hex 24)';
+            if ((storageConfig.access || 'private') === 'private') {
+                throw new Error(`[storage] ${msg}. Refusing to start: STORAGE_ACCESS=private promises unforgeable signed urls, and a public secret makes that promise false.`);
+            }
+            const warn = (deps.logger && typeof deps.logger.warn === 'function')
+                ? deps.logger.warn.bind(deps.logger) : console.warn;
+            warn(`[storage] ${msg}. Fine for dev; in a real deployment anyone can mint asset urls and list/delete the bucket.`);
+        }
         driver = createLocalDriver({
-            endpoint: local.endpoint || 'http://localhost:8755',
+            // 127.0.0.1, not 'localhost' — a refused dual-stack dial yields an
+            // AggregateError with an EMPTY message (see config.js). This fallback
+            // is only for direct callers that hand-build a config; the real default
+            // comes from apps/storage/config.js and points at the in-process mount.
+            endpoint: local.endpoint || 'http://127.0.0.1:8755',
             bucket: local.bucket || 'solo',
             secret: local.secret,
             publicBase: local.publicBase,

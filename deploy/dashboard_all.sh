@@ -163,8 +163,16 @@ while true; do
     REDIS_ST=$(lsof -i:6699 -sTCP:LISTEN &>/dev/null && printf "${GREEN}[ON]${NC}" || printf "${RED}[OFF]${NC}")
     printf -- "%-16s %-6s %-10b %s\n" "Redis" "6699" "$REDIS_ST" "${REDIS_URL:-redis://127.0.0.1:6699}  data: deploy/redis_data/"
 
-    OSS_ST=$(lsof -i:8755 -sTCP:LISTEN &>/dev/null && printf "${GREEN}[ON]${NC}" || printf "${RED}[OFF]${NC}")
-    printf -- "%-16s %-6s %-10b %s\n" "Local OSS" "8755" "$OSS_ST" "${LOCAL_OSS_ENDPOINT:-http://127.0.0.1:8755}  uploads: uploads/assets/"
+    # Mounted in-process by the storage service unless LOCAL_OSS_ENDPOINT points
+    # at a standalone one — so "up" tracks storage itself, not a separate port.
+    if [ -n "${LOCAL_OSS_ENDPOINT:-}" ]; then
+        OSS_WHERE="$LOCAL_OSS_ENDPOINT (external)"
+        OSS_ST=$(curl -sf -m 1 "$LOCAL_OSS_ENDPOINT" &>/dev/null && printf "${GREEN}[ON]${NC}" || printf "${RED}[OFF]${NC}")
+    else
+        OSS_WHERE="in-process on storage:${STORAGE_PORT:-8750}/_oss"
+        OSS_ST=$(lsof -i:"${STORAGE_PORT:-8750}" -sTCP:LISTEN &>/dev/null && printf "${GREEN}[ON]${NC}" || printf "${RED}[OFF]${NC}")
+    fi
+    printf -- "%-16s %-6s %-10b %s\n" "Local OSS" "-" "$OSS_ST" "$OSS_WHERE  uploads: uploads/assets/"
 
     if [ -n "$MOCK_LISTENER_PORT" ]; then
         MOCK_ST=$(lsof -i:$MOCK_LISTENER_PORT -sTCP:LISTEN &>/dev/null && printf "${GREEN}[ON]${NC}" || printf "${RED}[OFF]${NC}")

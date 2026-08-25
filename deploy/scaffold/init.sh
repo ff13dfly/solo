@@ -138,6 +138,10 @@ JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toS
 # gateway 用它派生 AES 密钥加密 SMTP 账号密码（logic/smtp.js）。不设则
 # gateway.smtp.create 直接抛 'GATEWAY_SECRET_KEY is not set' → SMTP 账号功能不可用。
 GATEWAY_SECRET_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")
+# storage 的本地对象存储密钥（provider=local 时同时是 presign HMAC 密钥与 Bearer 令牌）。
+# 不生成就会落到框架里那个公开的 dev 常量 'solo-local-oss-dev-secret'——那等于把
+# 「伪造任意资产 URL」和「列桶/批量删对象」的能力公开出去。纯 hex，天生避开 # $ 空格 反引号。
+LOCAL_OSS_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))")
 # Redis 口令（生产硬化）：run.sh 起 redis 时 --requirepass，客户端从 REDIS_URL 内嵌密码连。
 REDIS_PASSWORD=$(node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))")
 
@@ -442,6 +446,15 @@ CLIENT_MOBILE_PORT=$CLIENT_MOBILE_PORT
 # 加密 SMTP 账号密码用（gateway.smtp.* 的前置条件，已随机生成）。
 # ⚠️ 换掉它 = 存量 SMTP 账号密码解不开（需重新录入），不要随手改。
 GATEWAY_SECRET_KEY=$GATEWAY_SECRET_KEY
+
+# --- Object storage (storage service) ---
+
+# provider=local（默认）时字节由 storage 进程内挂载的对象存储提供（无独立端口、
+# 无独立进程；端口就是 storage 自己的，路径 /_oss）。本密钥同时是签名 URL 的 HMAC
+# 密钥与 Bearer 令牌，已随机生成——⚠️ 换掉它 = 存量签名 URL 立即失效（字节本身不受影响）。
+# 要把对象存储放到独立进程/独立机器：起 deploy/local-oss.js 并设 LOCAL_OSS_ENDPOINT
+# （设了它就不再进程内挂载）。生产上云走 STORAGE_PROVIDER=aliyun + OSS_* 那组。
+LOCAL_OSS_SECRET='$LOCAL_OSS_SECRET'
 
 # Email —— channel: auto | smtp | api | mock
 # auto = api if EMAIL_API_KEY set, smtp if EMAIL_SMTP_HOST set, else mock

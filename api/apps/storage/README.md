@@ -8,8 +8,8 @@ store — it no longer serves files from its own disk/port.
 
 | value | backend | use |
 |-------|---------|-----|
-| `local` (default) | the single-file local OSS server (`oss/local-oss-server.js`) | dev / test / CI |
-| `aliyun` | Aliyun OSS via `ali-oss` | production |
+| `local` (default) | the single-file local OSS server (`oss/local-oss-server.js`), **mounted in-process** by this service | dev / test / CI / single-machine self-hosting |
+| `aliyun` | Aliyun OSS via `ali-oss` | production at scale / multi-host |
 
 Pick the backend in config; the asset logic is vendor-neutral (it branches on
 `store.capabilities()`, never on a vendor name). Adding S3/MinIO later is a new
@@ -29,7 +29,7 @@ The storage service **does not serve bytes**. `resolve` / `list` / `multi` retur
 **absolute object-store URLs**:
 
 - `access=public` (default) → stable public/CDN URL (`OSS_CDN_BASE/<key>`, or the
-  local server's `http://host:8755/solo/<key>`).
+  local server's `http://host:<storage-port>/_oss/solo/<key>`).
 - `access=private` → time-bounded signed URL (closes the old unauthenticated
   `/assets` IDOR hole, B3 / SOLO-SEC-004).
 
@@ -53,8 +53,12 @@ disabled by default (`ENABLE_STATIC_ASSETS` opt-in).
 | `STORAGE_ACCESS` | `public` | `public` (CDN) \| `private` (signed) |
 | `STORAGE_THUMBNAIL_MODE` | `pregenerate` | `pregenerate` \| `off` |
 | `STORAGE_SIGNED_URL_TTL` | `1800` | signed URL TTL (s), `private` mode |
-| `LOCAL_OSS_ENDPOINT` | `http://localhost:8755` | local server origin |
-| `LOCAL_OSS_SECRET` | `solo-local-oss-dev-secret` | shared HMAC/Bearer secret (server + driver must match) |
+| `LOCAL_OSS_ENDPOINT` | *(derived)* `http://127.0.0.1:<storage-port>/_oss` | object-store origin. **Setting it means "an external object store runs elsewhere"** — the in-process mount is then skipped |
+| `LOCAL_OSS_SECRET` | `solo-local-oss-dev-secret` | shared HMAC/Bearer secret (server + driver must match). 🔴 The default is a **public constant**; `init.sh` mints a per-project one. With it, asset urls are forgeable and the Bearer lists/bulk-deletes the bucket — so `STORAGE_ACCESS=private` **refuses to start** on the default |
+| `LOCAL_OSS_IN_PROCESS` | *(auto)* | force the in-process mount on/off |
+| `LOCAL_OSS_MOUNT_PATH` | `/_oss` | mount path on this service's port |
+| `LOCAL_OSS_ROOT` | `UPLOAD_DIR` | disk directory backing the bucket |
+| `LOCAL_OSS_PUBLIC_READ` | follows `STORAGE_ACCESS` | allow unsigned GET |
 | `OSS_REGION` / `OSS_BUCKET` | `oss-cn-hangzhou` / — | Aliyun bucket |
 | `OSS_KEY_ID` / `OSS_KEY_SECRET` | — | Aliyun RAM AccessKey (PutObject/GetObject/DeleteObject/ListObjects) |
 | `OSS_CDN_BASE` | — | public CDN base (no trailing slash) |
@@ -64,9 +68,24 @@ disabled by default (`ENABLE_STATIC_ASSETS` opt-in).
 
 ## Local OSS server
 
-`deploy/dev.sh` starts it on **:8755** (root = `uploads/assets`, so existing files
-serve unchanged). It is NOT a Solo microservice (no `services.json` entry). Run
-standalone: `node deploy/local-oss.js`.
+With `provider=local` this service **mounts the object store in its own process**,
+on its own port, at `/_oss` (root = `UPLOAD_DIR`, so existing files serve
+unchanged). Nothing else to start, no second port to allocate.
+
+> **Why it works this way** (v1.2.3). It used to be a separate process on a fixed
+> `:8755` that only `deploy/dev.sh` ever started — no production launcher did. So
+> every stack started by `deploy/run.sh` had a 100 %-broken upload path: tests
+> green, `list` fine, and the first real `storage.asset.upload` days later failing
+> with a bare `ECONNREFUSED`. A fixed default port was also a cross-stack hazard:
+> two stacks on one machine shared `:8755` *and* the same default secret, so the
+> second one would silently write its assets into the first one's directory. Both
+> problems disappear with the mount. See
+> `docs/feedback/done/storage-local-oss-server-never-started.md`.
+
+It is still NOT a Solo microservice (no `services.json` entry, no Router auth of
+its own — it authenticates with the shared secret / presigned URLs). To give it
+its own process or host, run `node deploy/local-oss.js` and point the service at
+it with `LOCAL_OSS_ENDPOINT` (which also disables the in-process mount).
 
 ## Architecture notes
 

@@ -1,13 +1,19 @@
 #!/usr/bin/env node
 /**
- * deploy/local-oss.js — dev launcher for the storage service's single-file
+ * deploy/local-oss.js — standalone launcher for the storage service's single-file
  * local OSS server (api/apps/storage/oss/local-oss-server.js).
  *
- * @why The storage service migrated to a driver-based OSS provider. In dev/test
- *      it talks to this local server, which mirrors Aliyun OSS so the same code
- *      path runs everywhere. Started by deploy/dev.sh; NOT a Solo microservice
- *      (no services.json entry) and NOT used in production (use STORAGE_PROVIDER=
- *      aliyun there). Serves bytes the storage service no longer serves itself.
+ * @why The storage service migrated to a driver-based OSS provider, which mirrors
+ *      Aliyun OSS so the same code path runs everywhere. NOT a Solo microservice
+ *      (no services.json entry).
+ *
+ *      You usually do NOT need this: the storage service mounts the same server
+ *      IN-PROCESS on its own port when provider=local (api/apps/storage/index.js),
+ *      which is the default. Run this standalone only to put the object store in
+ *      its own process / on its own host — then point the service at it with
+ *      LOCAL_OSS_ENDPOINT, which also stops it from booting a second one.
+ *      (Pre-v1.2.3 this was the ONLY way to serve bytes, and no production launcher
+ *      started it: docs/feedback/done/storage-local-oss-server-never-started.md.)
  */
 const fs = require('fs');
 const path = require('path');

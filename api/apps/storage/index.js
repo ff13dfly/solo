@@ -1,4 +1,5 @@
 const express = require('express');
+const fs = require('fs');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const { corsOptionsFromEnv } = require('../../library/cors');
@@ -46,10 +47,43 @@ async function bootstrap() {
 
     // Middleware
     app.use(cors(corsOptionsFromEnv()));
+
+    // --- Byte backend (provider=local): mount the object store IN-PROCESS ---
+    // @why The default provider is `local`, whose bytes live in
+    //      oss/local-oss-server.js. That used to be a SEPARATE process on a fixed
+    //      :8755 which only deploy/dev.sh started — so every deploy/run.sh stack
+    //      (i.e. every production deployment) had a 100%-broken upload path that
+    //      passed every test and only failed on first real upload, with a bare
+    //      ECONNREFUSED. Mounting it here makes the default self-consistent: the
+    //      thing the default config points at is started by the default path.
+    //      It also retires the shared :8755 — two stacks on one machine used to
+    //      race for it and, sharing the dev secret, the loser would silently
+    //      write its assets into the winner's directory (same failure class as
+    //      docs/feedback/done/redis-port-ownership.md, minus the ownership check).
+    // @attention MUST precede bodyParser.json: object bytes are raw, and the OSS
+    //      app does its own express.raw() parsing.
+    // See docs/feedback/done/storage-local-oss-server-never-started.md.
+    if (config.storage.provider === 'local' && config.storage.local.inProcess) {
+        const { createLocalOssServer } = require('./oss');
+        const ossRoot = config.storage.local.root;
+        fs.mkdirSync(ossRoot, { recursive: true });
+        const oss = createLocalOssServer({
+            root: ossRoot,
+            secret: config.storage.local.secret,
+            bucket: config.storage.local.bucket,
+            publicRead: config.storage.local.publicRead,
+            bodyLimit: config.bodyLimit,
+            logger,
+        });
+        app.use(config.storage.local.mountPath, oss.app);
+        log(`Local OSS mounted in-process at ${config.storage.local.mountPath} (bucket=${config.storage.local.bucket}, root=${ossRoot}, publicRead=${config.storage.local.publicRead})`);
+    }
+
     app.use(bodyParser.json({ limit: config.bodyLimit }));
 
-    // Files are served by the OSS provider (Aliyun CDN / local-oss-server), not
-    // by this service — there is no static file route here anymore.
+    // Files are served by the OSS provider (Aliyun CDN / the local object store
+    // mounted above), not from this service's own disk — there is no static file
+    // route here anymore.
 
     // Request Logging
     app.use((req, res, next) => {

@@ -15,6 +15,90 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
+## [v1.2.3] — 2026-08-25
+
+> **patch 步进**：一条线——storage 的默认字节后端从「一个没人启动的独立进程」改成
+> **storage 进程内挂载**，顺带补上它连带的密钥与可观测性缺口。派生项目
+> （steward，v1.2.1，N100 常驻栈）实测：`storage.asset.upload` **100% ECONNREFUSED**。
+>
+> 门禁：主 CI 白名单 **130 套 / 2108 测试全绿**（2103 passed / 5 skipped，18.8s；
+> 本轮 agent 的 LIVE Gemini 套也过了）；static 全闸绿（autocheck storage + `--lib` +
+> doc-drift + error-codes）；`deploy/build.sh` 5.3M 产物已含三处改动。
+
+### Fixed — 🔴 provider=local 的字节后端从来没有任何生产启动脚本拉起
+
+> `STORAGE_PROVIDER` 默认 `local`，它把字节全部转发给 `oss/local-oss-server.js`——一个
+> **独立进程**，默认 `http://localhost:8755`。而启动它的只有 `deploy/dev.sh`：
+> **`deploy/scaffold/run.sh` 里一行都没有**。于是凡是走 `run.sh` 起的栈（= 所有生产部署）
+> 上传路径**必然坏**，且坏得极隐蔽：服务活着、`ping` 通、`storage.asset.list` 也通
+> （只读 Redis 元数据），只有 `upload` 挂——而它可能是部署几天后才第一次被调用。
+> 「测试全绿但生产 100% 坏」的标准形态：测试环境恰好覆盖了缺失的那一步。
+> 来源与实测台账：[`../feedback/done/storage-local-oss-server-never-started.md`](../feedback/done/storage-local-oss-server-never-started.md)。
+
+- **改成进程内挂载**：`provider=local` 时 storage 在**自己的端口**上挂载对象存储
+  （`app.use('/_oss', ossApp)`，见 `api/apps/storage/index.js`），endpoint 默认派生为
+  `http://127.0.0.1:<storage 端口>/_oss`。**默认值指向的东西，由默认路径负责拉起**——
+  不再需要第二个进程、第二个端口、第二份守护。
+- **顺带消灭 8755 这一整类跨栈事故**：一机多栈时两个栈共用同一个默认端口 **且共用同一个
+  默认密钥**，所以后起的栈不是「起不来」，而是 driver 认证成功、**把自己的资产静默写进
+  另一个栈的目录**（`redis-port-ownership` 同一病理，且这次连归属校验都没有）。挂载后
+  端口随各栈自己的 `SOLO_PORT_BASE` 天然隔离，无从相撞。
+- `local-oss-server.js` 改用 `req.url` 而非 `req.originalUrl` 解析 bucket/key——挂载时
+  express 只从 `req.url` 剥掉挂载前缀，用 `originalUrl` 会把 `_oss` 当成 bucket 而 404
+  `NoSuchBucket`。顶层挂载时两者相同，**对独立进程模式行为不变**。
+- `deploy/dev.sh` 不再起独立 8755：**让 dev 跑与生产完全同一条路径**——这个 bug 的根因
+  正是 dev 与生产走了两条路，只有 dev 那条被测过。
+- 独立进程模式**保留**（`node deploy/local-oss.js` + `LOCAL_OSS_ENDPOINT`）：设了这个变量
+  就等于声明「对象存储在别处跑」，进程内挂载自动让位。`LOCAL_OSS_IN_PROCESS` 可强制两向。
+
+### Security — `LOCAL_OSS_SECRET` 的默认值是开源仓库里的公开常量
+
+> 把 local 扶正为生产后端之后，`'solo-local-oss-dev-secret'` 这个写死在公开仓库里的默认值
+> 就从「dev 便利」变成了**真实洞**：它同时是签名 URL 的 HMAC 密钥**和** Bearer 令牌，
+> 任何人都能伪造资产 URL 读私有字节，拿 Bearer 还能 `GET /<bucket>?list` 列桶、
+> `POST /<bucket>?delete` 批量删对象。原反馈没提这条，是本轮 triage 时发现的。
+
+- `deploy/scaffold/init.sh` 为**每个新项目**生成随机 `LOCAL_OSS_SECRET`（24 字节 hex，
+  照 `JWT_SECRET`/`GATEWAY_SECRET_KEY` 的成例；纯 hex 天生避开 `# $ 空格 反引号`）。
+- 仍在用默认值时：启动 `warn` 点名；**`STORAGE_ACCESS=private` 直接 fail fast**——
+  private 档的全部安全承诺就是「签名不可伪造」，密钥公开时这句话是假的，不能让它默默运行。
+  dev（public 档）照旧可跑，不打断本地开发。
+
+### Fixed — ECONNREFUSED 的 `message` 是空字符串，host:port 一个字都不露
+
+> 原反馈判为「Router 吞掉了 axios 的原始 message」，建议改 Router。**核实后不是**：默认
+> endpoint 写的是 `localhost`，Node 的 happy-eyeballs 对双栈主机并发拨 `::1` 与 `127.0.0.1`，
+> 两条都被拒时抛的是 **`AggregateError`，其 `message` 天生为空**（真实信息在 `.errors[]` 里）。
+> 实测复现：`localhost` → `{code:'ECONNREFUSED', message:''}`；`127.0.0.1` →
+> `connect ECONNREFUSED 127.0.0.1:8755`。**Router 无需改动**（红线保护区未触碰）。
+
+- 所有默认 endpoint 从 `localhost` 改为 `127.0.0.1`（含 `oss/index.js` 的兜底）。
+- `driver-local.js` 的两处传输错误统一包一层，把 `<METHOD> <URL>` 与 `.errors[]` 展开进
+  message——排查从「第 N 轮」变成第一分钟。
+
+### Changed — 其余对齐
+
+- `publicRead` 由 `STORAGE_ACCESS` 推导（此前 `createLocalOssServer` 默认 `false` 而
+  `STORAGE_ACCESS` 默认 `public`，两个默认值自相矛盾：发出去的是无签名 URL，服务器却拒绝
+  无签名 GET）。`LOCAL_OSS_PUBLIC_READ` 仍可显式覆盖。
+- `deploy/dashboard_all.sh` 的 Local OSS 行改为反映真实位置（进程内 / 外部 endpoint）。
+- 文档：`api/apps/storage/README.md`（provider 表、env 表、Local OSS server 一节）、
+  `deploy/local-oss.js` 头注（它不再是「dev 专用、生产别用」）、`deploy/w3os/README.md`。
+
+> **下游 action：** 升级后**通常什么都不用做**——不设 `LOCAL_OSS_*` 的项目会自动改用进程内
+> 挂载，上传从此可用（此前是坏的）。三种情况要动手：
+> ① **手动起过独立 local-oss 且用了非默认 root** 的项目（如 steward 的 `deploy/oss_data/`）：
+> 进程内挂载默认读 `UPLOAD_DIR`，**老对象在旧 root 里会找不到**——二选一，把
+> `LOCAL_OSS_ROOT` 指向旧 root（推荐），或继续跑独立进程并设 `LOCAL_OSS_ENDPOINT`
+> （设了就不挂载）；随后可以把那个手工进程/临时 unit 撤掉。
+> ② **对外暴露过 8755** 的反代（Caddy/nginx）：字节 URL 变成 `<storage 端口>/_oss/...`，
+> 反代规则要跟着改（URL 是每次现算的，存量资产元数据不受影响）。
+> ③ **`.env` 里没有 `LOCAL_OSS_SECRET`** 的既有项目：现在跑的是公开默认密钥，
+> 补一行 `LOCAL_OSS_SECRET='<openssl rand -hex 24>'`（换密钥会让**存量签名 URL 立即失效**，
+> 字节本身不受影响；`STORAGE_ACCESS=private` 的项目升级后不补就直接起不来，这是有意的）。
+
+---
+
 ## [v1.2.2] — 2026-08-24
 
 > **patch 步进**：只加不破的修补与增量，无新交付物。四条代码线：① `api/library/env.js`

@@ -75,26 +75,22 @@ else
 fi
 sleep 2
 
-# ─── 2b. Setup local OSS server (storage provider=local) ───────────────
-# The storage service migrated to a driver-based OSS provider. In dev it talks
-# to this single-file local OSS server (the dev/test stand-in for Aliyun OSS).
+# ─── 2b. Local OSS backend (storage provider=local) ────────────────────
+# NOT started here any more: the storage service mounts the local object store
+# IN-PROCESS on its own port (see api/apps/storage/index.js). Dev therefore runs
+# the exact path production runs — which is the point: this used to be a
+# standalone :8755 that ONLY dev.sh started, so every deploy/run.sh stack shipped
+# a broken upload path that no test could see (docs/feedback/storage-local-oss-
+# server-never-started.md). Leave LOCAL_OSS_ENDPOINT unset so the service derives
+# it; setting it would mean "an external object store runs elsewhere".
 export STORAGE_PROVIDER="local"
-export LOCAL_OSS_PORT="8755"
-export LOCAL_OSS_SECRET="solo-local-oss-dev-secret"
-export LOCAL_OSS_ENDPOINT="http://127.0.0.1:8755"
+export LOCAL_OSS_SECRET="solo-local-oss-dev-secret"   # dev-only constant; init.sh mints a real one per project
 export LOCAL_OSS_ROOT="$ROOT_DIR/uploads/assets"
-echo "Starting local OSS server on port 8755..."
-lsof -ti:8755 | xargs kill -9 2>/dev/null
-nohup node "$ROOT_DIR/deploy/local-oss.js" > "$SCRIPT_DIR/local-oss.log" 2>&1 &
-OSS_PID=$!
-sleep 1
 
 cleanup() {
-    echo -e "\nShutting down independent Redis + local OSS + mock listener..."
+    echo -e "\nShutting down independent Redis + mock listener..."
     kill -9 $REDIS_PID 2>/dev/null
     kill -9 $(lsof -ti:6699) 2>/dev/null
-    kill -9 $OSS_PID 2>/dev/null
-    kill -9 $(lsof -ti:8755) 2>/dev/null
     kill $MOCK_LISTENER_PID 2>/dev/null
     kill -9 $(lsof -ti:8090) 2>/dev/null
 }
