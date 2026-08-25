@@ -76,16 +76,29 @@ gate('95 · mock listener → ingress → stream → workflow (full pipeline)', 
         redis.on('error', () => {});
         await redis.connect();
 
-        // Load API key from keys.env (written by deploy/mock/bootstrap.js)
+        // API key 来自 harness 每轮自己 bootstrap 出来的那份 keys 文件
+        // (harness/setup.js 用 MOCK_KEYS_FILE 指向 logDir/mock-keys.env,刻意不碰
+        // dev 栈共用的 deploy/mock/keys.env——那个 key 注册在 dev 的 Redis 里)。
+        //
+        // ⚠️ 别退回去读 deploy/mock/keys.env:那个文件在 .gitignore 里,是本地跑过
+        // dev 栈才有的产物。开发机上它恰好存在 ⇒ 本套一路绿;**任何全新 checkout
+        // (CI 就是)永远没有它** ⇒ apiKey 为 undefined,本套当场红。这正是本套此前
+        // 在 CI 里挂掉的原因(而 CI 因为 npm ci 一直失败,压根没跑到过,没人发现)。
         const fs = require('fs');
         const path = require('path');
-        const keysFile = path.join(__dirname, '../../deploy/mock/keys.env');
-        if (fs.existsSync(keysFile)) {
+        const logDir = readCtx().logDir;
+        const candidates = [
+            logDir && path.join(logDir, 'mock-keys.env'),          // harness per-run(权威)
+            path.join(__dirname, '../../deploy/mock/keys.env'),    // 手工 dev 栈兜底
+        ].filter(Boolean);
+        for (const keysFile of candidates) {
+            if (!fs.existsSync(keysFile)) continue;
             for (const line of fs.readFileSync(keysFile, 'utf8').split('\n')) {
                 if (line.startsWith('SRC_mock-listener=')) {
                     apiKey = line.slice('SRC_mock-listener='.length).trim();
                 }
             }
+            if (apiKey) break;
         }
     }, 10_000);
 

@@ -63,6 +63,20 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 > **这处漂移在 v1.2.2 及更早就存在**（`git show v1.2.2:` 同一行一模一样），一直没人发现，
 > 因为 CI 的 `npm ci` 从没成功过、e2e 根本跑不到。修后本地全量 e2e：**66/66 套、346 通过、0 失败**。
 
+### Fixed — e2e suite 95 依赖一个 gitignore 的本地产物，全新 checkout 必红
+
+> `suites/95-mock-listener-pipeline` 读 `deploy/mock/keys.env` 拿 ingress API key，而那个
+> 文件在 `.gitignore` 里——它是本地跑过 dev 栈才会生成的产物。开发机上它恰好存在 ⇒ 本套
+> 一路绿；**任何全新 checkout（CI 就是）永远没有它** ⇒ `apiKey` 为 undefined，本套当场红。
+>
+> harness 其实早就做对了：`harness/setup.js` 用 `MOCK_KEYS_FILE` 把 key bootstrap 进
+> **每轮独立的** `logDir/mock-keys.env`，刻意不碰 dev 栈共用的那份（那个 key 注册在 dev 的
+> Redis 里）。是 suite 读错了文件。
+
+- suite 改为优先读 harness 的 per-run 文件（`readCtx().logDir`），手工 dev 栈那份降为兜底。
+- **复现方式值得记一笔**：本机全量 e2e 一直是绿的，是在 `git worktree` + `npm ci` 的
+  **干净树**上才复现出来的——「本机能跑」的另一种形态，与本版另外几条同源。
+
 ---
 
 ## [v1.2.4] — 2026-08-25
