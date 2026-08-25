@@ -7,14 +7,14 @@
 cd client/extension-kit/e2e
 npm install
 npx playwright install chromium      # 只需一次
-npm test                             # 18 用例，约 22s
+npm test                             # 24 用例，约 18s（串行，见下）
 ```
 
 **不需要起 SOLO 栈。** 用例自带一个假 Router（`helpers/fake-router.js`）——见下。
 
 ## 为什么单元测试不够
 
-`../tests/` 那 50 条用的是我自己写的替身：storage 是个 Map、worker 死亡是模拟的、
+`../tests/` 那 102 条用的是我自己写的替身：storage 是个 Map、worker 死亡是模拟的、
 fetch 是注入的。模型和实现出自同一个脑子，所以它证明不了「我对 MV3 的理解是对的」。
 这套才能。三条最值钱的：
 
@@ -23,6 +23,7 @@ fetch 是注入的。模型和实现出自同一个脑子，所以它证明不�
 | `load.spec.js` 🔴 kit 在真 SW 里 import 成功 | **扩展根是封闭的树**——有人把 `sample/kit.js` 的 `./kit/` 改回 `../lib/`、或 `sync.sh` 坏了，这里当场红。而那个故障在浏览器里的表现是 **SW 注册成功、不报任何错、URL 看着正常，但模块从未求值** |
 | `queue.spec.js` 🔴 SW 被回收后条目仍在 | queue 存在的**全部理由**。CDP 强杀 service worker → 从扩展页面读回持久状态 → 唤醒后照常送达 |
 | `auth.spec.js` 会话失效自动重登 | 在真 `crypto.subtle` 上验挑战响应派生，并确认重放用的是**新** token |
+| `content.spec.js` 🔴 messaging 的 classic 形态真的注入了 | `lib/messaging.js` 刻意不用 import/export，因为同一份文件还要被 manifest 当 **classic script** 注入。写一个 `export` 就是 `SyntaxError`，而表现是**整节注入静默作废**：页面上什么都不会发生、`chrome://extensions` 也不报错。jest 够不到这层（那边永远是 module 上下文） |
 
 ## 假 Router 而不是真栈
 
@@ -31,6 +32,23 @@ fetch 是注入的。模型和实现出自同一个脑子，所以它证明不�
 1. **无需 `deploy/run.sh`**，clone 完就能跑，CI 上也是；
 2. **能精确编排错误码**（`-32005` 权限不足 / `-32001` 会话过期 / 限流），真栈很难稳定造出来；
 3. **快**——真 Router 不可达时 `rpc.js` 会老实退避重试约 37 秒，一条用例就超时了。
+
+## 🔴 装扩展的 playwright 必须**串行**跑
+
+`playwright.config.js` 里的 `workers: 1` + `fullyParallel: false` **不是性能取舍，是正确性前提**，
+别因为"用例变多了想跑快点"去动它。
+
+并发起多个 mock 服务 + 多个 `launchPersistentContext`（都带 `--load-extension`）时，
+回归结果会**随机**：steward 实测过两次，同一份代码三次跑出 **9/9、6/9、0/4**；清干净、
+串行跑立刻恢复 9/9。
+
+这个失败形态最坏的地方在于**它看起来像"我刚才的改动引入了不稳定的 bug"**——
+于是人会去二分一个根本不存在的代码缺陷。判据：**结果在重跑之间跳动**，
+就先怀疑测试环境自身的干扰，别先怀疑代码。
+
+同理，`helpers/fake-router.js` 的 `close()` 里那句 `closeAllConnections()` 也不能省：
+`server.close()` 只停止接受新连接、**等已有的 keep-alive 连接自己结束**，而 Chrome 会把它们留着。
+症状是 fixture 拆解阶段挂死到用例超时（60s），而报错指向的是那条被测用例，跟它毫无关系。
 
 ## 🔴 三条实测出来的硬约束（改 `fixtures.js` 前先读）
 

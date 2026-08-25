@@ -15,7 +15,7 @@ test('扩展装得起来，service worker 是 background.js', async ({ serviceWo
 test('🔴 kit 在真 service worker 里 import 成功（越界 import 回归守卫）', async ({ serviceWorker }) => {
     const mounted = await serviceWorker.evaluate(() => Object.keys(globalThis.__solo || {}));
     // background.js 结尾挂的 __solo —— 它存在就证明整条 import 链求值到底了
-    expect(mounted.sort()).toEqual(['endpoints', 'queue', 'rpc', 'session']);
+    expect(mounted.sort()).toEqual(['endpoints', 'queue', 'readPage', 'rpc', 'session']);
 });
 
 test('kit 的各模块确实是同一份实现（不是被谁掉包成桩）', async ({ serviceWorker }) => {

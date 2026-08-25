@@ -3,14 +3,26 @@
  *
  * 🔴 禁止 alert/confirm/prompt（SOLO UI 规范）：反馈一律写进 #msg。
  */
+// 只引 messaging 这一个模块，**不经 `kit.js`**：那会把 rpc / queue / image 一并拉进
+// popup 的进程，而 popup 按设计不该碰它们（见上面那段）。ESM 没有摇树，import 谁谁就求值。
+import '../kit/messaging.js';
+const { callBackground } = globalThis.SoloMessaging;
+
 const $ = (id) => document.getElementById(id);
-const send = (type, payload) => new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type, payload }, (res) => {
-        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-        if (!res) return reject(new Error('background 无响应（service worker 可能刚被回收，重试一次）'));
-        res.error ? reject(new Error(res.error)) : resolve(res.data);
-    });
-});
+
+/**
+ * 🔴 **别裸调 `chrome.runtime.sendMessage`。** MV3 的 service worker 空闲即被回收，
+ *    冷启动瞬间那一发会 reject——裸调让异常冒泡出去，把**后面整段 UI 代码**带走，
+ *    症状是"点了没反应、也没有报错"，排查成本极高。
+ *
+ * `callBackground` 永不抛：瞬时错误自己退避重试，最后归一成 `{ok:false,error}`。
+ * 这里再转成 reject，是因为下面每个入口都套着 `guard()`，抛出即显示到 #msg。
+ */
+const send = async (type, payload) => {
+    const r = await callBackground(type, payload);
+    if (!r.ok) throw new Error(r.error);
+    return r.data;
+};
 
 const say = (text, isErr = false) => { $('msg').textContent = text; $('msg').className = isErr ? 'err' : ''; };
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { say(e.message, true); } };

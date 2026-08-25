@@ -78,9 +78,11 @@ action 第 ② 条就是在还这笔债）。本 kit 从第一版起就在覆盖
 | `lib/endpoints.js` | Router 地址单一真源 | wavely + steward 合并 |
 | `lib/session.js` | token 存哪一层、凭据怎么留 | 抽自两家的 `auth.js` |
 | `lib/storage.js` | `chrome.storage` 适配 + 串行化读改写 | 新写（为了可测 + 防并发覆盖） |
+| `lib/messaging.js` | **扩展内部消息层**：通道瞬时错误的统一判据 + `sendToTab` / `callBackground` / `serveMessages` | steward 十天实战回流（见 §4.6） |
 | **`sample/`** | **可直接 load unpacked 的最小扩展**：配 Router → 登录 → 采当前页 → 入队上报 | 新写（= `api/sample/`） |
 
-全部 ESM、零依赖、零构建——MV3 service worker 直接 `import`。
+全部零依赖、零构建。除 `messaging.js` 外全是 ESM，MV3 service worker 直接 `import`；
+`messaging.js` 刻意是双形态的，因为它还要进 content script（见 §4.6）。
 `sample/` 同时是三样东西：§4 那段接法的**可执行版**、E2E 的 fixture、你自己扩展的起点。
 
 ---
@@ -167,6 +169,141 @@ await queue.drain();
 队列还会**尊重服务端下发的 `retry_after`**（Router 的 `-32029` 带 `data.retry_after`，单位秒）：
 服务端知道自己的窗口，本地那张固定退避表只是猜。下限 1 秒、上限 1 小时。
 
+## 4.6 页面那一半：content script 与消息通道
+
+`background.js` 之外的每一处消息，都该走 `lib/messaging.js`。它解决的是 MV3 里
+**必然发生**、而不是偶发的两件事。
+
+### ① 向 content script 发消息**必然会瞬时失败**
+
+导航中、bfcache、service worker 刚被回收、新文档还没注入完——这些不是业务失败，是抖动。
+Chrome 对这件事有**四种**措辞，其中最常见的一种**没有 `is`**：
+
+| 实际错误文本 | 照着某次报错抄的正则 |
+|---|---|
+| `…but the message channel closed before a response was received` | ❌ 漏（无 `is`） |
+| `The message port closed before a response was received.` | ❌ 漏（是 `port` 不是 `channel`） |
+| `Could not establish connection. Receiving end does not exist.` | ✅ |
+| `The page keeping the extension port is moved into back/forward cache` | ✅ |
+
+🔴 **各项目自己写必然各漏各的**——你只见过你踩到的那一种。steward 2026-08-25 就漏了第一种：
+一场 57 步的演示在第 5 步（导航后等元素）把一个本该被重试吃掉的抖动**升级成整场失败**，
+而现场表现是"用户点了下浏览器的保存密码弹窗，演示就断了"，指向完全错误的方向。
+
+```js
+import { sendToTab, isTransientChannelError } from './kit.js';
+
+// 瞬时错误自动退避重试；业务错误一次都不重试，直接抛回来
+const res = await sendToTab(tab.id, { type: 'READ_PAGE' }, {
+    retries: 3,                       // 重试次数要配得上"你有多需要这个答案"
+    ensureInjected: (id) => chrome.scripting.executeScript({ target: { tabId: id }, files: [...] }),
+});
+```
+
+⚠️ `Extension context invalidated` **刻意不算**瞬时——那是扩展被重载、页面上的旧
+content script 已经死了，重试只是白等几轮退避再报同一个错。
+
+### ② service worker 空闲即被回收，冷启动那一发 `sendMessage` 会 reject
+
+裸调让异常冒泡出去，把**后面整段 UI 代码**带走，症状是"点了没反应、也没有报错"。
+所以页面侧（popup / options / content script）一律用 `callBackground`，它**永不抛**：
+
+```js
+const r = await callBackground('AUTH_STATE');
+if (!r.ok) return say(r.error, true);
+```
+
+background 那一侧与它成对：
+
+```js
+chrome.runtime.onMessage.addListener(serveMessages(handlers));
+```
+
+🔴 `serveMessages` 替你守住 **`return true`**。MV3 里监听器同步返回假值 = 通道当场关闭，
+而对面收到的**恰恰就是** `The message port closed…`——一个自己造出来的"瞬时错误"，
+重试永远修不好。手写这段的人漏掉它是常态。
+
+### 🔴 `messaging.js` 是 kit 里唯一不用 import/export 的文件
+
+Chrome 的 content script 是 **classic script**，不是 module——写一个 `export` 就是
+`SyntaxError`，而它的表现是**整节注入静默作废**：页面上什么都不会发生，
+`chrome://extensions` 也不报错。而一个不含 import/export 的文件在两种上下文里都能求值
+（2026-08-26 实测），所以同一份文件两边共用：
+
+| 用在哪 | 怎么拿到 |
+|---|---|
+| service worker / popup（module） | 经 `kit.js` 具名 import |
+| content script（classic） | manifest 的 `js` 数组里排在使用者**前面**，读 `self.SoloMessaging` |
+
+### 顺序注入 + 全局共享：content script 的事实标准
+
+content script 用不了 `import`，所以多文件组织的通行做法是 **manifest 的 `js` 数组顺序注入
++ `self.Xxx` 全局挂载**（wavely 与 steward 各自独立收敛到同一形态）。sample 的 `content/`
+就是最小示范。这个契约有两个失效点，**编译器一个都看不见**：
+
+1. **把某个文件从 manifest 摘掉，别处对它那个全局的引用不报错，而是运行时炸。**
+   steward 因此踩了两次——一处让面板**永不出现**，一处炸
+   `Cannot read properties of undefined (reading 'id')`，而后者的错误文案还写着
+   "多半是页面改版，选择器要核对"，把人指向完全错误的方向。
+2. **顺序排反**：提供者在使用者后面。同样只有运行时 undefined。
+
+两者都是**纯静态可查**的，所以别拿真机去排查：
+
+```bash
+node client/extension-kit/lint-injection.js <你的扩展目录>
+```
+
+它交叉检查 manifest 各节的 `js` 注入清单 ↔ 代码里的 `self.<全局>` 引用（顺序也管），
+顺带核对清单里的文件是否真的存在。行尾写 `// solo-lint-ignore <全局名>` 可豁免
+（`chrome.scripting.executeScript` 动态注入的那种）。
+
+### ⚠️ 通配 `matches` 会污染你不想污染的页面
+
+match pattern **表达不了端口**，所以 `http://localhost/*` 命中的是**本机所有端口**——
+包括你自己的开发前端和**回归基准页**。steward 因此把一轮回归从 9/9 打到 6/9，
+且结果不稳定（重跑变 0/4）；两节的 `js` 列表逐字相同、肉眼完全看不出来，
+最后是 `git worktree` 拉 HEAD 做对照二分才锁定的。lint 会对这类 pattern 出忠告。
+
+---
+
+## 4.7 长大之后怎么拆（sample 是起点，不是终局）
+
+`sample/background.js` 是 164 行、平铺一个 `handlers` 对象——**在那个尺寸上这是对的形态**，
+所以 sample 刻意不拆。但真实项目会长：steward 的插件到 2026-08-26 有 **48 个 handler**，
+`background.js` 一度 **1712 行**（handlers 一个对象就占 768 行）。
+
+**先澄清一个普遍误解**：MV3 对 service worker **没有文件大小限制**，manifest 声明
+`"type": "module"` 后 ESM `import` 完全可用。"不能拆"从来不是约束——但因为示例只有平铺形态，
+项目很容易一路平铺到失控才想起来拆。
+
+steward 拆成四组（`conn` 152 行 / `action` 95 / `collect` 362 / `show` 450），拆完主文件 927 行。
+三条纪律：
+
+1. **按业务轴分组，不按文件大小。**
+2. **handlers 之间不许互相 import。** 共享的下沉 `lib/`，或由装配层注入——否则拆完变成一张网，
+   比一个大文件更难改。
+3. **跨组调用走延迟取值**（`serveMessages(null, { getHandlers: () => table })`）。
+   工厂里直接持有会拿到 `undefined`——那时另一组还没装配完。
+
+### 🔴 拆分时那个静默的坑：模块级 `let` 状态
+
+主文件里的 `let deepRun = null` 被 handler 直接赋值，拆出去之后有**两种**结局，
+`node --check` 对两种都一个字不报（它按 CJS 解析，2026-08-26 实测 `exit 0`）：
+
+| 写法 | 结果 |
+|---|---|
+| handler 里 `import { deepRun }` 然后赋值 | **运行时** `TypeError: Assignment to constant variable`——import 绑定是只读的 |
+| 拆的时候顺手在各模块各留一份 `let deepRun = null` | **完全静默**：handler 改的是自己那份，主文件读到的永远是初值 |
+
+第二种才是真正难查的：症状是「状态永远不动、互斥判断永远放行」，没有任何报错。
+**解法是改成共享对象传引用**：
+
+```js
+const runState = { deep: null, gen: null };     // 传 runState，改 runState.deep
+```
+
+---
+
 ## 5. 投递语义（用之前必须知道）
 
 **at-least-once。去重是服务端的事。**
@@ -214,8 +351,18 @@ cd client/extension-kit && PATH="$PWD/../../api/node_modules/.bin:$PATH" npm tes
 cd client/extension-kit && npm test
 ```
 
-50 用例 / 5 套。独立 config，**不并进 `api/jest.ci.config.js`**：kit 是 ESM，而 ESM 要
-`--experimental-vm-modules`；为它给 127 套既有 CJS 用例都挂上实验标志不划算。
+102 用例 / 7 套（2026-08-26 实跑 ~2.5s）。独立 config，**不并进 `api/jest.ci.config.js`**：
+kit 是 ESM，而 ESM 要 `--experimental-vm-modules`；为它给 127 套既有 CJS 用例都挂上实验标志不划算。
+CI 的 `static` job 里有一步跑它（连同下面的 lint），用的就是上面那条 `PATH=` 命令。
+
+### 注入清单交叉检查
+
+```bash
+node client/extension-kit/lint-injection.js <你的扩展目录>
+```
+
+manifest 各节的 `js` 注入清单 ↔ 代码里的 `self.<全局>` 引用（含顺序），见 §4.6。
+**这类问题纯静态可查，别拿真机去排查。** 退出码：有不一致 = 1，只有忠告 = 0。
 
 ### 真浏览器 E2E
 
@@ -223,9 +370,11 @@ cd client/extension-kit && npm test
 cd client/extension-kit/e2e && npm install && npx playwright install chromium && npm test
 ```
 
-18 用例，约 22s，**不需要起 SOLO 栈**（自带假 Router）。验的是单元测试结构上够不到的那层：
-kit 在真 MV3 service worker 里是否真的跑起来、队列是否真的落盘、**worker 被回收后条目还在不在**。
-它同时是「扩展根是封闭的树」那个坑的回归守卫——见 [`e2e/README.md`](./e2e/README.md)。
+24 用例，约 18s，**不需要起 SOLO 栈**（自带假 Router）。验的是单元测试结构上够不到的那层：
+kit 在真 MV3 service worker 里是否真的跑起来、队列是否真的落盘、**worker 被回收后条目还在不在**、
+**`messaging.js` 的 classic script 形态是否真的注入进了 content script**（jest 里怎么跑都是
+module 上下文，结构上够不到）。它同时是「扩展根是封闭的树」那个坑的回归守卫——
+见 [`e2e/README.md`](./e2e/README.md)。**必须串行跑**，理由在那份 README 里。
 
 ⚠️ **`node --check` 查不出这里的语法错。** 它按 CJS 解析，`async` 回调里漏写 `async`
 这类错误会一路放行到 jest 才炸成 "Test suite failed to run"。要单独验语法用

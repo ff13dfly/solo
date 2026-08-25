@@ -21,6 +21,15 @@ export async function startFakeRouter() {
         if (req.method === 'OPTIONS') {          // host_permissions 下通常不会有预检，兜一下
             res.writeHead(204, cors()); res.end(); return;
         }
+        // 一张普通网页，给 content script 用例当注入目标。
+        // @why 挂在这个服务上而不是另起一个：manifest 的 matches 是 `http://127.0.0.1/*`
+        //      （match pattern 表达不了端口），同一个 host 就够，省掉第二个端口和它的清理。
+        if (req.method === 'GET' && req.url.startsWith('/page')) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', ...cors() });
+            res.end('<!doctype html><meta charset="utf-8"><title>假商品页</title>'
+                + '<h1>一件很贵的东西</h1><p id="body">正文</p>');
+            return;
+        }
         let body = '';
         req.on('data', (c) => { body += c; });
         req.on('end', () => {
@@ -43,11 +52,16 @@ export async function startFakeRouter() {
     return {
         // sample 的 manifest 已把 127.0.0.1 写进 host_permissions，不会弹授权框。
         url: `http://127.0.0.1:${port}/jsonrpc`,
+        /** 一张会被 content script 注入的普通网页（同 host，见上）。 */
+        pageUrl: `http://127.0.0.1:${port}/page`,
         calls,
         /** 换剧本：fn(payload, nth) → { result } | { error: { code, message } } */
         reply(fn) { handler = fn; },
         methodsSeen: () => calls.map((c) => c.method),
-        close: () => new Promise((r) => server.close(r)),
+        // 🔴 `closeAllConnections()` 不能省：`server.close()` 只是停止接受新连接，
+        //    **等已有的 keep-alive 连接自己结束**——而 Chrome 会把它们留着。症状是
+        //    fixture 拆解阶段挂死到用例超时（60s），报错指向被测用例，跟它毫无关系。
+        close: () => new Promise((r) => { server.closeAllConnections(); server.close(r); }),
     };
 }
 

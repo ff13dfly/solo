@@ -8,7 +8,16 @@
  *
  * 因此复制本 sample 成你自己的扩展时，**这个文件一个字都不用改**——
  * 只要在新目录里跑一次 `bash ../extension-kit/sync.sh .` 就行。
+ *
+ * `messaging.js` 是唯一的例外形态：它**不用 import/export**，因为同一份文件还要被
+ * manifest 当 classic script 注入进 content script（那边不认 module 语法）。
+ * 它靠副作用挂 `globalThis.SoloMessaging`，在这里转成具名导出，用起来和别的模块一样。
  */
+import './kit/messaging.js';
+export const {
+    isTransientChannelError, sendToTab, callBackground, serveMessages,
+} = globalThis.SoloMessaging;
+
 export * from './kit/rpc.js';
 export * from './kit/queue.js';
 export * from './kit/session.js';

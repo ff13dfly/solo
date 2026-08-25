@@ -11,7 +11,47 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
-（暂无）
+### Added — extension-kit 补上 MV3 的三处**运行时**基建
+
+> 来源：[`docs/feedback/done/extension-kit-mv3-runtime-gaps.md`](../feedback/done/extension-kit-mv3-runtime-gaps.md)
+> （steward 2026-08-16→08-26 十天连续开发的回流）。kit 随 v1.2.1 到达时只覆盖了
+> **传输层**（rpc / queue / session / endpoints / image），而一个真实插件的另一半
+> ——**扩展内部的消息通道**——三家各写各的。
+>
+> 只加不破：既有 5 个模块与 sample 的主路径一字未动，`upgrade.sh` 整目录覆盖照旧。
+
+- **`lib/messaging.js`（新）**：通道瞬时错误的**统一判据** + `sendToTab`（带退避重试与
+  可选补注入）/ `callBackground`（永不抛，归一成 `{ok,error}`）/ `serveMessages`
+  （替你守住 `return true`）。
+  Chrome 对"通道没接住"有**四种**措辞，最常见的那种**没有 `is`**——各项目照着自己踩到的
+  那一次抄正则，必然各漏各的。steward 就漏了第一种：一场 57 步演示的第 5 步把一个本该被
+  重试吃掉的抖动**升级成整场失败**，而现场表现指向完全错误的方向。
+  🔴 **本文件是 kit 里唯一不用 import/export 的**：同一份文件还要被 manifest 当
+  **classic script** 注入进 content script（那边不认 module 语法，写个 `export`
+  就是整节注入**静默作废**）。真 Chrome 里验过两种上下文都求值。
+- **`lint-injection.js`（新）**：交叉检查 manifest 各节的 `js` 注入清单 ↔ 代码里的
+  `self.<全局>` 引用（含顺序），顺带核对清单里的文件是否存在。
+  它抓的两类问题**纯静态可查却只在运行时炸**，steward 为此排查过两次真机，其中一次的
+  错误文案还写着"多半是页面改版"，把人指向完全相反的方向。
+- **`sample/content/`（新）**：最小的 content script 组，示范「顺序注入 + `self.Xxx`
+  全局共享」这个事实标准；`sample/background.js` 改用 `serveMessages` + `sendToTab`，
+  `popup.js` 改用 `callBackground`。
+- **门禁**：kit 单测 50 → **102 用例 / 7 套**；真浏览器 e2e 18 → **24 用例**（新增
+  `content.spec.js`，守住 classic script 注入形态——jest 结构上够不到，那边永远是
+  module 上下文）。**kit 此前从未进过 CI**，现已接进 `static` job（同步 → lint → jest）。
+- **文档**：kit README 新增 §4.6（消息通道与 content script 契约）与 §4.7（长大之后
+  怎么拆：三条纪律 + 那个 `node --check` 查不出来的模块级 `let` 静默坑）；
+  `e2e/README.md` 补「装扩展的 playwright 必须串行跑」。
+
+### Fixed — e2e 假 Router 停服时挂死到用例超时
+
+- `helpers/fake-router.js` 的 `close()` 补 `closeAllConnections()`：`server.close()` 只
+  停止接受新连接、**等已有 keep-alive 连接自己结束**，而 Chrome 会把它们留着。
+  症状是 fixture **拆解**阶段挂死到 60s 超时，而报错指向那条被测用例、跟它毫无关系。
+  此前没显形，是因为还没有用例用浏览器去 GET 这个服务。
+
+> **下游 action：无**（纯新增；升级后 `client/extension/kit/` 会多出 `messaging.js`，
+> 想用就按 kit README §4.6 接，不接则行为完全不变）。
 
 ---
 

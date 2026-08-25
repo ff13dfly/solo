@@ -11,6 +11,7 @@
 import {
     createRpc, createPasswordAuth, RpcError,
     createQueue, createSession, createEndpoints, chromeArea,
+    sendToTab, serveMessages,
 } from './kit.js';
 
 /** 改成你自己的环境。[0] = 装完不改任何设置就能用的默认地址。 */
@@ -55,6 +56,33 @@ chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'solo-queue') queue.dr
 // 冷启动补投：worker 上次是被回收的，没送完的条目还在 storage 里等着。
 chrome.runtime.onStartup.addListener(() => queue.drain());
 chrome.runtime.onInstalled.addListener(() => queue.drain());
+
+/**
+ * 问页面要点事实 —— background 侧唯一一处 `chrome.tabs.sendMessage`。
+ *
+ * 🔴 **必须走 `sendToTab` 而不是裸调。** 向 content script 发消息在 MV3 里是
+ *    **必然会瞬时失败**的操作：导航中、bfcache、新文档还没注入完。裸调的症状极具
+ *    误导性——一次导航后的抖动会被当成业务失败报出去，而现场看起来像"页面变了"。
+ *
+ * 页面**没有** content script（不在 manifest 的 matches 里、或是 chrome:// 页）也很正常，
+ * 那时退回 tabs API 拿得到的那点信息，别让采集整个失败。
+ *
+ * ⚠️ 退路本身也可能是空的：`tab.url` / `tab.title` **要 host 权限才看得见**，而
+ *    `activeTab` 只在用户手势之后才授予。所以这两个字段随时可能是 undefined——
+ *    别把它们当必然存在（CAPTURE 里先判 `!tab.url` 就是为了这个）。
+ */
+async function readPage(tab) {
+    try {
+        // 🔴 重试次数要配得上"你有多需要这个答案"。这是**可选的增补**（拿不到也照样入队），
+        //    所以只重试 1 次；主路径上的动作（点一下就必须点中的那种）才值得默认的 3 次。
+        //    默认 3 次在没有 content script 的页面上要白等 1 秒多才认输。
+        const res = await sendToTab(tab.id, { type: 'READ_PAGE' }, { retries: 1 });
+        return res && res.data ? res.data : null;      // 信封由 content 侧的 serveMessages 打
+    } catch (e) {
+        // 重试用尽仍失败：这一页就是没有我们的 content script。
+        return { title: tab.title || '', url: tab.url, unreachable: e.message };
+    }
+}
 
 // ── popup 的消息路由 ────────────────────────────────────────────
 const handlers = {
@@ -104,15 +132,19 @@ const handlers = {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab || !tab.url) throw new Error('拿不到当前标签页');
 
+        const page = await readPage(tab);
         const day = new Date().toISOString().slice(0, 10);
         const idemKey = await rpc.sha256(`${method}:${tab.url}:${day}`);
         const res = await queue.enqueue({
             method,
-            params: { url: tab.url, title: tab.title || '', capturedAt: new Date().toISOString() },
+            params: { url: tab.url, title: tab.title || '', capturedAt: new Date().toISOString(), page },
             idemKey,
         });
         const stat = await queue.drain();
-        return { ...res, idemKey: idemKey.slice(0, 12), drained: stat };
+        // 页内回一条反馈。best-effort：页面没注入 content script 也不该让采集失败。
+        sendToTab(tab.id, { type: 'FLASH', payload: { text: `SOLO 已入队 ${idemKey.slice(0, 8)}…` } }, { retries: 1 })
+            .catch(() => {});
+        return { ...res, idemKey: idemKey.slice(0, 12), drained: stat, page };
     },
 
     async QUEUE_STATS() {
@@ -122,14 +154,11 @@ const handlers = {
     async QUEUE_RETRY_DEAD() { return { requeued: await queue.retryDead() }; },
 };
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    const fn = handlers[msg && msg.type];
-    if (!fn) { sendResponse({ error: `未知消息 ${msg && msg.type}` }); return false; }
-    fn(msg.payload || {})
-        .then((data) => sendResponse({ data }))
-        .catch((e) => sendResponse({ error: e instanceof RpcError ? `[${e.code}] ${e.message}` : String(e.message || e) }));
-    return true;    // 异步 sendResponse 必须返回 true，否则通道当场关闭
-});
+// `serveMessages` 替你守住「异步 handler 必须 return true」——漏了它通道当场关闭，
+// 页面那边收到的正是 "The message port closed…"，一个自己造出来的假瞬时错误。
+chrome.runtime.onMessage.addListener(serveMessages(handlers, {
+    formatError: (e) => (e instanceof RpcError ? `[${e.code}] ${e.message}` : String(e.message || e)),
+}));
 
 // E2E 用的挂载点：让测试能在 service worker 里直接驱动队列，不必经 popup UI。
-globalThis.__solo = { queue, rpc, session, endpoints };
+globalThis.__solo = { queue, rpc, session, endpoints, readPage };

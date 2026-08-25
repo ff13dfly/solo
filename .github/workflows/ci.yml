@@ -86,6 +86,17 @@ jobs:
       - name: error-code coverage + collision (library/jsonrpc.js CODES registry)
         working-directory: .
         run: node deploy/check-error-codes.js
+      - name: extension-kit gate (ESM 单测 + manifest 注入清单交叉检查)
+        working-directory: client/extension-kit
+        run: |
+          set -e
+          # kit 必须先同步进扩展根内部（扩展根是封闭的树，见 sync.sh 顶部）——
+          # sample/kit/ 是 gitignore 的产物，CI 的干净 checkout 里还不存在。
+          bash sync.sh sample
+          # manifest 的 js 注入清单 ↔ 代码里的 self.<全局> 引用
+          node lint-injection.js sample
+          # kit 是 ESM，用 api 那份 jest（README §7 的命令，不额外装依赖）
+          PATH="$PWD/../../api/node_modules/.bin:$PATH" npm test
       - name: lockfile hygiene (npm only · single public registry)
         working-directory: .
         run: |
