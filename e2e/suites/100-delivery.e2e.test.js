@@ -23,6 +23,7 @@ const redisLib = require('../lib/redis');
 const V = require('../lib/verify');
 const wal = require('../lib/wal');
 const { ADMIN_TOKEN } = require('../harness/identity');
+const { sha256, randomHex } = require('../lib/crypto');
 
 const PROFILE = (process.env.E2E_PROFILE || 'lite').toLowerCase();
 const gate = PROFILE === 'full' ? describe : describe.skip;
@@ -57,8 +58,15 @@ gate('100 · delivery plane + reversible bot suspension', () => {
         });
 
         // 两个用户:带 email / 不带(register 实际返回 { success, uid })
-        mailUserId = V.assertResult(await rpc('user.register', { name: `mail-${PID}`, email: EMAIL }, ADMIN_TOKEN), 'register mail user').uid;
-        bareUserId = V.assertResult(await rpc('user.register', { name: `bare-${PID}` }, ADMIN_TOKEN), 'register bare user').uid;
+        // salt + hash 是 user.register 的必填项(handlers/introspection.js 里两个都
+        // required:true,router GUIDE §2b 也写明"注册必须客户端自带")。本套只需要 uid、
+        // 从不以这两个用户身份登录,所以随机派生即可——但**不能省**:省掉的表现是
+        // [-32602] missing mandatory field 'salt',整套 7 个用例全红。
+        // 这处漂移在 CI 里烂了很久没人发现,因为 CI 的 npm ci 一直失败、e2e 从没跑到过
+        // (见 CHANGELOG v1.2.4)。
+        const mkCreds = () => { const salt = randomHex(16); return { salt, hash: sha256(`e2e-100-pw${salt}` + salt) }; };
+        mailUserId = V.assertResult(await rpc('user.register', { name: `mail-${PID}`, email: EMAIL, ...mkCreds() }, ADMIN_TOKEN), 'register mail user').uid;
+        bareUserId = V.assertResult(await rpc('user.register', { name: `bare-${PID}`, ...mkCreds() }, ADMIN_TOKEN), 'register bare user').uid;
     }, 30_000);
 
     afterAll(async () => {

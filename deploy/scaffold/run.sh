@@ -215,7 +215,14 @@ cleanup() {
     trap - SIGINT SIGTERM EXIT   # 防重入:SIGINT 路径里 exit 会再触发 EXIT trap
     echo ""
     log_warn "Stopping all services..."
-    for pid in "${CHILD_PIDS[@]}"; do
+    # ${arr[@]+"${arr[@]}"} 而不是 "${arr[@]}":macOS 自带 bash 3.2 在 `set -u` 下把
+    # **空数组**的裸 "${arr[@]}" 判成 unbound variable 当场退出(bash 4.4+ 才放行)。
+    # cleanup 是 EXIT trap,任何一条早期 fail fast 都会走到这里,那时数组可能一个元素
+    # 都没有——尤其 SVC_PORTS:**全新脚手架没有任何私有 app,它恒为空**。踩中的后果是
+    # cleanup 死在这一行,后面的端口清扫与 Redis 关闭全部不执行,留下孤儿 Redis 和
+    # 监听进程,而屏幕上只有一句看不懂的 "SVC_PORTS[@]: unbound variable"。
+    # 2026-08-25 实测:全新脚手架首次起栈失败后,6479 上的 Redis 就是这么被漏掉的。
+    for pid in ${CHILD_PIDS[@]+"${CHILD_PIDS[@]}"}; do
         [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
     done
     [ -n "$SSL_PID" ] && kill "$SSL_PID" 2>/dev/null || true
@@ -227,7 +234,7 @@ cleanup() {
     # 自本脚本,判据成立。背景:solo/docs/feedback/done/scaffold-startup-guards-fallout.md §①
     local _our_pgid _pg l
     _our_pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
-    for port in "${SOLO_PORTS[@]}" "${SVC_PORTS[@]}"; do
+    for port in ${SOLO_PORTS[@]+"${SOLO_PORTS[@]}"} ${SVC_PORTS[@]+"${SVC_PORTS[@]}"}; do
         for l in $(listener_pids "$port"); do
             _pg=$(ps -o pgid= -p "$l" 2>/dev/null | tr -d ' ')
             [ -n "$_our_pgid" ] && [ "$_pg" = "$_our_pgid" ] && kill -9 "$l" 2>/dev/null || true
@@ -456,15 +463,27 @@ fe_assert_port_free() {
 # 这个 pid——覆盖竞态(两个栈同时起)和进程自己起不来(bundle 解压坏、依赖缺失)
 # 两种情形。
 fe_confirm_bound() {
-    local name="$1" port="$2" pid="$3" log_file="$4" bound=0 holder
-    for _ in $(seq 1 25); do
-        kill -0 "$pid" 2>/dev/null || break
+    local name="$1" port="$2" pid="$3" log_file="$4" bound=0 holder alive=1
+    # 100 × 0.2s = 20s。原来是 5s,冷启动时不够:整栈刚起时 redis-stack 与十几个服务
+    # 同时在抢 CPU,serve 绑定慢过这个窗口就被误判成"没起来"并 exit 1 打死整栈——
+    # 而它其实几百毫秒后就绑上了(2026-08-25 实测:同一份代码,机器闲时 400ms 通过,
+    # 冷启动那次超时;第二次跑因为 Redis 已在跑、负载低,同一条路径直接过)。
+    # 放宽只延长失败路径的耗时,成功路径依旧秒过。
+    for _ in $(seq 1 100); do
+        if ! kill -0 "$pid" 2>/dev/null; then alive=0; break; fi
         if listener_pids "$port" | grep -qx "$pid"; then
             bound=1; break
         fi
         sleep 0.2
     done
     if [ $bound -eq 0 ]; then
+        # 「进程已经死了」和「进程还活着但没绑上」是两种病,分开说:前者去看 serve 日志
+        # (解压坏、依赖缺失),后者多半是机器太忙或端口被别人抢走。
+        if [ $alive -eq 0 ]; then
+            log_error "  $name: serve 进程启动后随即退出(端口 $port 从未绑定)"
+            log_error "    serve 日志：$log_file"
+            exit 1
+        fi
         # 「没人监听」和「有人监听但确认不了归属」必须说成两句话——后者(ss 无权限看
         # 到别的用户的进程等)如果也报「没起来」,会把人引向一个空的 serve 日志。
         if port_in_use "$port" && [ -z "$(listener_pids "$port")" ]; then

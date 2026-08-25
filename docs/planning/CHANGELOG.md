@@ -28,6 +28,41 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > **下游 action：无**（仅 CI 与本仓开发依赖）。
 
+### Fixed — 🔴 `deploy/scaffold/run.sh` 停栈时清理半途夭折，Redis 变孤儿（macOS bash 3.2）
+
+> 全新脚手架项目里 **`SVC_PORTS` 恒为空**（还没有任何私有 app），而 macOS 自带的
+> **bash 3.2** 在 `set -u` 下把空数组的裸 `"${arr[@]}"` 判成 unbound variable 当场退出
+> （bash 4.4+ 才放行）。cleanup 是 EXIT trap，于是**每一次停栈、以及每一条 fail fast
+> 路径**都死在端口清扫那行，后面的 Redis 关闭永远执行不到。
+>
+> 实测（2026-08-25，全新脚手架 + `deploy/run.sh --plain --no-ssl`）：Ctrl-C 之后服务与
+> 前端端口都释放了，**Redis 独独留下**，屏幕上只有一句读不懂的
+> `run.sh: line 210: SVC_PORTS[@]: unbound variable`。留下的孤儿 Redis 正是全局
+> 红线记的那个坑——下次起栈发现端口有人应答就直接挂上去，密码/数据全错位。
+
+- 两处裸展开改为 `${arr[@]+"${arr[@]}"}`（`CHILD_PIDS` 与 `SOLO_PORTS`/`SVC_PORTS`），
+  bash 3.2 与 4.x 语义一致。修后实测：run.sh 自己起的 Redis 会被正确关闭，五个端口全释放。
+
+### Fixed — 前端绑定确认窗口只有 5s，冷启动会误杀整栈
+
+> `fe_confirm_bound` 等 serve 绑定端口的窗口是 25×0.2s = 5s。整栈冷启动时 redis-stack
+> 与十几个服务同时抢 CPU，serve 慢过这个窗口就被判成「前端没能在端口 X 上起来」并
+> `exit 1` **打死整栈**——而它其实马上就绑上了。实测同一份代码：机器闲时 400ms 通过，
+> 冷启动那次超时；紧接着第二次跑（Redis 已在跑、负载低）同一条路径直接过。
+
+- 窗口放宽到 100×0.2s = 20s（只延长失败路径耗时，成功路径依旧秒过）。
+- 顺带把「进程已经死了」与「进程还活着但没绑上」分成两条错误信息：前者指向 serve 日志
+  （解压坏/依赖缺失），后者指向负载或端口被抢——此前两种病共用一句话，会把人引向一个空日志。
+
+### Fixed — e2e suite 100 的 `user.register` 调法过时，7 个用例全红
+
+> `user.register` 的 `salt` / `hash` 都是必填（`core/user/handlers/introspection.js` 里
+> 两个都 `required: true`，router GUIDE §2b 也写明「注册必须客户端自带」），而
+> `suites/100-delivery.e2e.test.js` 只传了 `{name, email}` ⇒
+> `[-32602] missing mandatory field 'salt'`，整套 7 个用例全挂。
+> **这处漂移在 v1.2.2 及更早就存在**（`git show v1.2.2:` 同一行一模一样），一直没人发现，
+> 因为 CI 的 `npm ci` 从没成功过、e2e 根本跑不到。修后本地全量 e2e：**66/66 套、346 通过、0 失败**。
+
 ---
 
 ## [v1.2.4] — 2026-08-25
