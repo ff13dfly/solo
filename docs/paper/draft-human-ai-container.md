@@ -1,4 +1,4 @@
-# One Human, One AI, One Container: An Experience Report on Enforcing Standards Across Human–AI Software Units
+# The Container Model: An Experience Report on Enforcing Standards Across Human–AI Software Units
 
 > **Status: DRAFT v0.1 (2026-08-24), not submitted anywhere.**
 > Author placeholder: Fuu (independent). Venue target: experience-report track
@@ -9,22 +9,24 @@
 AI coding assistants make it feasible for every member of a small organization
 — including members who have never used a terminal — to own and operate a
 complete software system. This creates a scaling risk that is organizational,
-not technical: each person's AI, optimizing locally, invents its own
+not technical: each AI, optimizing locally, invents its own
 conventions, and the resulting systems cannot be governed, upgraded, or
-federated. We describe the *container model*: an organizational pattern in
-which the unit of structure is a **human–AI pair equipped with a standardized,
-partially immutable software stack**. Borrowing its logic from the ISO
+federated. We describe the *container model*: an organizational pattern
+whose unit of structure is not a person or a team but a **box** — a
+**standardized, partially immutable software stack under accountable human
+ownership, worked by however many humans and AI agents its role requires**.
+Borrowing its logic from the ISO
 shipping container rather than from OS-level containerization, the model rests
 on three mechanisms: (1) a **read-only zone** — framework code and contract
 documents that upgrades overwrite wholesale, making the standard one with
 consequences rather than a style guide; (2) an **upstream-first evolution
-loop** — when a pair's work is blocked by the standard, the standard is
+loop** — when work inside a box is blocked by the standard, the standard is
 changed centrally through a documented feedback-and-triage process, never
 patched locally; and (3) **per-turn governing documents** that constrain the
-AI's behavior before any code is written. We report ten weeks of measured experience
+AIs' behavior before any code is written. We report ten weeks of measured experience
 implementing this model in SOLO, an open-source AI-native microservice
-framework, across seven derived production systems operated by human–AI
-pairs: 21 tagged framework releases, 31 written feedback reports of which 23
+framework, across seven derived production systems:
+21 tagged framework releases, 31 written feedback reports of which 23
 have been triaged and repeatedly upcycled into releases, a natural experiment
 in which all five observed derived projects independently re-invented the
 same missing governance artifact, and a case study of provisioning a
@@ -43,14 +45,16 @@ experience report
 Large-language-model coding assistants have crossed a threshold: a single
 person working with an AI can build and operate a production software system
 end to end. The natural next step for a small organization is to give *every*
-role — finance, marketing, product — its own human–AI pair and its own
-system, and to connect these systems later through a coordination layer.
+role — finance, marketing, product — its own system, run by that role's
+humans and AIs, and to connect these systems later through a coordination
+layer.
 
 The moment an organization tries this, it hits a problem that is neither a
 model-capability problem nor a prompting problem. Each AI, asked to build a
 system, will make hundreds of small architectural decisions: how entities are
 stored, how services talk to each other, how secrets are handled, what a
-permission is. Left alone, N pairs produce N mutually alien architectures.
+permission is. Left alone, N locally optimizing AIs produce N mutually
+alien architectures.
 Convention documents do not prevent this — an AI (or a person) can read a
 style guide and still diverge, because *diverging has no consequences*. We
 argue this is the head risk of scaling AI-assisted development, and that the
@@ -67,8 +71,10 @@ to its users. Sixty years of invariance is what made every port, crane, ship
 and truck interoperable. The container model applies the same logic to
 human–AI organizations:
 
-- **The organizational unit is a human–AI pair plus a standardized stack**
-  ("one person, one box"). The pair owns its box: its data, its private
+- **The organizational unit is the box: a standardized stack under human
+  ownership.** A box belongs to a role, not to a fixed head-count — it may
+  be worked by one person with one AI assistant, or by several humans and
+  several AI agents at once. The box's owners control its data, its private
   services, its purpose. The box's frame — framework code, wire contracts,
   authoring rules — is identical across all boxes.
 - **The frame is enforced, not advised.** A designated read-only zone is
@@ -77,21 +83,22 @@ human–AI organizations:
   the next upgrade deletes. The standard has consequences, which is what
   makes it a standard rather than a suggestion.
 - **The standard evolves upstream-first.** When real work inside a box is
-  blocked by the frame, the pair writes a structured feedback report to the
+  blocked by the frame, the box files a structured feedback report with the
   framework maintainer; the report is triaged; accepted changes ship in the
   next release to *all* boxes; the local workaround is then deleted. The
   standard is a living artifact with a documented evolution protocol.
-- **The AI is governed per-turn, before code.** Each box carries governing
-  documents that its AI loads on every conversational turn — covering why
-  the box exists, what data must be exportable, and what the AI must not
-  propose — because the highest-impact AI failure modes occur before any
-  file is edited.
+- **AIs are governed per-turn, before code.** Each box carries governing
+  documents that every AI working in it loads on every conversational turn
+  — covering why the box exists, what data must be exportable, and what an
+  AI must not propose — because the highest-impact AI failure modes occur
+  before any file is edited.
 
 We implemented this model in **SOLO**, an AI-native microservice framework
 (Node.js/Express/Redis: unified signed gateway, entity factory, permission
 and audit layers, workflow orchestration with human approval gates), and
-operated it across **seven derived systems** built and run by
-human–AI pairs, including one pair whose human had never used a terminal.
+operated it across **seven derived systems** built and run by humans
+working with AIs — plus a trial box provisioned for a colleague who had
+never used a terminal.
 
 **Contributions.**
 
@@ -116,21 +123,33 @@ single small organization, with the threats to validity that entails (§7).
 
 ## 2. The Container Model
 
-### 2.1 The unit: a human–AI pair with a box
+### 2.1 The unit: a box with human ownership
 
 The model's unit of organization is not a person, not an AI agent, and not a
-team: it is a **pair** — one accountable human and their AI — bound to one
-**box**: a complete, independently deployable software stack instantiated
-from a shared scaffold. The human owns purpose, judgment, approval, and
-accountability; the AI does construction and operation; the box is the
-pair's jurisdiction. Cross-box interaction is mediated: boxes never call
-each other's internals; a coordination layer (in SOLO's roadmap, a
+team: it is the **box** — a complete, independently deployable software
+stack instantiated from a shared scaffold, under accountable human
+ownership. Humans own purpose, judgment, approval, and accountability; AIs
+do construction and operation; the box is the jurisdiction they share.
+
+How many humans and AIs work a box is deliberately left open: a box is an
+**n-human, n-AI** unit. The minimal configuration — one owner conversing
+with one assistant — is common in our deployment, but nothing in the model
+or the stack assumes it. The stack is multi-actor by construction: a user
+service manages accounts, sessions and permits for any number of humans,
+and the gateway admits any number of AI actors — interactive coding
+sessions, scheduled collection agents, event-subscribed sentinels, and
+external agents that bootstrap through the router's self-describing guide
+or its MCP adapter (§3.4). Conversely, one human may own several boxes, and
+in our deployment most boxes share one operator (§7). What the model fixes
+is not the head-count but the boundary: the box is the unit of ownership
+and accountability, and cross-box interaction is mediated — boxes never
+call each other's internals; a coordination layer (in SOLO's roadmap, a
 cryptographically authenticated bridge mesh) federates them.
 
 This is the inverse of the "AI software company" line of work
 (MetaGPT [1], ChatDev [2], AgentMesh [3], CodePori [4]), which replaces the
 humans on a team with role-played agents. In the container model every node
-retains a real human with real authority; what is standardized and
+retains real humans with real authority; what is standardized and
 replicated is the *infrastructure*, not the people.
 
 ### 2.2 The standard: invariance with consequences
@@ -140,8 +159,8 @@ Each box is split into two zones:
 - **`[Solo]` (read-only):** the framework bundle, shared libraries, contract
   documentation, authoring guides, static checkers, deployment scripts. On
   upgrade, these are **overwritten wholesale**.
-- **`[Project]` (owned):** the pair's services, data, environment, purpose
-  documents. Upgrades never touch them.
+- **`[Project]` (owned):** the box's own services, data, environment,
+  purpose documents. Upgrades never touch them.
 
 The read-only zone is documented to users primarily as an upgrade-safety
 mechanism ("don't edit these files, the upgrade will clobber them"). Our
@@ -178,8 +197,9 @@ checkers and coding guardrails trigger when code is edited. But in our
 experience the highest-impact failures occur earlier: the AI proposes
 features nobody asked for; creates five empty entity tables "to be ready";
 stores irreproducible data with no export path. The model therefore places a
-**per-turn governing document** in each box — loaded into the AI's context
-on every conversational turn, not on file-edit events — stating the box's
+**per-turn governing document** in each box — loaded into every AI
+session's context on every conversational turn, not on file-edit events —
+stating the box's
 purpose, its decision criteria, its data classes and their required
 treatment, and the rule that framework-level friction goes upstream (§2.3)
 rather than into local patches. Evidence that this artifact is load-bearing,
@@ -202,8 +222,9 @@ bundle** (`solo.v{X}.js`) plus shared source directories (`library/`,
 AI guardrail skill, and deployment scripts — all marked `[Solo]`. The
 bundle is port-agnostic: a per-box services manifest decides which services
 activate on which ports, so one immutable artifact serves every box.
-Everything the pair creates — private services under `api/apps/`, environment,
-seeds, the operator UI — is `[Solo]`-free and never touched by upgrades.
+Everything created inside the box — private services under `api/apps/`,
+environment, seeds, the operator UI — is `[Solo]`-free and never touched by
+upgrades.
 
 ### 3.2 Upgrade semantics and divergence detection
 
@@ -223,24 +244,24 @@ scaffold changes into derived projects with drift detection. SOLO extends
 the overwritten zone beyond code — to contract documentation, deployment
 scripts, and the AI's guardrail skills, all in-tree — and reframes the
 semantics from a convenience (staying current with a template) to a
-governance boundary (the standard is physically not the pair's to edit).
+governance boundary (the standard is physically not the box's to edit).
 
 ### 3.3 The gate in the AI's editing loop
 
 A static contract checker (`autocheck`) verifies naming (`{service}.{entity}.{action}`),
 wire-contract conformance, declaration/registration consistency, and
 red-line rules (services must not call each other directly; all calls go
-through the router). Crucially, it is wired into the AI's tool loop as a
-post-edit hook: the AI cannot finish an edit that breaks the contract
+through the router). Crucially, it is wired into every AI's tool loop as a
+post-edit hook: an AI cannot finish an edit that breaks the contract
 without seeing the failure immediately. The standard is checked at the speed
-the AI works, not at review time.
+the AIs work, not at review time.
 
 ### 3.4 Two feedback channels
 
 The upstream-first loop (§2.3) has a human channel and a machine channel:
 
 - **Human channel:** structured markdown reports in the framework repo's
-  `docs/feedback/`, written by the pair after real friction; triage moves
+  `docs/feedback/`, written by a box's humans after real friction; triage moves
   them to `done/` with a recorded verdict, whether or not the proposal was
   accepted.
 - **Machine channel (`system.report`):** any AI agent operating against a
@@ -262,10 +283,16 @@ exist at all* — and, as §4.3 shows, the two are not substitutes.
 
 **Setting.** One maintainer develops the framework; seven long-running
 derived systems (project codenames: colony, finance, ladder, overview,
-runner, trend, wavely/erp) are built and operated by human–AI pairs on top
-of scaffolded boxes — plus an eighth box provisioned as a one-off trial for
+runner, trend, wavely/erp) are built and operated on scaffolded boxes —
+plus an eighth box provisioned as a one-off trial for
 a non-technical role (the §4.4 case study) — spanning organizational dashboards, financial tracking, trend
-collection, job orchestration, and an ERP. The deployment topology spans a
+collection, job orchestration, and an ERP. Box populations vary and
+overlap rather than forming one-to-one pairs: most boxes share a single
+human operator, who owns several boxes at once; individual boxes are
+worked by multiple AI actors (interactive sessions, scheduled collectors,
+external agents arriving through the self-describing gateway, §3.4); and
+the §4.4 box involved two humans in different roles, a provisioner and an
+operator. The deployment topology spans a
 home server, two VPSs, and developer machines. The framework's public
 repository opened in July 2026; the observation window for the statistics
 below is June 14 – August 24, 2026 unless stated otherwise.
@@ -302,7 +329,7 @@ Two observations. First, the reports' **evidence-provenance discipline**
 project's second-hand claim about router behavior was wrong (the router had
 returned the correct count; an intermediate layer dropped it), which a
 first-hand/second-hand label made cheap to detect. Second, the loop's cost
-asymmetry matters: a report costs the pair an hour; a silent divergence
+asymmetry matters: a report costs its author an hour; a silent divergence
 costs the maintainer an unbounded amount later. The protocol prices this
 correctly.
 
@@ -347,7 +374,9 @@ generate the complete box and deliver it. This works but does not scale
 (every new person costs an expert a session), which converts "deployment
 slimming" from an optimization into a feasibility precondition for the
 model at organization scale — a prioritization insight we fed back into the
-roadmap.
+roadmap. The episode also showed the box, not a fixed human–AI pairing, to
+be the durable unit: this box was provisioned by one human and is operated
+day to day by another, and it changed hands without changing its frame.
 
 ### 4.5 What the model has *not* yet demonstrated
 
@@ -373,7 +402,7 @@ mechanism that was advisory (docs describing conventions) was violated by
 default, at AI speed. If a rule matters, wire a consequence to it; if you
 cannot, expect divergence.
 
-**L2 — Govern the AI per-turn, not per-edit.** The damaging failure modes
+**L2 — Govern AIs per-turn, not per-edit.** The damaging failure modes
 happen before code: proposing scope, inventing schemas, choosing what to
 persist. Only an always-loaded governing document reaches that window;
 edit-triggered guardrails structurally cannot (§4.3).
@@ -410,7 +439,7 @@ replicated artifact is the infrastructure standard, not the org chart.
 
 **Human–AI teaming.** The HCI and organizational literature studies
 task-level collaboration: trust [6], situation awareness [7], team design
-and reviews [5,8]. It treats the infrastructure the pair works *inside* as
+and reviews [5,8]. It treats the infrastructure the humans and AIs work *inside* as
 given; the container model is precisely about that infrastructure.
 
 **Platform engineering and golden paths.** Industry practice equips
@@ -434,9 +463,10 @@ dismissal, as later documented by Yegge [20] — is enforced invariance for
 team boundaries; Haier's *rendanheyi* model decomposes the firm into
 thousands of self-managing microenterprises on a shared platform [19]. The
 container model can be read as the human–AI-era descendant of both, with
-two deltas: the autonomous unit shrinks to a single human–AI pair, and the
-enforcement mechanism moves from managerial policy into the filesystem and
-upgrade semantics of the unit's own stack.
+two deltas: the autonomous unit shrinks to a single box — small enough for
+one person to own, with no fixed bound on the humans and AIs working it —
+and the enforcement mechanism moves from managerial policy into the
+filesystem and upgrade semantics of the unit's own stack.
 
 **Agent context files.** A recent empirical line studies the governing
 documents themselves: large-scale characterizations of AGENTS.md/CLAUDE.md
@@ -445,7 +475,7 @@ architecture content [21,22], and controlled evaluations of their effect on
 task success report mixed results [23]. That literature measures the files
 as they are used in the wild — largely as *technical* context. Our §4.3
 observation is complementary and different in kind: when boxes lacked a
-root governing document, every pair independently created one, and what
+root governing document, every box independently created one, and what
 they put in it was not build context but *organizational* governance
 (purpose, scope discipline, data policy) — content the task-success lens
 does not measure.
@@ -462,8 +492,8 @@ their software is classic [18] and newly practical with LLMs. Our
 contribution to that line is narrow and empirical: the binding constraint
 we observed is provisioning, not operation (§4.4, L6).
 
-To our knowledge, the specific combination — human–AI pair as
-organizational unit, standard-with-consequences via a read-only zone,
+To our knowledge, the specific combination — the box as the organizational
+unit binding humans and AIs, standard-with-consequences via a read-only zone,
 upstream-first evolution fed partly by the AIs themselves, and per-turn AI
 governance — has not been described or evaluated in the literature.
 
@@ -499,14 +529,14 @@ releases a week, divergence is visible instead of silent, and a
 non-programmer can drive a box on day one. The unproven half — federation
 and coordinator governance — is where our work goes next. We offer the
 pattern, its mechanisms, and our ledger of costs as a starting point for
-others building organizations of human–AI pairs.
+others building organizations out of human–AI boxes.
 
 ## Acknowledgments and AI Disclosure
 
 In keeping with the subject of this paper, the manuscript itself was
-produced by a human–AI pair: the text was drafted by a generative AI
-assistant (Claude, Anthropic) working under the author's direction inside
-one of the boxes described in §4, from the repository's feedback reports,
+produced inside the model it describes: the text was drafted by a
+generative AI assistant (Claude, Anthropic) working under the author's
+direction inside one of the boxes described in §4, from the repository's feedback reports,
 changelogs, and release history. The system design, all measurements, the
 feedback corpus, and all judgments and conclusions are the author's; the
 author reviewed and verified every claim against the primary artifacts and
