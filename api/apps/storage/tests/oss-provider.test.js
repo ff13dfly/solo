@@ -217,6 +217,62 @@ describe('local provider — round-trip against the single-file local-oss-server
         expect(url).not.toContain('Signature=');
     });
 
+    // outwardOrigin — the private-mode half of the outward-URL seam
+    // (docs/feedback/done/local-oss-outward-base-only-covers-public-access.md):
+    // signed URLs are handed to browsers on OTHER machines, so their host must be
+    // swappable to a reverse proxy while self-access keeps dialing the endpoint.
+    // The presign canonical string has no host, so the swap must not break verification.
+    test('outwardOrigin re-points signed URLs; rewritten back through the real origin they still verify', async () => {
+        const port = new URL(store.resolveUrl('probe')).port; // the live server's port
+        const outward = createStorageProvider({
+            provider: 'local',
+            access: 'private',
+            signedUrlTtl: 60,
+            local: {
+                endpoint: `http://localhost:${port}`,
+                bucket: 'solo',
+                secret: SECRET,
+                outwardOrigin: 'https://oss.example.com/t',
+            },
+        });
+        const key = keying.keyFor(sha('outward-bytes'), '.bin');
+        await outward.put(key, Buffer.from('outward-bytes')); // self-access still dials the endpoint
+
+        const url = outward.resolveUrl(key);
+        expect(url.startsWith(`https://oss.example.com/t/solo/${key}?`)).toBe(true); // path shape /{bucket}/{key} kept
+        expect(url).toContain('Signature=');
+
+        // Simulate the reverse proxy: same path+query, real origin — signature must hold.
+        const relayed = url.replace('https://oss.example.com/t', `http://localhost:${port}`);
+        const r = await httpGet(relayed);
+        expect(r.status).toBe(200);
+        expect(r.body.toString()).toBe('outward-bytes');
+
+        // presignPut is handed out too — same outward host.
+        expect(outward.presignPut(key).uploadUrl.startsWith('https://oss.example.com/t/solo/')).toBe(true);
+    });
+
+    test('public access without publicBase defaults publicUrl onto outwardOrigin', () => {
+        const pub = createStorageProvider({
+            provider: 'local',
+            access: 'public',
+            local: { endpoint: 'http://127.0.0.1:1', bucket: 'solo', secret: SECRET, outwardOrigin: 'https://oss.example.com/t' },
+        });
+        const key = keying.keyFor(sha('outward-pub'), '.png');
+        expect(pub.resolveUrl(key)).toBe(`https://oss.example.com/t/solo/${key}`);
+    });
+
+    test('publicBase set under private access only warns — signed URLs stay on the endpoint', () => {
+        const warn = jest.fn();
+        const priv = createStorageProvider({
+            provider: 'local',
+            access: 'private',
+            local: { endpoint: 'http://127.0.0.1:1', bucket: 'solo', secret: SECRET, publicBase: 'https://cdn.example.com/solo' },
+        }, { logger: { warn } });
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('LOCAL_OSS_OUTWARD_ORIGIN'));
+        expect(priv.resolveUrl('k').startsWith('http://127.0.0.1:1/solo/')).toBe(true);
+    });
+
     test('factory refuses provider=local without a secret', () => {
         expect(() => createStorageProvider({ provider: 'local', local: { endpoint: 'http://x', bucket: 'solo' } }))
             .toThrow(/secret/);

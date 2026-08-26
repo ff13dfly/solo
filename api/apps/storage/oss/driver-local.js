@@ -66,9 +66,26 @@ function notFound(key) {
 /**
  * @param {object} cfg
  * @param {string} cfg.endpoint        local-oss-server origin, e.g. http://127.0.0.1:8750/_oss
+ *                                     — how THIS PROCESS reaches the object store (put/get/
+ *                                     head/delete/list all dial it). Loopback is correct here.
  * @param {string} cfg.bucket
  * @param {string} cfg.secret          shared HMAC/Bearer secret
- * @param {string} [cfg.publicBase]    base for publicUrl (default `${endpoint}/${bucket}`)
+ * @param {string} [cfg.outwardOrigin] scheme+host(+mount) OTHERS should use to reach the
+ *                                     store (public URL of a reverse proxy mapping to
+ *                                     `endpoint`). Swapped into every URL handed out —
+ *                                     presignGet/presignPut and the publicBase default —
+ *                                     while self-access keeps dialing `endpoint`. Safe to
+ *                                     swap: the presign canonical string (presign.js) is
+ *                                     `METHOD\n/{bucket}/{key}\n…` — it contains NO host,
+ *                                     so signatures verify unchanged behind any hostname.
+ *                                     Without it, private-mode signed URLs point at
+ *                                     `endpoint` (loopback) and are dead for any browser
+ *                                     on another machine.
+ *                                     (docs/feedback/done/local-oss-outward-base-only-covers-public-access.md)
+ * @param {string} [cfg.publicBase]    FULL base for publicUrl, bucket segment included
+ *                                     (default `${outwardOrigin || endpoint}/${bucket}`).
+ *                                     public-mode only; private-mode URLs never read it —
+ *                                     that is what outwardOrigin is for.
  * @param {number} [cfg.signedUrlTtl=1800]
  * @param {function} [cfg.now]         time source (default Date.now)
  */
@@ -80,11 +97,20 @@ function createLocalDriver(cfg = {}) {
     const ttl = cfg.signedUrlTtl || 1800;
     const now = cfg.now || Date.now;
     const origin = endpoint.replace(/\/$/, '');
-    const publicBase = (cfg.publicBase || `${origin}/${bucket}`).replace(/\/$/, '');
+    // Two audiences, two origins: `origin` is how this process reaches the store;
+    // `outwardOrigin` is how it tells everyone else to. They only coincide on a
+    // single-machine deploy, which is why defaulting outward to `origin` is a
+    // fallback, not the design.
+    const outwardOrigin = cfg.outwardOrigin ? String(cfg.outwardOrigin).replace(/\/$/, '') : null;
+    const publicBase = (cfg.publicBase || `${outwardOrigin || origin}/${bucket}`).replace(/\/$/, '');
     const authHeaders = { Authorization: `Bearer ${secret}` };
 
     const encKey = (key) => key.split('/').map(encodeURIComponent).join('/');
     const objectUrl = (key) => `${origin}/${bucket}/${encKey(key)}`;
+    // URLs handed to callers (presign GET/PUT). Path shape stays `/{bucket}/{key}` so the
+    // server-side verifier parses the same canonical string regardless of which host the
+    // request arrived through.
+    const outwardUrl = (key) => `${outwardOrigin || origin}/${bucket}/${encKey(key)}`;
     const procFull = (p) => (p ? `image/${p}` : '');
     const expiryEpoch = (opts) => Math.floor(now() / 1000) + (opts.expires != null ? opts.expires : ttl);
 
@@ -171,7 +197,7 @@ function createLocalDriver(cfg = {}) {
             const expires = expiryEpoch(opts);
             const process = procFull(opts.process);
             const signature = presign.sign(secret, { method: 'GET', bucket, key, expires, contentType: '', process });
-            let urlStr = `${objectUrl(key)}?Expires=${expires}&Signature=${signature}`;
+            let urlStr = `${outwardUrl(key)}?Expires=${expires}&Signature=${signature}`;
             if (process) urlStr += `&x-oss-process=${encodeURIComponent(process)}`;
             return urlStr;
         },
@@ -184,7 +210,7 @@ function createLocalDriver(cfg = {}) {
             const expires = expiryEpoch(opts);
             const contentType = opts.contentType || '';
             const signature = presign.sign(secret, { method: 'PUT', bucket, key, expires, contentType, process: '' });
-            const uploadUrl = `${objectUrl(key)}?Expires=${expires}&Signature=${signature}`;
+            const uploadUrl = `${outwardUrl(key)}?Expires=${expires}&Signature=${signature}`;
             return { uploadUrl, key, contentType };
         },
 

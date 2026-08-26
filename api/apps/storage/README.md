@@ -33,6 +33,20 @@ The storage service **does not serve bytes**. `resolve` / `list` / `multi` retur
 - `access=private` → time-bounded signed URL (closes the old unauthenticated
   `/assets` IDOR hole, B3 / SOLO-SEC-004).
 
+**URLs are never persisted.** An asset row stores `{key, sha256, …}` only; the URL
+is concatenated at resolve time from the live config. Changing the base config
+therefore re-points **every asset, past and future, with zero migration** — no
+backfill script, ever.
+
+**Two origins, two audiences** (local provider): `LOCAL_OSS_ENDPOINT` is how *this
+process* reaches the object store (loopback is correct); `LOCAL_OSS_OUTWARD_ORIGIN`
+is how it tells *everyone else* to (the public host of a reverse proxy that maps to
+the endpoint). On any deployment where browsers are not on the storage machine,
+set the outward origin — otherwise `private`-mode signed URLs point at loopback and
+every remote client gets dead links that *look like* failed uploads or a broken
+proxy. Swapping the host is signature-safe: the presign canonical string contains
+no host. See `docs/feedback/done/local-oss-outward-base-only-covers-public-access.md`.
+
 `GET /file/:id?s=sm|md|lg` is kept only as a **back-compat 302 redirect** to the
 provider URL (it no longer reads disk). The Router's `/assets` static serving is
 disabled by default (`ENABLE_STATIC_ASSETS` opt-in).
@@ -59,6 +73,8 @@ disabled by default (`ENABLE_STATIC_ASSETS` opt-in).
 | `LOCAL_OSS_MOUNT_PATH` | `/_oss` | mount path on this service's port |
 | `LOCAL_OSS_ROOT` | `UPLOAD_DIR` | disk directory backing the bucket |
 | `LOCAL_OSS_PUBLIC_READ` | follows `STORAGE_ACCESS` | allow unsigned GET |
+| `LOCAL_OSS_OUTWARD_ORIGIN` | — | scheme+host(+mount) **others** should use to reach the store (a reverse proxy mapping to `LOCAL_OSS_ENDPOINT`). Swapped into every URL handed out — signed URLs in `private` mode, `publicBase` default in `public` mode. Does **not** change self-access and does **not** skip the in-process mount |
+| `LOCAL_OSS_PUBLIC_BASE` | `<outward-or-endpoint>/<bucket>` | **`public` mode only**: full base for unsigned URLs, bucket segment included. Ignored in `private` mode — that's what `LOCAL_OSS_OUTWARD_ORIGIN` is for (boot warns if you set only this under `private`) |
 | `OSS_REGION` / `OSS_BUCKET` | `oss-cn-hangzhou` / — | Aliyun bucket |
 | `OSS_KEY_ID` / `OSS_KEY_SECRET` | — | Aliyun RAM AccessKey (PutObject/GetObject/DeleteObject/ListObjects) |
 | `OSS_CDN_BASE` | — | public CDN base (no trailing slash) |

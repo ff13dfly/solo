@@ -151,6 +151,13 @@ module.exports = {
       bucket: process.env.LOCAL_OSS_BUCKET || 'solo',
       secret: LOCAL_OSS_SECRET,
       publicBase: process.env.LOCAL_OSS_PUBLIC_BASE || undefined,
+      // Outward origin (scheme+host+mount of the reverse proxy in front of the store).
+      // Unlike LOCAL_OSS_ENDPOINT this does NOT change how storage reaches its own
+      // store and does NOT flip inProcess below — it only changes the host baked into
+      // URLs handed out (signed URLs in private mode, publicBase default in public
+      // mode). URLs are never persisted (resolve-time concatenation), so changing
+      // this re-points every asset, past and future, with zero migration.
+      outwardOrigin: process.env.LOCAL_OSS_OUTWARD_ORIGIN || undefined,
       // --- in-process mount (index.js) ---
       // On by default; an explicit LOCAL_OSS_ENDPOINT means "someone else runs
       // the object store" (a standalone deploy/local-oss.js, a shared box), so

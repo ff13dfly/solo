@@ -50,8 +50,50 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
   症状是 fixture **拆解**阶段挂死到 60s 超时，而报错指向那条被测用例、跟它毫无关系。
   此前没显形，是因为还没有用例用浏览器去 GET 这个服务。
 
-> **下游 action：无**（纯新增；升级后 `client/extension/kit/` 会多出 `messaging.js`，
-> 想用就按 kit README §4.6 接，不接则行为完全不变）。
+### Added — storage 对外 URL 独立基址：`LOCAL_OSS_OUTWARD_ORIGIN`
+
+> 来源：[`docs/feedback/done/local-oss-outward-base-only-covers-public-access.md`](../feedback/done/local-oss-outward-base-only-covers-public-access.md)
+> （steward，2026-08-26）。`LOCAL_OSS_PUBLIC_BASE` 只参与 public 分支；private 模式的
+> 签名 URL 永远拼在 endpoint（loopback）上——storage 与浏览器不同机时整列破图，
+> 且没有开关能救（`LOCAL_OSS_ENDPOINT` 改的是**自用**访问、还会关掉进程内挂载）。
+
+- 新增 `LOCAL_OSS_OUTWARD_ORIGIN`（`storage.local.outwardOrigin`）：反代的公网
+  scheme+host+挂载段。设了它，**交出去的 URL** 全部换到这个 host——private 的
+  presignGet/presignPut，以及 public 模式 `publicBase` 的缺省值（显式
+  `LOCAL_OSS_PUBLIC_BASE` 仍优先）；自用访问照旧走 endpoint。路径形状保持
+  `/{bucket}/{key}`，presign 签名串不含 host，换 host 验签不变。
+- 启动告警补对称一句：private + 只设了 `PUBLIC_BASE`（在这条分支不参与）→ 指向
+  `OUTWARD_ORIGIN`。
+- 文档补上这块最有用的性质：**URL 不存库**，resolve 时现拼——改基址配置对历史资产
+  立刻全量生效、零迁移（README「How files are served」+ GUIDE 新增「对外 URL 指到哪」，
+  含破图症状对照）。
+- CI 白名单套件 `oss-provider.test.js` 新增 3 用例（含 outward URL 经反代改写回真实
+  origin 后验签取回字节的全链路）。
+
+### Fixed — operator 通用实体页：编辑不再给「列表没回传的字段」编造空值
+
+> 来源：[`docs/feedback/done/operator-generic-page-fabricates-empty-fields.md`](../feedback/done/operator-generic-page-fabricates-empty-fields.md)
+> （steward，2026-08-26）。服务端 `list` 合理剥掉重字段（载荷预算），通用页只有 list、
+> 从不调 get，还把缺席字段按 schema 补成 `[]`/`""`/`{}` ——记录看起来是空的，而对开了
+> `update` 的实体，点一次 Save 就把编造的空值**写回去**（静默清空数据）。
+
+- 编辑前先 `.get`：服务声明了 `{entity}.get` 就先拉完整记录再开弹窗；失败回退列表行
+  并 toast 说明。
+- 缺席 ≠ 空：schema 占位符只在记录**权威**（来自 get）或 create 时补；列表行兜底
+  路径不再编造任何值。
+- 保存改 PATCH 语义：diff 打开时的基线，只提交改动过的字段（entity factory 的 update
+  是 merge，未提交字段不动）；零改动直接关弹窗不发请求。
+- ⚠️ `portal/operator/` 是 source-distributed（升级永不覆盖）——**已有项目要自己 port**：
+  `pages/default/index.tsx`、`pages/default/EntityUtils.ts`、`locales/en.ts`/`zh.ts` 四个文件，
+  详见反馈「处理结论」。
+
+> **下游 action：operator 通用页修复需手工 port**——`portal/operator/` 是
+> source-distributed，升级不覆盖；有「list 剥载荷实体 + 开 `update`」的项目不 port，
+> 编辑弹窗仍会把编造的空值写回去（静默清空数据）。照
+> [反馈「处理结论」](../feedback/done/operator-generic-page-fabricates-empty-fields.md)
+> port 4 个文件即可。其余均纯新增、可选：extension-kit 的 `messaging.js` 按 kit README
+> §4.6 接（不接行为不变）；storage 仅「private 模式 + storage 与浏览器不同机」的部署
+> 需在 `.env` 设 `LOCAL_OSS_OUTWARD_ORIGIN`。
 
 ---
 

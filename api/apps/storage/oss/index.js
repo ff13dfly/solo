@@ -35,7 +35,7 @@ const keying = require('./keying');
  * @param {string} storageConfig.provider   'local' | 'aliyun'
  * @param {string} [storageConfig.access='private']  'private' (signed urls) | 'public' (cdn urls)
  * @param {number} [storageConfig.signedUrlTtl=1800]
- * @param {object} [storageConfig.local]    { endpoint, bucket, secret, publicBase }
+ * @param {object} [storageConfig.local]    { endpoint, bucket, secret, outwardOrigin, publicBase }
  * @param {object} [storageConfig.oss]      { region, bucket, accessKeyId, accessKeySecret, secure, cdnBase, endpoint }
  * @param {object} [deps]   { now } injectable time source
  * @returns {object} the selected driver, augmented with { provider, access, resolveUrl }
@@ -72,6 +72,7 @@ function createStorageProvider(storageConfig = {}, deps = {}) {
             endpoint: local.endpoint || 'http://127.0.0.1:8755',
             bucket: local.bucket || 'solo',
             secret: local.secret,
+            outwardOrigin: local.outwardOrigin,
             publicBase: local.publicBase,
             signedUrlTtl: ttl,
             now: deps.now,
@@ -113,6 +114,22 @@ function createStorageProvider(storageConfig = {}, deps = {}) {
     // a permissive byte server) can combine into "everything anonymously downloadable"
     // with no single place saying so — this warning is that place. Fired once at boot,
     // only on the public-mode path (unit tests that build private-mode configs stay quiet).
+    // The symmetric trap (docs/feedback/done/local-oss-outward-base-only-covers-public-access.md):
+    // LOCAL_OSS_PUBLIC_BASE participates ONLY in the public branch above. An operator who
+    // sets it under private access gets loopback signed URLs anyway and reads the dead
+    // links as "upload failed" / "the proxy is broken". Fire the correction at boot, where
+    // the misconfiguration is, not at resolve time. Quiet unless that exact combination is
+    // present, so private-mode unit tests stay silent.
+    if (provider === 'local' && driver.access !== 'public'
+        && (storageConfig.local || {}).publicBase && !(storageConfig.local || {}).outwardOrigin) {
+        const warn = (deps.logger && typeof deps.logger.warn === 'function')
+            ? deps.logger.warn.bind(deps.logger) : console.warn;
+        warn('[storage] LOCAL_OSS_PUBLIC_BASE is set but STORAGE_ACCESS is private — it only ' +
+             'affects public-mode unsigned urls and is ignored on this deployment. Signed urls ' +
+             'will point at the local endpoint (unreachable from other machines); to serve them ' +
+             'through a public host set LOCAL_OSS_OUTWARD_ORIGIN (scheme+host+mount of the ' +
+             'reverse proxy mapping to the endpoint).');
+    }
     if (driver.access === 'public') {
         const warn = (deps.logger && typeof deps.logger.warn === 'function')
             ? deps.logger.warn.bind(deps.logger) : console.warn;

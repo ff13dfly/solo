@@ -56,6 +56,24 @@ URL 拿到后能否下载，由**部署侧**的 `STORAGE_ACCESS` 决定：
 > 反过来，测试期接受"知道 URL 就能下"（key 是内容 hash、不可枚举）也是合理选择——
 > 但要**知情地**选，服务启动日志里有对应告警可核对。
 
+## 对外 URL 指到哪（跨机部署必读）
+
+**URL 不存库**：资产行里只有 `{key, sha256, …}`，URL 是 resolve 时按当前配置现拼的。
+所以改下面任何一个基址配置，**历史资产全部立刻生效、零迁移**。
+
+local provider 有两个"origin"，服务的自用与对外是分开的：
+
+- `LOCAL_OSS_ENDPOINT` = **我自己**怎么访问对象存储（loopback 是对的；设它还会关掉进程内挂载）；
+- `LOCAL_OSS_OUTWARD_ORIGIN` = **我告诉别人**怎么访问（反代的公网 scheme+host+挂载段）。
+  设了它，交出去的 URL（private 签名 URL、public 的 `publicBase` 默认值）全部换到这个 host；
+  自用访问不受影响。签名串里没有 host，换 host 不破坏验签。
+- `LOCAL_OSS_PUBLIC_BASE` = 仅 `public` 模式的无签名 URL 整段基址（**含 bucket 段**）；
+  `private` 模式完全不读它——只设它不设 outward，启动日志会告警。
+
+**症状对照**：浏览器整列破图、失败地址是 `http://127.0.0.1:…/_oss/…` ——不是上传失败、
+不是反代坏了，是没设 `LOCAL_OSS_OUTWARD_ORIGIN`。
+出处：`docs/feedback/done/local-oss-outward-base-only-covers-public-access.md`。
+
 ## 坑与约定
 
 - `createdAt` 是 ISO-8601 **字符串**，不是时间戳数字。

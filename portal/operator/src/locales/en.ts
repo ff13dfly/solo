@@ -130,6 +130,7 @@ const en = {
     resolving: 'Resolving...',
     label_created_on: 'Created On',
     label_last_updated: 'Last Updated',
+    editPartialRow: 'Could not load the full record — editing the list row; fields not shown will be left untouched.',
     err_unresolvable: '⚠️ Could not resolve entity: {id}',
   },
   category: {

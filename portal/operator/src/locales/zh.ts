@@ -130,6 +130,7 @@ const zh = {
     resolving: '解析中...',
     label_created_on: '创建于',
     label_last_updated: '最后更新',
+    editPartialRow: '完整记录加载失败——当前编辑的是列表行；未显示的字段保存时不会被改动。',
     err_unresolvable: '⚠️ 无法解析实体：{id}',
   },
   category: {

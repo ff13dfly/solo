@@ -52,6 +52,10 @@ export default function GenericEntityPage({ serviceId: propServiceId }: GenericE
   const total = queryData?.total || 0;
 
   const [editingData, setEditingData] = useState<any | null>(null);
+  // What the edit modal OPENED with. Save diffs against this and submits only the
+  // fields the operator actually changed (the entity factory's update is a merge,
+  // so unsent fields are untouched server-side).
+  const [editBaseline, setEditBaseline] = useState<any | null>(null);
   const [isCreateMode, setIsCreateMode] = useState(false);
   const [editContent, setEditContent] = useState<string>('');
   const [saveLoading, setSaveLoading] = useState(false);
@@ -80,18 +84,43 @@ export default function GenericEntityPage({ serviceId: propServiceId }: GenericE
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serviceId, entityKey]);
 
-  const startEditing = (item: any) => {
+  // Edit against the FULL record, not the list row. Services legitimately strip
+  // heavy fields from `list` (payload budget); the row is a projection, not the
+  // record. If the entity declares `.get`, fetch it before opening the modal — that
+  // is what makes the content authoritative (and lets EntityUtils add placeholders
+  // safely). Fallback: open with the row, but then absent fields stay absent instead
+  // of being fabricated as empty.
+  // See docs/feedback/done/operator-generic-page-fabricates-empty-fields.md.
+  const startEditing = async (item: any) => {
     setIsCreateMode(false);
-    setEditingData(item);
-    const editableData = prepareEntityForEditing(item, currentEntityDef);
-    setEditContent(JSON.stringify(editableData, null, 2));
     setSaveError(null);
+    const getMethod = `${serviceId}.${activeEntity}.get`;
+    const hasGet = !!service?.methods?.some((m: any) => m?.name === getMethod);
+    let record = item;
+    let authoritative = false;
+    if (hasGet && item?.id) {
+      try {
+        const full = await callRpc<any>(getMethod, { id: item.id });
+        if (full && full.id === item.id) {
+          record = full;
+          authoritative = true;
+        }
+      } catch (err) {
+        console.warn(`Edit: ${getMethod} failed, falling back to the list row`, err);
+        toast.info(t('entity.editPartialRow', { defaultValue: 'Could not load the full record — editing the list row; fields not shown will be left untouched.' }));
+      }
+    }
+    const editableData = prepareEntityForEditing(record, currentEntityDef, authoritative);
+    setEditingData(record);
+    setEditBaseline(editableData);
+    setEditContent(JSON.stringify(editableData, null, 2));
   };
 
   const startCreating = () => {
     setIsCreateMode(true);
     const template = prepareEntityForCreation(currentEntityDef);
     setEditingData({}); // Truthy to open modal
+    setEditBaseline(null);
     setEditContent(JSON.stringify(template, null, 2));
     setSaveError(null);
   };
@@ -121,11 +150,39 @@ export default function GenericEntityPage({ serviceId: propServiceId }: GenericE
       setSaveError(null);
 
       const method = isCreateMode ? 'create' : 'update';
-      const payload = isCreateMode ? parsed : { id: editingData.id, ...parsed };
+      let payload = parsed;
+      if (!isCreateMode) {
+        // PATCH semantics: submit only what the operator changed. This is the last
+        // line of defense against writing back values the operator never typed —
+        // e.g. RJSF materializing defaults for fields the server never returned.
+        const deepEmpty = (v: any) =>
+          v === '' ||
+          (Array.isArray(v) && v.length === 0) ||
+          (v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0);
+        const changed: any = {};
+        Object.keys(parsed).forEach((k) => {
+          const hadKey = editBaseline ? Object.prototype.hasOwnProperty.call(editBaseline, k) : false;
+          if (hadKey && JSON.stringify(parsed[k]) === JSON.stringify(editBaseline[k])) return; // untouched
+          // A field the modal never showed (absent from the baseline) arriving as an
+          // empty value is fabricated, not an edit — do not submit it.
+          if (!hadKey && deepEmpty(parsed[k])) return;
+          changed[k] = parsed[k];
+        });
+        if (Object.keys(changed).length === 0) {
+          // Nothing actually changed — close without issuing a write.
+          setEditingData(null);
+          setEditBaseline(null);
+          setSaveLoading(false);
+          return;
+        }
+        changed.id = editingData.id;
+        payload = changed;
+      }
 
       await callRpc(`${serviceId}.${activeEntity}.${method}`, payload);
 
       setEditingData(null);
+      setEditBaseline(null);
       queryClient.invalidateQueries({ queryKey: ['entities', serviceId, activeEntity] });
     } catch (err: any) {
       console.error("Save failed:", err);
