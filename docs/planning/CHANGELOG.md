@@ -11,6 +11,12 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+（暂无）
+
+---
+
+## [v1.2.6] — 2026-08-26
+
 ### Added — extension-kit 补上 MV3 的三处**运行时**基建
 
 > 来源：[`docs/feedback/done/extension-kit-mv3-runtime-gaps.md`](../feedback/done/extension-kit-mv3-runtime-gaps.md)
