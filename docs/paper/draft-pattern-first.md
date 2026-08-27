@@ -66,8 +66,9 @@ whole stack.
 
 This paper's subject is a pattern, not a product. We first define the
 **container model** in implementation-free terms: its unit and boundary, the
-four requirements any implementation must satisfy, and the trade it offers —
-what enforced invariance buys and what it costs (§2). We then present
+four requirements any implementation must satisfy, the trade it offers —
+what enforced invariance buys and what it costs — and the capability
+threshold past which the pattern becomes meaningful at all (§2). We then present
 **SOLO**, an open-source AI-native microservice framework, as one concrete
 implementation, mapping each requirement to the mechanism that realizes it
 (§3). Ten weeks of measured experience across seven derived production
@@ -223,7 +224,58 @@ Each is measured or bounded in §4:
   point of the pattern — and still a real cost to the box that is blocked
   today.
 
-### 2.5 Scope and non-goals
+### 2.5 Why now: the pattern's capability threshold
+
+The container model is not timeless advice: it becomes meaningful only past
+a threshold of AI capability, and the argument is two-sided — the same
+capability that makes the box *affordable* is what makes it *necessary*.
+
+**Below the threshold, the box is unaffordable.** The unit only works if a
+complete production stack can be built and operated by one box's crew — in
+the limit, one person with an assistant, or no humans in the daily loop at
+all (§2.1). Before coding assistants crossed that line, a full stack per
+role meant a team per role: the unit degenerates back into teams sharing
+systems, and "give marketing its own stack" is an absurdity rather than an
+option. The same capability also collapses the cost of *following* the
+standard: the frame's contracts and authoring rules are consumed primarily
+by AIs, so every new box's AI arrives already conversant with the standard
+— and onboarding cost, the historical reason organizations share one system
+instead of federating many, approaches zero.
+
+**Below the threshold, the box is also unnecessary.** When humans made the
+architectural decisions, divergence happened at human speed, and
+review-time governance approximately held: a style guide plus code review
+could keep a small organization coherent. The risk this paper opens with —
+N locally optimizing AIs producing N mutually alien architectures — is a
+capability-era risk: hundreds of decisions per hour, each locally
+reasonable, none reviewed. And construction ability is destruction
+ability: an AI capable of building a full stack is equally capable of
+quietly rearchitecting one, "improving" the framework in place, or
+corrupting a neighbor's database through a shared port. Advisory
+governance fails exactly when the governed party outpaces the governor.
+
+The box is therefore sized to the AI, in both directions. Inward, it is
+the largest scope one box's crew can genuinely own: a whole stack.
+Outward, it is the containment vessel that bounds the blast radius of any
+single AI failure: the frame is physically not editable (R1), reach beyond
+the box is mediated or absent (R4), and intent is governed before code
+(R3), so the worst case of a misbehaving AI is one box's payload, not the
+organization — a boundary that itself must be enforced rather than
+assumed, as the silent cross-box corruption of §4.1 shows (L3). The
+shipping container carries the same lesson [13]: standardized boxes made
+no economic sense while cargo was handled by hand; the container is cargo
+sized to machines — cranes, cells, chassis — and it repaid its constraints
+only once mechanized handling existed. The box is software sized to AI
+handling, and it inherits both properties: below the capability threshold
+it is bureaucracy; above it, it is the difference between an organization
+and a blast zone.
+
+A corollary: the pattern's relevance scales with model capability. Better
+AIs make a box cheaper to fill and an unbounded jurisdiction more
+dangerous, so we expect the §2.3–§2.4 trade to improve, not decay, as
+models improve (see also §7, "confounded timeline").
+
+### 2.6 Scope and non-goals
 
 The pattern targets organizations where each role owns a full stack and the
 stacks must stay mutually governable; the setting we have measured is one
@@ -283,9 +335,11 @@ alongside as `<name>.solo-{ver}.new`, and the upgrade report flags
 merging or carried as visible, enumerated debt.
 
 The mechanics have engineering antecedents we build on deliberately: package
-managers already give dependency code overwrite-on-upgrade semantics, and
+managers already give dependency code overwrite-on-upgrade semantics,
 template updaters such as cruft and copier [24] propagate scaffold changes
-into derived projects with drift detection. SOLO extends the overwritten
+into derived projects with drift detection, and enterprise "clean core"
+doctrine draws the same modified-core-versus-extension line for ERP
+upgrades [25] (§6). SOLO extends the overwritten
 zone beyond code — to contract documentation, deployment scripts, and the AI
 guardrail skills, all in-tree — and reframes the semantics from a
 convenience (staying current with a template) to a governance boundary (the
@@ -517,6 +571,34 @@ Golden paths generally are advisory and centrally operated; the container
 model's standard is enforced by overwrite semantics and is designed for
 federated units that each own a full stack.
 
+**Enterprise platforms: ERP flexibility and product lines.** The tension
+the container model resolves — one standard, many owners who need local
+variation — is decades old in enterprise software, where its lesson was
+learned as *upgrade paralysis*: ERP customers who modified the vendor core
+found every upgrade priced by their own divergence, and the industry's
+mature answer is doctrine the container model would recognize. SAP's
+"clean core" mandates that extensions live outside an unmodified core,
+attached only through released extension points, precisely so that
+extensions do not break upgrades and upgrades do not break
+extensions [25]; software product lines engineer the same discipline
+academically, as a shared platform with designed variation points [26].
+The container model shares the invariant-core/owned-extension split
+(§2.1) but differs on three axes. *Granularity*: the standardized
+artifact is a complete per-role stack inside one small organization, not
+one enterprise-wide monolith. *Kind of flexibility*: ERP-style flexible
+deployment is anticipated variation — configuration knobs and extension
+points the vendor designed in advance — whereas a box's payload is open
+variation: any service its crew can build, a freedom that became
+governable only when AI made the frame's contracts checkable at editing
+speed (§2.5, §3.3). *Evolution*: an ERP customer's friction enters a
+vendor's opaque enhancement pipeline; a box's friction enters an in-repo,
+provenance-labeled triage record that every crew can read (R2). Fittingly,
+one of our seven boxes is itself a small ERP built as payload on the
+standard frame (§4) — the model subsumes the use case rather than
+competing with it. And where enterprise software reached clean-core
+doctrine after decades of divergence pain, the container model starts
+there: the frame is born read-only.
+
 **Organizational antecedents.** Enforced standards across autonomous units
 are not new to organizations. Amazon's 2002 service-interface mandate — all
 teams expose functionality only through service interfaces, on pain of
@@ -689,3 +771,12 @@ Coding Agents? arXiv:2602.11988.
 
 [24] cruft (cruft.github.io) and copier: project-template update tools
 with drift detection. (industry reference)
+
+[25] SAP. "Clean Core" extensibility guidance for SAP S/4HANA Cloud —
+extensions must not break upgrades and upgrades must not break
+extensions; extend via released extension points on-stack or side-by-side
+on SAP BTP. SAP News Center / SAP Community, 2023–2025. (industry
+reference)
+
+[26] P. Clements and L. Northrop. Software Product Lines: Practices and
+Patterns. Addison-Wesley, 2001.
