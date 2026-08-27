@@ -14,7 +14,8 @@ conventions, and the resulting systems cannot be governed, upgraded, or
 federated. We describe the *container model*: an organizational pattern
 whose unit of structure is not a person or a team but a **box** — a
 **standardized, partially immutable software stack under accountable human
-ownership, worked by however many humans and AI agents its role requires**.
+ownership, worked by however many humans and AI agents its role requires —
+including, for automated roles, no humans in the daily loop at all**.
 Borrowing its logic from the ISO
 shipping container rather than from OS-level containerization, the model rests
 on three mechanisms: (1) a **read-only zone** — framework code and contract
@@ -73,10 +74,11 @@ human–AI organizations:
 
 - **The organizational unit is the box: a standardized stack under human
   ownership.** A box belongs to a role, not to a fixed head-count — it may
-  be worked by one person with one AI assistant, or by several humans and
-  several AI agents at once. The box's owners control its data, its private
-  services, its purpose. The box's frame — framework code, wire contracts,
-  authoring rules — is identical across all boxes.
+  be worked by one person with one AI assistant, by several humans and
+  several AI agents at once, or, when the role is automated, by AIs alone
+  with humans present only as owners. The box's owners control its data,
+  its private services, its purpose. The box's frame — framework code, wire
+  contracts, authoring rules — is identical across all boxes.
 - **The frame is enforced, not advised.** A designated read-only zone is
   overwritten wholesale on every framework upgrade. A local modification to
   the frame is not a violation that a reviewer might catch; it is work that
@@ -108,8 +110,8 @@ never used a terminal.
    (§2, §6).
 2. An implementation blueprint: the mechanisms by which SOLO makes the
    standard enforceable and evolvable — read-only zone semantics, upgrade
-   divergence detection, a static contract gate wired into the AI's editing
-   loop, dual feedback channels including an anonymous runtime channel for
+   divergence detection, a static contract gate wired into the AIs' editing
+   loops, dual feedback channels including an anonymous runtime channel for
    AI agents themselves (§3).
 3. Ten weeks of measured evidence: release and feedback-loop statistics, three
    traced feedback-to-release cases, a 5-of-5 natural experiment revealing a
@@ -132,15 +134,20 @@ ownership. Humans own purpose, judgment, approval, and accountability; AIs
 do construction and operation; the box is the jurisdiction they share.
 
 How many humans and AIs work a box is deliberately left open: a box is an
-**n-human, n-AI** unit. The minimal configuration — one owner conversing
-with one assistant — is common in our deployment, but nothing in the model
-or the stack assumes it. The stack is multi-actor by construction: a user
+**n-human, n-AI** unit, and on the human side n may be zero. One owner
+conversing with one assistant is common in our deployment; so is the
+opposite extreme — a box whose role is automated (scheduled collection,
+event-driven reaction) and whose day-to-day operation involves no human at
+all. Nothing in the model or the stack privileges either configuration.
+The stack is multi-actor by construction: a user
 service manages accounts, sessions and permits for any number of humans,
 and the gateway admits any number of AI actors — interactive coding
 sessions, scheduled collection agents, event-subscribed sentinels, and
 external agents that bootstrap through the router's self-describing guide
 or its MCP adapter (§3.4). Conversely, one human may own several boxes, and
-in our deployment most boxes share one operator (§7). What the model fixes
+in our deployment most boxes share one operator (§7). The one count that is
+never zero is ownership: every box has an accountable human owner, even
+when that owner never appears in its daily operation. What the model fixes
 is not the head-count but the boundary: the box is the unit of ownership
 and accountability, and cross-box interaction is mediated — boxes never
 call each other's internals; a coordination layer (in SOLO's roadmap, a
@@ -148,9 +155,10 @@ cryptographically authenticated bridge mesh) federates them.
 
 This is the inverse of the "AI software company" line of work
 (MetaGPT [1], ChatDev [2], AgentMesh [3], CodePori [4]), which replaces the
-humans on a team with role-played agents. In the container model every node
-retains real humans with real authority; what is standardized and
-replicated is the *infrastructure*, not the people.
+humans on a team with role-played agents. In the container model every
+node answers to real humans with real authority, however automated its
+daily operation; what is standardized and replicated is the
+*infrastructure*, not the people.
 
 ### 2.2 The standard: invariance with consequences
 
@@ -190,7 +198,7 @@ organization's internal human–AI infrastructure — with one addition worth
 naming: some of the feedback comes from the AIs themselves, at the moment
 their task hits a wall (§3.4).
 
-### 2.4 Governing the AI before code
+### 2.4 Governing AIs before code
 
 The final mechanism addresses *when* AI misbehavior happens. Contract
 checkers and coding guardrails trigger when code is edited. But in our
@@ -242,11 +250,11 @@ package managers already give dependency code overwrite-on-upgrade
 semantics, and template updaters such as cruft and copier [24] propagate
 scaffold changes into derived projects with drift detection. SOLO extends
 the overwritten zone beyond code — to contract documentation, deployment
-scripts, and the AI's guardrail skills, all in-tree — and reframes the
+scripts, and the AI guardrail skills, all in-tree — and reframes the
 semantics from a convenience (staying current with a template) to a
 governance boundary (the standard is physically not the box's to edit).
 
-### 3.3 The gate in the AI's editing loop
+### 3.3 The gate in the AI editing loop
 
 A static contract checker (`autocheck`) verifies naming (`{service}.{entity}.{action}`),
 wire-contract conformance, declaration/registration consistency, and
@@ -290,7 +298,9 @@ collection, job orchestration, and an ERP. Box populations vary and
 overlap rather than forming one-to-one pairs: most boxes share a single
 human operator, who owns several boxes at once; individual boxes are
 worked by multiple AI actors (interactive sessions, scheduled collectors,
-external agents arriving through the self-describing gateway, §3.4); and
+external agents arriving through the self-describing gateway, §3.4);
+boxes with automated roles run most days with no human in the loop, their
+humans appearing only as owner and occasional maintainer; and
 the §4.4 box involved two humans in different roles, a provisioner and an
 operator. The deployment topology spans a
 home server, two VPSs, and developer machines. The framework's public
@@ -365,7 +375,7 @@ edited.
 The model's promise is that *every* role can own a box. We tested the
 worst case: provisioning a box for a marketing colleague who had never used
 a terminal. Result: feasible, with a sharp division found in practice —
-the colleague could *operate* the box (converse with the AI; the per-turn
+the colleague could *operate* the box (converse with an AI assistant; the per-turn
 governing document did the day-to-day governing), but could not *provision*
 it: installing the runtime dependencies, allocating ports, generating keys
 and validating Redis ownership all required judgment the colleague could
@@ -434,7 +444,7 @@ prompting problem (§4.4).
 **All-AI software organizations.** MetaGPT [1], ChatDev [2], AgentMesh [3]
 and CodePori [4] assign organizational roles to LLM agents and automate the
 SDLC end to end. The container model inverts the premise: humans are not
-simulated but retained as the accountable owner of each node, and the
+simulated but retained as each node's accountable owners, and the
 replicated artifact is the infrastructure standard, not the org chart.
 
 **Human–AI teaming.** The HCI and organizational literature studies
