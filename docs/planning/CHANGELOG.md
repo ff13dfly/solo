@@ -15,6 +15,53 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
+## [v1.2.7] — 2026-08-28
+
+### Fixed — bundle 入口三重守卫：require 不再起舰队、缺省不再全量、绑定失败不再谎报成功
+
+> 来源：[`docs/feedback/done/bundle-require-boots-full-fleet.md`](../feedback/done/bundle-require-boots-full-fleet.md)
+> （N100 孤儿进程事故：一条 `node -e 'require(bundle)'` 调试命令活了三天,100% CPU,
+> 共享 steward 生产 Redis）。改动全部在 `deploy/gen-entry.js` 生成的入口,只加不破。
+
+- **导出与启动分离**：入口导出 `{ REGISTRY, BUILT_IN_DEFAULTS, start }`,仅当 bundle
+  是进程入口（`node solo.js`,run.sh 的启动方式）才自动 `start()`。`require(bundle)`
+  零副作用（实测 0 监听、进程自然退出）——introspection / 调试 / 未来的工具从此有了
+  无害路径。
+- **`SOLO_SERVICES_JSON` 缺省 → fail fast**（error + exit 1）,不再「warn 一行然后
+  全量 14 服务上默认端口」。dev 全量模式改为显式 `SOLO_START_ALL=1`。
+- **绑定失败点名 + 过半即退**：核实中发现真吞错点是 **Express 5 的 `app.listen` 把
+  成功回调同时注册成 error 处理器**——EADDRINUSE 不但静默,服务还照常打出
+  「Service running on port X」的**假成功日志**（实测回调触发、`address()===null`）。
+  入口现在包装 `net.Server.prototype.listen` 逐 server 挂监听：EADDRINUSE 点名
+  服务+端口+排查命令,失败过半进程退出;非绑定类错误保持原语义。
+
+### Added — `deploy/doctor.sh`:栈自己的不变量体检,开箱即用
+
+> 来源：[`docs/feedback/done/deploy-doctor-out-of-the-box.md`](../feedback/done/deploy-doctor-out-of-the-box.md)。
+> 五类历史事故都发生在「栈自己报 ok」的视野之外;排查路径都趟过一遍了,doctor 把它们
+> 固化成一条命令。scaffold 自带（init.sh 下发,upgrade.sh 三方对比更新）,零配置、
+> 只读、无常驻,退出码 0 = 无 ✗。
+
+- 五节检查：版本对齐（.solo-version ↔ bundle 文件 ↔ 运行中进程 cmdline ↔ tag/package.json）·
+  端口（声明 vs 实际绑定 vs 归属,外来占用点名 pid）· 全机 solo bundle 进程清单
+  （孤儿排查:同根多开 = ✗,CPU ≥90% = ⚠）· Redis（requirepass 生效性 / `CONFIG GET dir`
+  归属 / key 前缀分布 top8）· 宿主一行（刻意只此一行,曲线告警留给通用监控）。
+- 配套：`library/health.js` 的 `GET /health` 增加 `pid` / `uptime`（version 已有）,
+  14 服务经共享库自动获得,跨机核对打 router 端口的 `/health` 即可。
+
+### Fixed — 根 `package-lock.json` 重生成（§6.1 门禁在发版时抓到）
+
+- 根 lock 缺 jest@30 整棵依赖树,隔离目录 `npm ci` 直接拒装——v1.2.4 那次修的是
+  `api/package-lock.json`,根这份的同型病一直潜伏:**CI 没有任何 job 在仓库根跑
+  `npm ci`**（default working-directory 是 api）,所以全程绿灯。已
+  `npm install --package-lock-only` 重生成并按 §6.1 复验（309 包干净装入,无镜像源)。
+
+下游 action：无（`deploy/upgrade.sh` 升级即得;`run.sh` 无需改动——它一直显式传
+`SOLO_SERVICES_JSON`。仅当有自研脚本裸 `require` bundle 且依赖其自动启动时才需改为调
+`start()`,未见此类脚本）。
+
+---
+
 ## [v1.2.6] — 2026-08-26
 
 ### Added — extension-kit 补上 MV3 的三处**运行时**基建

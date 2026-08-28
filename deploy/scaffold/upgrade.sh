@@ -298,7 +298,7 @@ done
 
 # --- 4. [Solo->Project] deploy scripts: detect divergence, don't clobber ---
 log_step "Checking [Solo→Project] deploy scripts..."
-for s in run.sh precheck.sh admin-up.sh seed-registry.js migrate-cursor-index.js; do
+for s in run.sh precheck.sh admin-up.sh doctor.sh seed-registry.js migrate-cursor-index.js; do
     stock="$SCRIPT_DIR/$s"; proj="$PROJ/deploy/$s"
     [ -f "$stock" ] || continue
     if [ ! -f "$proj" ]; then

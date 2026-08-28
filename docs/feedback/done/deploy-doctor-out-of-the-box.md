@@ -68,4 +68,39 @@ Router `ping` 现在只回 `{status, service}`。加上 `version` / `pid` / `upt
 
 ## 处理结论（solo 侧）
 
-（待 triage）
+**采纳，2026-08-28 落地为 `deploy/scaffold/doctor.sh`**（init.sh 新脚手架自带 + chmod，
+upgrade.sh 进三方对比下发清单；零配置、只读、跑完即走，退出码 0 = 无 ✗）。
+五项检查全部实现，与提案的对应：
+
+1. **端口归属** + 2. **声明 vs 实际绑定** → §2 合并做：solo-services.json +
+   services.json + .env 前端口（PORTAL_*/CLIENT_*/FRONTEND_*_PORT）逐个核对
+   「有没有人听、听的人 cmdline 是否在本项目根下」；栈未运行时降级为 note 不误报。
+   实测能当场揪出外来占用（报 pid + 命令行 + 处置指引）。
+3. **版本对齐** → §1：`.solo-version` ↔ bundle 文件在位 ↔ api/publish 里最新版本 ↔
+   **运行中进程 cmdline 里的版本**（比经 HTTP 问更直接，栈死了也能查）；项目自身
+   tag ↔ package.json 只 warn 不定罪（不是每个项目都打 tag）。
+4. **Redis 归属与认证** → §4：ping / requirepass 生效性（配了密码但裸连也通 = ✗）/
+   `CONFIG GET dir` 归属（与 run.sh v1.1.14 同判据）/ key 前缀分布 top8——steward
+   「数据没跟着代码走」的判据就地给出；>80 万 key 自动跳过扫描。
+5. **宿主一行** → §5：load / 磁盘 / 内存一行 + 最吃 CPU 进程 ≥90% 标黄。不做曲线、
+   不做告警、无常驻——提案的三条边界照单全收。
+
+提案之外补了一节（事故里反复出现但五项没显式覆盖）：**§3 全机 solo bundle 进程清单**
+——凡「可执行文件是 node 且 cmdline 含 api/publish/solo.」的进程逐个列出（本栈/别家栈、
+CPU、存活时长）；同根 >1 个 = ✗ 孤儿，CPU ≥90% = ⚠ 空转嫌疑。N100 那条
+`node -e 'require(bundle)'` 恰好被两个条件同时命中。
+
+**配套 ping 丰富化——落在 HTTP `/health`，不动 router**：`api/library/health.js` 的
+`/health` 本就返回 version，本次补 `pid` + `uptime`，全部 14 服务（含 router）经共享库
+自动获得；router 端口对外暴露，跨机核对用 `GET <router>/health` 即可。反馈原文提的
+JSON-RPC `ping` 方法丰富化要改 `api/router/`（保护区），判定不必要——HTTP 面已覆盖
+同一需求；将来确要 RPC 面再按 router 修改保护流程另行审批。
+
+不做：solo 仓库自身（dev.sh 源码栈）不适用此脚本，不另做一份——doctor 的对象是
+scaffold 部署形态。
+
+验证（2026-08-28）：`bash -n` + `env -i bash -n`（locale 陷阱）双过；假 consumer 栈
+实测四条路径——栈停（全 note 不误报）/ 栈起（版本、端口、归属全 ✓）/ 外来进程占
+声明端口（✗ + pid 点名）/ Redis 归属不符（✗ + 同 run.sh 文案）——输出与退出码全部正确。
+兄弟反馈 `bundle-require-boots-full-fleet.md` 的入口守卫同日落地，两者合起来是
+「不再产生孤儿」+「已有孤儿当场可见」。

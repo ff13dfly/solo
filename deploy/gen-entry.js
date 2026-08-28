@@ -11,6 +11,12 @@
 // in services.json is bundled into solo.js, but only services listed in the
 // consumer's SOLO_SERVICES_JSON are actually instantiated at runtime.
 //
+// The generated entry exports { REGISTRY, BUILT_IN_DEFAULTS, start } and only
+// auto-starts when the bundle IS the process entry (node solo.js). require()ing
+// it is side-effect free, and SOLO_SERVICES_JSON unset REFUSES to start
+// (SOLO_START_ALL=1 explicitly opts into all-services-on-default-ports).
+// Background: docs/feedback/done/bundle-require-boots-full-fleet.md
+//
 // Why a global port map: each service's config.js calls
 // `library/ports.js → portFor(name, fallback)` which reads global.__SOLO_PORTS__.
 // The entry sets this global BEFORE invoking any service factory.
@@ -77,54 +83,118 @@ global.__SOLO_GUIDES__ = {
 ${guideLines}
 };
 
-let cfg;
-if (process.env.SOLO_SERVICES_JSON) {
-  try {
-    cfg = JSON.parse(fs.readFileSync(process.env.SOLO_SERVICES_JSON, 'utf8'));
-  } catch (e) {
-    console.error('[solo] failed to read SOLO_SERVICES_JSON at ' + process.env.SOLO_SERVICES_JSON + ': ' + e.message);
-    process.exit(1);
+function resolveConfig() {
+  if (process.env.SOLO_SERVICES_JSON) {
+    try {
+      return JSON.parse(fs.readFileSync(process.env.SOLO_SERVICES_JSON, 'utf8'));
+    } catch (e) {
+      console.error('[solo] failed to read SOLO_SERVICES_JSON at ' + process.env.SOLO_SERVICES_JSON + ': ' + e.message);
+      process.exit(1);
+    }
   }
-} else {
-  console.warn('[solo] SOLO_SERVICES_JSON not set — starting all bundled services with built-in default ports');
-  cfg = BUILT_IN_DEFAULTS;
+  // "Unset env → quietly boot the whole fleet on default ports" turned a debug
+  // one-liner into a three-day shadow stack sharing a production Redis (see
+  // docs/feedback/done/bundle-require-boots-full-fleet.md). Starting 14 listeners is
+  // never an acceptable default; the dev convenience survives behind an
+  // explicit opt-in.
+  if (process.env.SOLO_START_ALL === '1') {
+    console.warn('[solo] SOLO_START_ALL=1 — starting ALL bundled services on built-in default ports');
+    return BUILT_IN_DEFAULTS;
+  }
+  console.error('[solo] SOLO_SERVICES_JSON not set — refusing to start.');
+  console.error('[solo] Set SOLO_SERVICES_JSON=<path to services list> (deploy/run.sh does this),');
+  console.error('[solo] or set SOLO_START_ALL=1 to explicitly start every bundled service on default ports.');
+  process.exit(1);
 }
 
-// Populate port map BEFORE any service is required. Each config.js, when
-// loaded by its factory below, will read global.__SOLO_PORTS__ via
-// library/ports.js.
-global.__SOLO_PORTS__ = Object.fromEntries(
-  cfg.filter(s => s.port != null).map(s => [s.name, Number(s.port)])
-);
+function start() {
+  const cfg = resolveConfig();
 
-// The bundle is ONE process hosting MANY services. PORT and ROUTER_URL are
-// "single process, single identity" env vars — legitimate for a standalone
-// private-app process (run.sh's own private-app spawn sets them explicitly,
-// per-child), meaningless and dangerous here. 14 of this bundle's own
-// config.js files still read \`process.env.ROUTER_URL || urlFor('router', ...)\`
-// (the env wins) — a ROUTER_URL leaked from an earlier \`export\` in the same
-// shell, or from a differently-configured sibling Solo stack, silently
-// redirects every event this bundle emits to a FOREIGN Router. That Router
-// rejects it (unregistered source) and logs the rejection in ITS OWN project
-// — invisible here. A leaked PORT is worse: portFor() honors process.env.PORT
-// by design (a standalone process needs to pin its own listen port), so
-// every bundled service would try to bind the SAME port; only the first
-// one wins and the rest fail silently. Clearing both here — once, upstream
-// of every service's config.js — protects all of them without relying on
-// each one being written correctly, and without touching run.sh's private-app
-// spawn (a legitimately different, single-process consumer of these same names).
-// Background: docs/feedback/done/inherited-router-url-silent-misdelivery.md
-delete process.env.PORT;
-delete process.env.ROUTER_URL;
+  // Populate port map BEFORE any service is required. Each config.js, when
+  // loaded by its factory below, will read global.__SOLO_PORTS__ via
+  // library/ports.js.
+  global.__SOLO_PORTS__ = Object.fromEntries(
+    cfg.filter(s => s.port != null).map(s => [s.name, Number(s.port)])
+  );
 
-for (const s of cfg) {
-  const factory = REGISTRY[s.name];
-  if (!factory) {
-    console.error('[solo] unknown service in SOLO_SERVICES_JSON: ' + s.name);
-    process.exit(1);
+  // The bundle is ONE process hosting MANY services. PORT and ROUTER_URL are
+  // "single process, single identity" env vars — legitimate for a standalone
+  // private-app process (run.sh's own private-app spawn sets them explicitly,
+  // per-child), meaningless and dangerous here. 14 of this bundle's own
+  // config.js files still read \`process.env.ROUTER_URL || urlFor('router', ...)\`
+  // (the env wins) — a ROUTER_URL leaked from an earlier \`export\` in the same
+  // shell, or from a differently-configured sibling Solo stack, silently
+  // redirects every event this bundle emits to a FOREIGN Router. That Router
+  // rejects it (unregistered source) and logs the rejection in ITS OWN project
+  // — invisible here. A leaked PORT is worse: portFor() honors process.env.PORT
+  // by design (a standalone process needs to pin its own listen port), so
+  // every bundled service would try to bind the SAME port; only the first
+  // one wins and the rest fail silently. Clearing both here — once, upstream
+  // of every service's config.js — protects all of them without relying on
+  // each one being written correctly, and without touching run.sh's private-app
+  // spawn (a legitimately different, single-process consumer of these same names).
+  // Background: docs/feedback/done/inherited-router-url-silent-misdelivery.md
+  delete process.env.PORT;
+  delete process.env.ROUTER_URL;
+
+  // Bind-failure watchdog — MUST hook net.Server.listen, nothing higher up
+  // catches this. Express 5's app.listen registers the success callback ALSO
+  // as the server's error handler (application.js: \`server.once('error', done)\`),
+  // so on EADDRINUSE the error is consumed (never reaches uncaughtException)
+  // AND the service's callback runs anyway, logging "Service running on port
+  // X" for a port it does not hold (verified against express 5.2.1: callback
+  // fires, server.address() === null, zero errors anywhere). Observed on N100
+  // as 13/14 services gone while every log line claimed success. Wrapping
+  // listen() attaches our own error listener per server, before any factory
+  // runs: a listen EADDRINUSE names the dead service loudly, and once more
+  // than half the declared fleet failed to bind the process exits — a
+  // majority-dead stack must not keep reporting for duty. Non-EADDRINUSE
+  // server errors are re-thrown asynchronously when nobody else listens,
+  // preserving today's crash/route-to-uncaughtException semantics.
+  const portOwner = new Map(cfg.filter(s => s.port != null).map(s => [Number(s.port), s.name]));
+  const bindFailed = new Set();
+  const net = require('net');
+  const realListen = net.Server.prototype.listen;
+  net.Server.prototype.listen = function (...args) {
+    this.once('error', (err) => {
+      if (err && err.code === 'EADDRINUSE' && err.syscall === 'listen') {
+        const name = portOwner.get(err.port) || ('port ' + err.port);
+        bindFailed.add(name);
+        console.error('[solo] BIND FAILED: service "' + name + '" could not listen on port ' + err.port +
+          ' (EADDRINUSE) — another process holds it. The service is NOT running,' +
+          ' even if its own log claims otherwise (express 5 fires the success callback on error).');
+        console.error('[solo]   inspect: lsof -nP -iTCP:' + err.port + ' -sTCP:LISTEN');
+        if (bindFailed.size * 2 > cfg.length) {
+          console.error('[solo] ' + bindFailed.size + '/' + cfg.length + ' services failed to bind — more than half the fleet is dead, exiting.');
+          process.exit(1);
+        }
+      } else if (this.listenerCount('error') === 0) {
+        setImmediate(() => { throw err; });
+      }
+    });
+    return realListen.apply(this, args);
+  };
+
+  for (const s of cfg) {
+    const factory = REGISTRY[s.name];
+    if (!factory) {
+      console.error('[solo] unknown service in SOLO_SERVICES_JSON: ' + s.name);
+      process.exit(1);
+    }
+    factory();
   }
-  factory();
 }
+
+module.exports = { REGISTRY, BUILT_IN_DEFAULTS, start };
+
+// Auto-start ONLY when this bundle IS the process entry (\`node solo.js\`,
+// which is how run.sh launches it). A require() — debug one-liner, REPL,
+// introspection tooling — gets { REGISTRY, BUILT_IN_DEFAULTS, start } and NO
+// side effects; requiring a module must never boot a fleet.
+// Compared via require.main.filename, not \`require.main === module\`: esbuild
+// wraps this CJS entry in a __commonJS closure whose \`module\` is an internal
+// stub, while \`__filename\` still resolves to the emitted bundle file.
+if (require.main && require.main.filename === __filename) start();
 `;
 
 fs.writeFileSync(outputFile, entry);

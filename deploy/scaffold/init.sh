@@ -305,6 +305,7 @@ fi
 cp "$SCRIPT_DIR/run.sh"                "$NEW_DIR/deploy/run.sh"
 cp "$SCRIPT_DIR/precheck.sh"           "$NEW_DIR/deploy/precheck.sh"
 cp "$SCRIPT_DIR/admin-up.sh"           "$NEW_DIR/deploy/admin-up.sh"
+cp "$SCRIPT_DIR/doctor.sh"             "$NEW_DIR/deploy/doctor.sh"
 cp "$SCRIPT_DIR/seed-registry.js"      "$NEW_DIR/deploy/seed-registry.js"
 # Needed the day a project adds cursor pagination to an EXISTING *.list (docs/authoring/
 # service.md §6.5): entities written before the cursor ZSET existed make list({cursor})
@@ -312,7 +313,7 @@ cp "$SCRIPT_DIR/seed-registry.js"      "$NEW_DIR/deploy/seed-registry.js"
 cp "$SCRIPT_DIR/migrate-cursor-index.js" "$NEW_DIR/deploy/migrate-cursor-index.js"
 cp "$SCRIPT_DIR/services.json.example" "$NEW_DIR/deploy/services.json"
 cp "$SCRIPT_DIR/seed.json"             "$NEW_DIR/deploy/seed.json"
-chmod +x "$NEW_DIR/deploy/run.sh" "$NEW_DIR/deploy/precheck.sh" "$NEW_DIR/deploy/admin-up.sh"
+chmod +x "$NEW_DIR/deploy/run.sh" "$NEW_DIR/deploy/precheck.sh" "$NEW_DIR/deploy/admin-up.sh" "$NEW_DIR/deploy/doctor.sh"
 
 # Scan a contiguous free port range for Solo internal services. Each
 # scaffolded project gets its own range so two projects on the same machine
@@ -352,7 +353,7 @@ const base = $SOLO_PORT_BASE;
 const out = template.map((s, i) => ({ ...s, port: base + i }));
 fs.writeFileSync('$NEW_DIR/deploy/solo-services.json', JSON.stringify(out, null, 2));
 "
-log_info "Copied: deploy/run.sh, deploy/precheck.sh, deploy/admin-up.sh, deploy/seed-registry.js, deploy/migrate-cursor-index.js, deploy/services.json, deploy/seed.json"
+log_info "Copied: deploy/run.sh, deploy/precheck.sh, deploy/admin-up.sh, deploy/doctor.sh, deploy/seed-registry.js, deploy/migrate-cursor-index.js, deploy/services.json, deploy/seed.json"
 log_info "Generated: deploy/solo-services.json (per-project port range, owned by this project)"
 
 # --- 10. .env ---

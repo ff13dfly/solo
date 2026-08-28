@@ -84,4 +84,38 @@ consumer group、或某条毒消息/毒任务被即时重试）——**此为推
 
 ## 处理结论（solo 侧）
 
-（待 triage）
+**三条建议全部采纳，2026-08-28 落地（`deploy/gen-entry.js` 生成的入口整体重构）。**
+核实过程中发现了一层比反馈判断更深的根因，先记它：
+
+**「静默消失」其实是「谎报成功」——吞错点是 Express 5，不是 router。**
+Express 5 的 `app.listen` 把成功回调**同时**注册成 server 的 error 处理器
+（express 5.2.1 `lib/application.js`：`server.once('error', done)`）。EADDRINUSE 时：
+① 错误被这个监听消费，永远到不了 `uncaughtException`（router 的全局 handler 只是
+无关旁观者，本反馈第一节把它当吞错点的推断不成立——单服务进程同样吞）；
+② 成功回调被以 `done(err)` 调起，而所有服务的回调都不看参数，于是**照常打出
+「Service running on port X」**。本机实测：回调触发、`server.address() === null`、
+全程无一处报错。N100 那 13 个服务不是安静消失，是逐个打印了成功日志。
+
+三条建议的落法：
+
+1. **缺省 fail fast** ✅ —— `SOLO_SERVICES_JSON` 未设置 → error + `exit 1`；
+   全量默认端口的 dev 便利改为显式 `SOLO_START_ALL=1`。扫过仓库：没有任何脚本
+   依赖旧缺省（dev.sh 走源码路径、scaffold run.sh 始终显式传入），零破坏。
+2. **导出与启动分离** ✅ —— 入口导出 `{ REGISTRY, BUILT_IN_DEFAULTS, start }`，
+   仅当 bundle 是进程入口才自动 `start()`（判据用 `require.main.filename ===
+   __filename` 而非 `require.main === module`，esbuild 内联层下实测成立）。
+   `require(bundle)` 现在零副作用（实测：0 监听、进程自然退出）。
+3. **绑定失败有声响** ✅ —— 因上述根因，落点在 net 层：入口起服务前包装
+   `net.Server.prototype.listen`，逐 server 挂 error 监听。EADDRINUSE 点名服务 +
+   端口 + 排查命令；失败过半（`bindFailed×2 > cfg.length`）进程退出；非绑定类
+   错误在无其他监听者时异步重抛，保持原崩溃语义。
+
+验证（全部本机实测,2026-08-28）：缺省拒绝 exit 1 / `SOLO_START_ALL=1` 起满 14 监听 /
+双实例并跑第二个 8/14 点名后退出 / `require()` 拿到导出且零监听 / `SOLO_SERVICES_JSON`
+子集正常——五档全过；完整 `deploy/build.sh`（含 precheck）+ jest CI 白名单 130 套全绿。
+
+未复现：第三节的 100% CPU 空转根因。修复后 require 路径不再起服务，该场景已不存在；
+「双 bundle 挂同一非空 Redis」的猜想留此存档，再露头再追。
+
+配套的体检工具（部署后怎么发现这类孤儿）见同目录
+[`deploy-doctor-out-of-the-box.md`](./deploy-doctor-out-of-the-box.md)。

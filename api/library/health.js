@@ -35,7 +35,12 @@ function renderMetric({ name, value, help, type = 'gauge', labels = {} }, defaul
 
 function mountHealth(app, { serviceName, version, getRedis, getMetrics } = {}) {
     app.get('/health', (req, res) => {
-        res.json({ status: 'ok', service: serviceName, version, ts: Date.now() });
+        // pid + uptime alongside version: lets deploy/doctor.sh (and any remote
+        // check hitting the exposed Router port) verify WHICH process answers and
+        // how long it has lived, without shelling into the box — the "version
+        // triple" check (bundle file vs package.json vs live process) needs a
+        // live-process answer that is more than a bare ok.
+        res.json({ status: 'ok', service: serviceName, version, pid: process.pid, uptime: Math.round(process.uptime()), ts: Date.now() });
     });
 
     app.get('/readyz', async (req, res) => {
