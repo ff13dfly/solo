@@ -12,6 +12,8 @@ deploy/mock/.ports
 # Router's Ed25519 identity keypair — generated on first boot (handlers/keypair.js),
 # must never be committed (it's the private key that signs every Router→service token)
 api/router/.keypair
+.keypair
+**/.keypair
 api/router/.password
 
 # agent extract.test.js writes its report here every run — regenerated output, not a fixture

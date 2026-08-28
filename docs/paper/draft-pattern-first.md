@@ -572,6 +572,20 @@ because the alternative — editing the read-only launcher — is exactly what
 the model forbids). We consider this trade explicit and correct: the
 alternative to visible lag is invisible fork.
 
+Lag is affordable for a further reason, and it is a flexibility the
+invariance buys back: version skew does not fracture communication. The
+wire contract — envelope, signing, method naming, error codes — lives in
+the frame and evolves additively in the current major version, so a client
+that speaks the standard can talk to a box on any release in the span, and
+each box chooses *when* to upgrade without losing the ability to be talked
+to — the per-unit upgrade autonomy that ERP fleets lose to upgrade
+paralysis (§6). The discipline held with one deliberate exception in our
+window: a release that made two authentication parameters mandatory,
+shipped as a flagged breaking change. Even that exception travels with its
+contract: the upgrade tool scans every release note newer than the box's
+installed version and raises any required downstream action as a banner,
+so a lagging box learns what its jump will cost before it jumps.
+
 ### 4.3 A natural experiment: 5 of 5 boxes re-invented the same missing artifact (R3; error amplification)
 
 The scaffold initially shipped the guardrail skill (§3.5) but **no root
