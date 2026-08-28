@@ -9,31 +9,29 @@
 
 ## Abstract
 
-AI coding assistants make it feasible for every member of a small organization
-— including members who have never used a terminal — to own and operate a
-complete software system. This creates a scaling risk that is organizational,
-not technical: each AI, optimizing locally, invents its own conventions, and
-the resulting systems cannot be governed, upgraded, or federated. We describe
-the **container model**, an organizational pattern that answers this risk the
-way the ISO shipping container answered freight: value comes from invariance.
-Its unit is the **box** — a standardized, partially immutable software stack
-under accountable human ownership, worked by however many humans and AI
-agents its role requires, including no humans in the daily loop for automated
-roles. The pattern imposes four requirements — a frame whose violation
-carries automatic cost, an upstream-first evolution protocol, per-turn
-governance of the AIs, and mediated interaction between boxes — and offers an
-explicit trade: mutual intelligibility and compounding evolution at any scale,
-priced in version lag, a central triage bottleneck, a provisioning burden, and
-amplification of the standard's own errors. We then report ten weeks of
-measured experience with one implementation of the pattern — SOLO, an
-open-source AI-native microservice framework — across seven derived
-production systems: 21 tagged framework releases, 31 written feedback reports
-of which 23 are triaged and repeatedly upcycled into releases, a natural
-experiment in which all five observed derived projects independently
-re-invented the same missing governance artifact, and a case study of
-provisioning a box for a colleague with no terminal experience. We distill
-six lessons and argue that enforced invariance — not better prompting — is
-the missing primitive for scaling AI-assisted development beyond one person.
+AI coding assistants now let every role in a small organization — including
+people who have never used a terminal — own a complete software system. The
+risk this creates is organizational, not technical: each
+AI, optimizing locally, invents its own conventions, leaving systems that
+cannot be governed, upgraded, or federated. We describe the
+**container model**, whose unit is the **box**: a standardized, partially
+immutable software stack under accountable human ownership, worked by any
+number of humans and AI agents — for automated roles, none in the daily
+loop. Five requirements make the standard consequential rather than advisory:
+a frame that upgrades overwrite wholesale, upstream-first evolution,
+per-turn governance of the AIs, mediated cross-box interaction, and proven
+resource claims between co-located boxes. The
+pattern is bounded by AI capability on both sides: what makes a box
+affordable to fill is what makes bounding its blast radius necessary. We
+price its costs openly: version lag, a triage bottleneck, provisioning
+burden, and amplified standard errors. We then
+report ten weeks with one implementation — SOLO, an open-source AI-native
+microservice framework — across seven derived production systems: 21 tagged
+releases; 31 feedback reports, 23 triaged at a median of two days and
+upcycled into releases; a natural experiment in which all five observed
+projects independently re-invented the same missing artifact; and a provisioning case study for a non-technical owner. We distill six lessons and argue that enforced
+invariance — not better prompting — is the missing primitive for scaling
+AI-assisted development beyond one person.
 
 **Keywords:** human–AI collaboration, AI-assisted software engineering,
 platform engineering, software governance, multi-agent organizations,
@@ -66,7 +64,7 @@ whole stack.
 
 This paper's subject is a pattern, not a product. We first define the
 **container model** in implementation-free terms: its unit and boundary, the
-four requirements any implementation must satisfy, the trade it offers —
+five requirements any implementation must satisfy, the trade it offers —
 what enforced invariance buys and what it costs — and the capability
 threshold past which the pattern becomes meaningful at all (§2). We then present
 **SOLO**, an open-source AI-native microservice framework, as one concrete
@@ -77,8 +75,10 @@ systems supply the evidence (§4), from which we distill six lessons (§5).
 **Contributions.**
 
 1. An implementation-independent articulation of the container model — unit,
-   boundary, four requirements, and an explicit cost/benefit ledger (§2) —
-   with its distinction from adjacent patterns (§6).
+   boundary, five requirements, an explicit cost/benefit ledger, and the
+   capability threshold that makes the pattern both affordable and
+   necessary (§2) — with a point-by-point separation from adjacent
+   patterns (§6, Table 3).
 2. An existence proof: SOLO, a complete open-source implementation, with the
    requirement-to-mechanism map (§3).
 3. Ten weeks of measured evidence: release and feedback-loop statistics,
@@ -99,7 +99,11 @@ OS-level containerization, with which it shares nothing but the word. The
 shipping container succeeded for one reason: its specification did not bend
 to its users. Sixty years of invariance is what made every port, crane, ship
 and truck interoperable. The container model applies the same logic to
-organizations of humans and AIs. This section defines the pattern without
+organizations of humans and AIs. One clarification before the definitions:
+the principle this paper argues for is **enforced invariance** — a standard
+whose violation carries an automatic cost; the container is the metaphor
+that names it and, as §2.5 shows, the historical case that predicts when it
+pays. The metaphor is not the argument. This section defines the pattern without
 reference to any implementation: everything here is a definition, a
 requirement, or a claimed consequence; §3 supplies one implementation and §4
 the measurements.
@@ -133,9 +137,9 @@ the box is the unit of ownership and accountability, and boxes never call
 each other's internals — cross-box interaction goes through a mediated
 coordination layer or does not happen.
 
-### 2.2 Four requirements
+### 2.2 Five requirements
 
-A container deployment stands or falls on four properties. We state them as
+A container deployment stands or falls on five properties. We state them as
 requirements on any implementation.
 
 **R1 — The frame is enforced, not advised.** Violating the frame must carry
@@ -178,14 +182,84 @@ whose own configuration must be governed at least as strictly as any box —
 because that layer is, by construction, the permission-concentration point
 of the whole organization.
 
+**R5 — Resource claims are proven, not assumed.** R4 governs what boxes say
+to each other; R5 governs what they silently share. Wherever boxes are
+co-located — the common case, since a box is small enough to sit beside its
+neighbours on one machine — every box must prove exclusive ownership of the
+infrastructure it claims (ports, databases, inherited environment) at
+startup, and fail closed when it cannot. This requirement is not a
+deployment detail but a precondition of the containment claim in §2.5: a
+box whose blast radius is bounded by mediated calls alone is not bounded at
+all, because the damaging path in practice is not a call — it is two boxes
+quietly attaching to the same database. We state it as a requirement
+because our own standard lacked it and paid for the omission (§4.1, L3).
+
+Figure 1 shows where the five requirements bite, and Figure 2 the loop that
+keeps the frame from becoming a straitjacket.
+
+```
+      ┌───────────────────────── ONE BOX ─────────────────────────┐
+      │                                                           │
+      │   FRAME — byte-identical in every box, not the box's      │
+      │   to edit:  framework code · wire contracts · authoring   │  ◀── R1
+      │   rules · checkers · deployment machinery                 │   upgrade
+      │ · · · · · · · · · · · · · · · · · · · · · · · · · · · · · │   overwrites
+      │   PAYLOAD — this box's own, never touched by upgrades:    │   wholesale
+      │   services · data · environment · purpose documents       │
+      │                                                           │
+      └───────────────────────────────────────────────────────────┘
+            ▲                    ▲                        ▲
+            │ R3                 │ R1 (at AI speed)       │ R5
+            │                    │                        │
+      turn begins ──▶ AI proposes ──▶ AI edits ──▶ post-edit gate ──▶ done
+      governing doc          (intent)      (code)   contract check
+      loaded every turn                             fails the edit
+                                                                     
+      R4: calls leaving the box are mediated · R5: resources the box
+      claims (ports, databases) are proven its own at startup, or it
+      refuses to start
+```
+
+*Figure 1: anatomy of a box. The horizontal split is the pattern's only
+structural boundary; the arrows mark where each requirement takes effect.
+R3 acts before any code exists, R1's gate acts at edit time, R5 at startup —
+three different moments, which is why none of them substitutes for another.*
+
+```
+   box A ──friction the frame causes──▶  report
+                                          │  structured, provenance-labeled
+                                          ▼  (first-hand / second-hand / judgment)
+                                       triage ──── verdict recorded either way
+                                          │         median 2 days in our deployment (Table 2)
+                                          ▼
+                                       release
+                                          │
+              ┌───────────────┬───────────┴───────────┬───────────────┐
+              ▼               ▼                       ▼               ▼
+           box A            box B                   box C           box D…
+        workaround        gets the fix            gets the fix    gets the fix
+         deleted          it never asked for       …
+```
+
+*Figure 2: the upstream-first loop (R2). The asymmetry is the point: friction
+is felt by one box and repaid to all of them. One release in our window closed
+six reports originating from three different boxes (§4.1).*
+
 ### 2.3 What invariance buys
 
-The claimed benefits — each tested against measurements in §4:
+The claimed benefits. Four are measured in §4; the first is the pattern's
+central promise and, as we flag below and in §7, the one we can argue for
+but have not measured:
 
-- **Mutual intelligibility at any N.** Because the frame is identical
-  everywhere, every box stays legible to anyone — human or AI — who knows
-  the standard. This is the property golden paths aim at and, being
-  advisory, cannot guarantee (§6).
+- **Mutual intelligibility at any N** *(claimed, not measured)*. Because
+  the frame is identical everywhere, every box stays legible to anyone —
+  human or AI — who knows the standard. This is the property golden paths
+  aim at and, being advisory, cannot guarantee (§6). Our evidence for it is
+  indirect: upstream fixes land across boxes without per-box translation,
+  and one release routinely closes reports from several different boxes
+  (§4.1). A direct test — measuring what it costs a person or an AI to
+  become productive in a box they have never seen — is the experiment this
+  paper does not report, and the first we would run next.
 - **Compounding evolution.** R2 turns one box's friction into every box's
   improvement: the standard absorbs its instances' lessons release by
   release (§4.1), instead of each box absorbing them alone.
@@ -220,9 +294,10 @@ Each is measured or bounded in §4:
   artifact. R2 is the mitigation, not a cure: the same replication that
   spreads the error also makes it visible in every instance.
 - **Reduced local freedom.** Work blocked by the frame waits for upstream or
-  carries marked debt; a box cannot simply take its own path. This is the
-  point of the pattern — and still a real cost to the box that is blocked
-  today.
+  carries marked debt; a box cannot simply take its own path — the box that
+  needed a new framework switch had to upgrade its whole bundle first
+  rather than edit one launcher line (§4.2). This is the point of the
+  pattern — and still a real cost to the box that is blocked today.
 
 ### 2.5 Why now: the pattern's capability threshold
 
@@ -258,10 +333,12 @@ The box is therefore sized to the AI, in both directions. Inward, it is
 the largest scope one box's crew can genuinely own: a whole stack.
 Outward, it is the containment vessel that bounds the blast radius of any
 single AI failure: the frame is physically not editable (R1), reach beyond
-the box is mediated or absent (R4), and intent is governed before code
+the box is mediated or absent (R4), shared infrastructure must be proven
+one's own before it is touched (R5), and intent is governed before code
 (R3), so the worst case of a misbehaving AI is one box's payload, not the
-organization — a boundary that itself must be enforced rather than
-assumed, as the silent cross-box corruption of §4.1 shows (L3). The
+organization. That boundary must itself be enforced rather than assumed —
+R5 exists precisely because we assumed it once and two boxes quietly shared
+a database for it (§4.1, L3). The
 shipping container carries the same lesson [13]: standardized boxes made
 no economic sense while cargo was handled by hand; the container is cargo
 sized to machines — cranes, cells, chassis — and it repaid its constraints
@@ -304,6 +381,10 @@ documented in the repository.
 | R2 upstream-first evolution | dual feedback channels, human and machine (§3.4) |
 | R3 per-turn governance | root governing document + guardrail skill (§3.5) |
 | R4 mediated interaction | router-only calls within a box; bridge mesh across boxes — designed, not deployed (§3.6, §4.5) |
+| R5 proven resource claims | launcher proves Redis ownership and fail-fast port claiming, both fail closed (§3.6) |
+
+*Table 1: each pattern requirement and the SOLO mechanism that realizes it.
+Only R4 is partly unrealized.*
 
 ### 3.1 The box as artifact: scaffold and bundle
 
@@ -379,7 +460,7 @@ skill that triggers on service edits. These are distinct instruments: the
 skill governs *how code is written*; the root document governs *what should
 exist at all* — and, as §4.3 shows, the two are not substitutes.
 
-### 3.6 Mediation within and across boxes (R4)
+### 3.6 Mediation and resource claims (R4, R5)
 
 Within a box, services are forbidden to call each other directly — every
 call goes through the signing router, and the §3.3 gate enforces the rule
@@ -389,6 +470,13 @@ configuration changes routed through the framework's m-of-n approval chain;
 it is designed and adversarially reviewed but **not deployed** (§4.5). R4 is
 therefore realized today only in its intra-box half; cross-box questions are
 answered by humans.
+
+R5 is realized in the launcher, and only after the incident that forced it
+(§4.1): before binding, a box proves that the Redis instance on its
+configured port is its own rather than merely reachable, and refuses to
+start otherwise; front-end port claiming likewise fails closed rather than
+warning and continuing. Both checks are in the frame, so every box inherits
+them on upgrade — the requirement and its enforcement travel together.
 
 ## 4. Experience and Evidence
 
@@ -415,8 +503,31 @@ otherwise.
 Over the ten-week window the framework cut **21 tagged releases**
 (v1.1.0 → v1.2.2). The feedback corpus holds **31 structured reports**, of
 which **23 are triaged and archived** with recorded verdicts and 8 are
-pending. Releases are traceable to reports; three cases illustrate the
-loop's shape:
+pending. Because archiving a report is a file move recorded in version
+control, the loop's cadence is auditable rather than self-reported
+(Table 2).
+
+| Measure (June 14 – Aug 24, 2026) | Value |
+|---|---|
+| Tagged framework releases | 21 (v1.1.0 → v1.2.2) |
+| Structured reports filed | 31 |
+| Reports triaged and archived | 23 (8 pending) |
+| Median report → triage latency | **2 days** (n = 21 of 23; range 1–19) |
+| Archived reports cited by filename in release notes | 14 of 23 (lower bound; others credited in prose) |
+| Boxes that filed at least one report | 6 of 7 |
+| Reports from the most active single box | 15 of 28 attributable |
+
+*Table 2: the upstream loop, measured from repository history.*
+
+Two caveats keep these honest. The latency figure omits two archived reports
+that first appear in version control already inside `done/`, so their
+pre-archive life is unobservable; and triage arrives in batches rather than
+continuously, so the median describes the loop's typical turnaround, not a
+steady rhythm. The filename-citation count is likewise a floor: the
+`system.guide` case below shipped in v1.1.11 whose notes credit the
+originating box in prose without naming the file.
+
+Releases are traceable to reports; three cases illustrate the loop's shape:
 
 - **An agent-facing gap found by agents.** A derived project (wavely)
   reported that external AI agents could not bootstrap against a box without
@@ -433,9 +544,11 @@ loop's shape:
   on another box's port; the same release hardened front-end port claiming
   from warn-and-continue to fail-fast.
 - **Batch upcycling.** v1.1.16 closed out six derived-project reports in one
-  release; v1.1.17 closed five more from a single project (colony).
-  Upcycling is routine, not exceptional: it is the release train's main
-  cargo.
+  release — and those six came from **three different boxes**, so one
+  upgrade repaid friction that three separate crews had hit independently;
+  v1.1.17 closed five more from a single project (colony). Upcycling is
+  routine, not exceptional: it is the release train's main cargo, and it is
+  the mechanism behind the compounding-evolution claim of §2.3.
 
 Two observations. First, the reports' **evidence-provenance discipline**
 (R2) earned its keep: triage caught at least one case where a derived
@@ -634,11 +747,35 @@ their software is classic [18] and newly practical with LLMs. Our
 contribution to that line is narrow and empirical: the binding constraint we
 observed is provisioning, not operation (§4.4, L6).
 
+**Separating the pattern from its neighbours.** Each line above shares
+something with the container model, which invites the reasonable objection
+that the model is existing practice under a new metaphor. Table 3 states
+the differences on the axes that matter, and shows that no neighbour
+combines them: several enforce a standard, several grant local ownership,
+one runs an upstream protocol, and none governs AIs per-turn or federates
+units that each own a complete stack.
+
+| Approach | Unit | Standard enforced? | Unit owns a full stack | Documented upstream evolution | AI governed per-turn | Federated units |
+|---|---|---|---|---|---|---|
+| Golden paths [15,16] | team / service | No — advisory | No — platform-operated | Informal | No | No |
+| InnerSource [17] | project | No | Partly | **Yes** — its core practice | No | Partly |
+| Software product lines [26] | family member | Yes — variation points | Only within designed variation | Via platform team | No | No |
+| Clean core [25] | enterprise system | Yes — upgrade-safe extension points | Extensions only | Vendor-driven, opaque | No | No |
+| Knowledge Activation [11] | knowledge unit | No — schema only | No — centrally operated | Not documented | Partly (agent context) | No |
+| All-AI organizations [1–4] | agent role | n/a | No human owner | n/a | Yes (prompts) | No |
+| **Container model** | **box** | **Yes — overwrite-on-upgrade** | **Yes** | **Yes — triaged, provenance-labeled** | **Yes** | **By design (R4); intra-box only today (§4.5)** |
+
+*Table 3: the container model against adjacent approaches. The final cell is
+deliberately not a "yes": cross-box federation is specified and reviewed but
+undeployed, so we claim it as a requirement, not a result.*
+
 To our knowledge, the specific combination — the box as the organizational
 unit binding humans and AIs, standard-with-consequences via a read-only
-zone, upstream-first evolution fed partly by the AIs themselves, and
-per-turn AI governance — has not been described or evaluated in the
-literature.
+zone, upstream-first evolution fed partly by the AIs themselves, per-turn AI
+governance, and proven resource claims between co-located units — has not
+been described or evaluated in the literature. The individual mechanisms are
+mostly not new, and §3.2 names the ones we build on directly; the
+contribution is the combination and the measured account of running it.
 
 ## 7. Threats to Validity
 
@@ -658,6 +795,21 @@ requirements is the obvious next test.
 baseline organization running the same projects without the container model.
 The 5/5 result is suggestive, not statistical.
 
+**Skewed evidence base.** The feedback corpus is dominated by one box (15
+of 28 attributable reports, Table 2), and one of the seven filed none at
+all. The loop's measured cadence therefore describes the standard's
+relationship with its most active instance more than with its median one.
+
+**The central benefit is argued, not measured.** Mutual intelligibility
+(§2.3) is the pattern's main promise and the one claim §4 does not test; our
+support for it is indirect (cross-box fixes landing without translation).
+A box-onboarding cost experiment would settle it and we have not run one.
+
+**The capability threshold is not falsifiable here.** §2.5 argues the
+pattern only pays above a level of AI capability, but our whole observation
+window sits above that level; we have no below-threshold arm, so that
+argument rests on the historical analogy and on mechanism, not on data.
+
 **Confounded timeline.** The observation window coincides with rapid
 improvement in the underlying AI models; some outcomes attributed to the
 model may partly reflect better AIs.
@@ -671,10 +823,11 @@ the default failure mode") generalize from a small incident set.
 The container model treats the scaling of AI-assisted development as a
 standardization problem and borrows the shipping container's answer: make
 the standard physically consequential, evolve it only upstream, and let
-value come from invariance. The pattern is deliberately priced: it buys
-mutual intelligibility, compounding evolution, and no silent forks, and it
-pays in version lag, a triage bottleneck, provisioning burden, and amplified
-standard errors. Ten weeks and seven boxes into one implementation, the loop
+value come from invariance. The pattern is deliberately priced: it aims at
+mutual intelligibility — the promise we argue for but have not yet measured
+— and it demonstrably buys compounding evolution and the absence of silent
+forks, paying in version lag, a triage bottleneck, provisioning burden, and
+amplified standard errors. Ten weeks and seven boxes into one implementation, the loop
 runs: the standard absorbs its instances' lessons at a cadence of roughly
 two releases a week, divergence is visible instead of silent, and a
 non-programmer can drive a box on day one. The unproven half — federation
