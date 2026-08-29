@@ -32,14 +32,16 @@ const HARDCODED_DEFAULTS = {
     'text.parse':               'gemini-2.5-flash',
     'text.translate':           'gemini-2.5-flash',
     // 对话 / 意图 / 工作流
-    'agent.chat':               'gemini-1.5-flash',
-    'agent.purpose':            'gemini-1.5-flash',
-    'agent.focus':              'gemini-1.5-flash',
+    // ⚠️ gemini-1.5-flash 已被 Google 从 v1beta 下线（2026-08-29 awareness 实测 404，
+    // docs/feedback/done/agent-provider-swallows-errors-as-success.md），统一换 2.5-flash。
+    'agent.chat':               'gemini-2.5-flash',
+    'agent.purpose':            'gemini-2.5-flash',
+    'agent.focus':              'gemini-2.5-flash',
     'agent.decide':             'gemini-2.5-flash-lite',   // 决策契约：默认走便宜的 flash-lite
     // 业务增强（product / category / case）
-    'agent.product.inquiry':    'gemini-1.5-flash',
-    'agent.category.attr.suggest': 'gemini-1.5-flash',
-    'agent.case.generate':      'gemini-1.5-flash',
+    'agent.product.inquiry':    'gemini-2.5-flash',
+    'agent.category.attr.suggest': 'gemini-2.5-flash',
+    'agent.case.generate':      'gemini-2.5-flash',
 };
 
 let _cache = null;

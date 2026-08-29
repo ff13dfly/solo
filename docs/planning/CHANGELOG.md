@@ -11,7 +11,29 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
-（暂无）
+### Fixed — gemini provider 不再把错误吞成 `success: true`；已下线的默认模型全量更换
+
+> 来源：[`docs/feedback/done/agent-provider-swallows-errors-as-success.md`](../feedback/done/agent-provider-swallows-errors-as-success.md)
+> （awareness 实测 v1.2.8：key 未配 / 模型 404 / fetch failed 三种失败全部表现为
+> `success:true` + ⚠️ 英文 markdown，`withRetryableError` 的重试语义在 gemini 路径永不触发）。
+
+- `gemini.chat` 的 catch 改为 **rethrow**（与同文件其余文本方法、qwen/openai 一致）：
+  网络类错误由 logic 层 `withRetryableError` 如实抛 `RETRY_LATER(-32007, retryable:true)`，
+  quota/auth/其他错误按原文上抛（不再 `substring(0,100)` 截断）。
+  ⚠️ 行为变化（修 bug，非破坏）：此前失败时拿到 200 + ⚠️ 文案的调用方，现在拿到 JSON-RPC
+  错误；全仓（api + portal + tests）核实无任何代码依赖该文案。
+- **默认模型**：`gemini-1.5-flash` 已被 Google 从 v1beta 下线（实测 404），中央表
+  `logic/model_config.js` 六处（chat/purpose/focus/product.inquiry/category.attr.suggest/
+  case.generate）→ `gemini-2.5-flash`；gemini provider 兜底八处（含一处 `gemini-pro`）同换。
+  `agent.decide` 保持 `gemini-2.5-flash-lite`。Redis `SYSTEM:CONFIG:AI_MODELS` 有 override
+  的部署不受影响（优先级 params > Redis > hardcoded 不变）。
+- `decide` / `classifyImage` 的 `success:false` fail-soft **保持不动**——那是设计
+  （decide 刻意不包 withRetryableError，降级走 `escalate:true`）；`gemini.decide`
+  docstring 与实现矛盾的一句已改准。
+
+下游 action：不显式传 `model` 的 `agent.chat`/`purpose`/`focus` 等调用自动获得活模型，无需改动；
+**仅当**你的代码曾把「`agent.chat` 失败也返回 `success:true`」当正常路径（判 ⚠️ 文案或忽略错误），
+升级后要按 JSON-RPC 错误 / `-32007 RETRY_LATER` 处理失败。
 
 ---
 

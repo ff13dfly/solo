@@ -74,7 +74,7 @@ class GeminiProvider {
 
     async parseImage({ image, prompt, model }) {
         logger.info('[Gemini] Parsing Image...');
-        const targetModel = model || "gemini-1.5-flash";
+        const targetModel = model || "gemini-2.5-flash";
         try {
             // Use specified model or default to gemini-2.5-flash
             const genModel = this.genAI.getGenerativeModel({ model: targetModel });
@@ -140,7 +140,7 @@ class GeminiProvider {
 
     async transcribeAudio({ audio, mimeType, model }) {
         logger.info('[Gemini] Transcribing Audio...');
-        const targetModel = model || "gemini-1.5-flash";
+        const targetModel = model || "gemini-2.5-flash";
         try {
             const genModel = this.genAI.getGenerativeModel({ model: targetModel });
 
@@ -189,7 +189,7 @@ class GeminiProvider {
 
     async parseText({ text, schema, model }) {
         logger.info('[Gemini] Parsing Text...');
-        const targetModel = model || "gemini-1.5-flash";
+        const targetModel = model || "gemini-2.5-flash";
         try {
             const genModel = this.genAI.getGenerativeModel({ model: targetModel });
 
@@ -231,7 +231,9 @@ class GeminiProvider {
      * decide — structured decision via JSON-mode completion.
      * @why Backs agent.decide. Returns parsed JSON ({ decision, confidence, reason, fields? });
      *      the logic layer enforces the inverted gate + degradability. Returns
-     *      { success:false } on any non-network error so the caller can fail-soft.
+     *      { success:false } on ANY error (network included) so the caller can fail-soft —
+     *      deliberate: decide is NOT wrapped in withRetryableError (logic/index.js), its
+     *      degradation path is escalate:true, never a thrown error.
      */
     async decide({ instruction, context, choices, schema, model }) {
         logger.info('[Gemini] Decide...');
@@ -262,7 +264,7 @@ class GeminiProvider {
 
     async identifyPurpose({ text, image, capabilities, model, noWorkflow }) {
         logger.info(`[Gemini] Identifying Purpose (Multi-Step)${noWorkflow ? ' [noWorkflow]' : ''}...`);
-        const targetModel = model || "gemini-1.5-flash";
+        const targetModel = model || "gemini-2.5-flash";
         const lang = this.config.language || 'en';
 
         const CapabilityManager = require('../logic/CapabilityManager');
@@ -393,7 +395,7 @@ Rules:
 
     async chat({ text, messages, model }) {
         logger.info('[Gemini] Chatting...');
-        const targetModel = model || "gemini-1.5-flash";
+        const targetModel = model || "gemini-2.5-flash";
         const lang = this.config.language || 'en';
         const PromptBuilder = require('../logic/prompt');
 
@@ -462,32 +464,13 @@ Rules:
                 metadata: { provider: 'gemini', model: targetModel }
             };
         } catch (error) {
+            // Rethrow like every other text method here: the logic layer's
+            // withRetryableError classifies network failures into RETRY_LATER(-32007);
+            // swallowing errors as success:true text made that path unreachable and fed
+            // human-readable markdown to structured callers
+            // (docs/feedback/done/agent-provider-swallows-errors-as-success.md).
             logger.error('[Gemini] Chat Error:', error);
-
-            // Handle Quota/Rate Limits (429)
-            if (error.message && (error.message.includes('429') || error.message.includes('Quota') || error.message.includes('limit'))) {
-                return {
-                    success: true,
-                    text: "⚠️ **API Quota Exceeded**\n\nThe AI service is currently currently unavailable due to usage limits. Please check your [Google Cloud Console Quotas](https://console.cloud.google.com/iam-admin/quotas) or Billing settings.",
-                    metadata: { provider: 'gemini', error: 'quota_exceeded' }
-                };
-            }
-
-            // Handle Authentication Issues
-            if (error.message && (error.message.includes('API key') || error.message.includes('403'))) {
-                return {
-                    success: true,
-                    text: "⚠️ **Configuration Error**\n\nThe AI service failed to authenticate. Please check the `GEMINI_API_KEY` configuration on the server.",
-                    metadata: { provider: 'gemini', error: 'auth_failed' }
-                };
-            }
-
-            // Default Error
-            return {
-                success: true,
-                text: `⚠️ **AI Service Error**\n\nI encountered an issue processing your request: ${error.message.substring(0, 100)}...`,
-                metadata: { provider: 'gemini', error: 'unknown' }
-            };
+            throw error;
         }
     }
 
@@ -498,7 +481,7 @@ Rules:
             context.candidates = context.candidates.filter(cap => !cap.includes('[工作流名称:'));
         }
         logger.info(`[Gemini] Purpose Detection - Phase ${phase}${noWorkflow ? ' [noWorkflow]' : ''}`);
-        const targetModel = model || "gemini-1.5-flash";
+        const targetModel = model || "gemini-2.5-flash";
         const lang = this.config.language || 'en';
         const PromptBuilder = require('../logic/prompt');
 
@@ -563,7 +546,7 @@ Rules:
 
     async translateText({ text, targetLang, sourceLang, context, model }) {
         logger.info(`[Gemini] Translating to ${targetLang}...`);
-        const targetModel = model || "gemini-1.5-flash";
+        const targetModel = model || "gemini-2.5-flash";
 
         try {
             const genModel = this.genAI.getGenerativeModel({ model: targetModel });
@@ -811,7 +794,7 @@ Rules:
         logger.info('[Gemini] Suggesting category attributes for:', categoryPath.join(' > '));
         const PromptBuilder = require('../logic/prompt');
         const { system, user } = PromptBuilder.buildCategoryAttrSuggest(categoryPath);
-        const targetModel = model || 'gemini-pro';
+        const targetModel = model || 'gemini-2.5-flash';
         const { GoogleGenerativeAI } = require('@google/generative-ai');
         const genAI = new GoogleGenerativeAI(this.config.geminiApiKey);
         const genModel = genAI.getGenerativeModel({ model: targetModel });

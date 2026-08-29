@@ -101,6 +101,36 @@ agent 里报 `fetch failed`，而同机同模型直连原生端点 6.0s 成功�
    程序化调用的诉求正相反 —— 建议按调用来源区分：relay/bot 调用一律抛异常，
    只有面向人的会话路径才返回文案。同 provider 的 qwen/openai 是否有同样写法，未逐一核对。
 
-## 处理结论
+## 处理结论（solo 侧）
 
-（待 triage）
+**建议 1、3、4 采纳并落地（2026-08-30，v1.2.8 后 main，随下个 release 下发）**；
+建议 2 被 1 覆盖；建议 5 核实后按 bug 处理、不做分流。
+
+1. **chat catch 改 rethrow**（三条吞错分支整体删除）。核实确认 chat 是 gemini.js 全文件
+   **唯一**吞成 `success:true` 的方法——extractProductInfo / parseImage / transcribeAudio /
+   parseText / translate / psImage / generateImage / embedding 全部本来就 rethrow。
+   修后 `withRetryableError` 的 `RETRY_LATER(-32007)` 在 gemini 路径复活。
+2. 截断（建议 3）随吞错分支一并消失，错误按原文上抛。
+3. **默认模型（建议 4）**：报告说的「bundle 模型表」实为 `logic/model_config.js` 的
+   `HARDCODED_DEFAULTS`（resolve 优先级 params > Redis > hardcoded，中央表才是真源，
+   provider 里的 `model || 'gemini-1.5-flash'` 只是兜底）。中央表六个 capability 钉死
+   1.5-flash，全换 `gemini-2.5-flash`；provider 兜底七处 1.5-flash + 一处 `gemini-pro` 同换；
+   decide 保持 2.5-flash-lite。**「初始化自检」不做**：修完后死模型的暴露方式就是当场
+   404 如实上抛（不再伪装成功）——自检要提供的探测能力已由诚实报错承担，不值得加一次
+   启动期外呼。
+4. **建议 5 的核实结果**：qwen 本来就是正确写法（`_isNetwork` 才 rethrow、其余
+   `success:false`）；openai 全部 rethrow；⚠️ 文案在全仓（api + portal + tests）**无任何
+   消费者**——「聊天场景刻意设计」不成立，按 bug 处理，无需按调用来源分流。
+5. **decide / classifyImage 刻意不动**：它们的 `success:false` 是设计好的 fail-soft
+   （logic/index.js 明注 decide 不包 withRetryableError、降级走 `escalate:true` 而非抛错），
+   与 chat 的 `success:true` 假成功性质不同。`gemini.decide` docstring 里「non-network」
+   与实现矛盾的一句已改准。
+6. 「2.5-flash 经 agent 一次 fetch failed」线索：按报告自己的标注（单样本、未证实）不采取
+   动作；默认换 2.5-flash 与中央表既有选择一致（image/audio/text.parse/translate 早已运行
+   在 2.5-flash 上）。
+- **验证**：`node --check` 通过、autocheck static 绿（警告均为既有项）、agent CI 白名单
+  5 套 38 测试全绿（临时 redis-stack :6399，跑完即关）。
+- **awareness 侧动作**：升级后「显式指定模型防默认 404」的防御可去可留；`lastError`
+  整段落库那条**继续保留**——错误原文不再截断后，这条只会更有用。
+- 顺手记录：gemini.js 存在两个重名 `classifyImage`（前者为死代码、被后者遮蔽），本轮未动，
+  已记 BACKLOG §3「agent provider 能力面」。
