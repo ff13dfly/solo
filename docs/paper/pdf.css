@@ -1,0 +1,51 @@
+/* 论文 PDF 印刷样式（weasyprint 消费,build-pdf.sh 经 pandoc --css 注入）。
+   动机:weasyprint 默认样式把正文字号直接用于表格,Table 3(7 行 × 7 列)折行散架
+   且被劈到两页。这里表格走 booktabs 三线表 + 降字号 + 整表禁跨页。 */
+
+@page {
+  size: A4;
+  margin: 2.4cm 2.2cm;
+  @bottom-center { content: counter(page); font-size: 9pt; }
+}
+
+body {
+  max-width: none;   /* 压掉 pandoc 默认模板的 36em 限宽,页宽交给 @page */
+  margin: 0;
+  padding: 0;
+  font-family: "Times New Roman", "Liberation Serif", serif;
+  font-size: 11pt;
+  line-height: 1.45;
+  hyphens: auto;
+}
+
+header#title-block-header { text-align: center; margin-bottom: 1.8em; }
+h1.title { font-size: 17pt; line-height: 1.25; margin: 0 0 0.5em; }
+p.author, p.date { font-size: 11pt; margin: 0.15em 0; }
+
+h1 { font-size: 14pt; margin: 1.5em 0 0.5em; }
+h2 { font-size: 12pt; margin: 1.2em 0 0.4em; }
+h3 { font-size: 11pt; margin: 1.1em 0 0.3em; }
+h1, h2, h3 { page-break-after: avoid; break-after: avoid; }
+
+img { max-width: 100%; }
+
+/* 表格:三线表(booktabs),小字号紧行距,单元格顶对齐左对齐。
+   整表禁跨页——三张表在 8.5pt 下都不足一页,宁可整体推下页也不劈开重复表头。 */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8.5pt;
+  line-height: 1.3;
+  margin: 1em 0;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+th, td {
+  text-align: left;
+  vertical-align: top;
+  padding: 3pt 5pt;
+  border: none;
+}
+thead th { border-top: 1.1pt solid #000; border-bottom: 0.6pt solid #000; }
+tbody tr:last-child td { border-bottom: 1.1pt solid #000; }
+tr { page-break-inside: avoid; break-inside: avoid; }

@@ -24,6 +24,7 @@ cd "$DIR"
 # -f markdown-implicit_figures：关掉隐式图注，避免与文内斜体图注重复
 pandoc "$TMP/paper.md" -o "$OUT" \
   --pdf-engine=weasyprint -f markdown-implicit_figures \
+  --css "$DIR/pdf.css" \
   --metadata title="The Container Model: An Experience Report on Enforcing Standards Across Human–AI Software Units" \
   --metadata author="Zhongqiang Fu" \
   --metadata date="August 2026"
