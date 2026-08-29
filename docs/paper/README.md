@@ -1,9 +1,11 @@
 # docs/paper/ — 论文工作区
 
-> 2026-08-24 建。本目录三份文件：
+> 2026-08-24 建。本目录文件：
 >
-> - [`draft-human-ai-container.md`](./draft-human-ai-container.md) — 论文初稿 v0.1（英文，经验报告档；SOLO 穿插在模式叙述里）
-> - [`draft-pattern-first.md`](./draft-pattern-first.md) — **重构稿 v0.2**（2026-08-27 起，用户要求「先模式后实现」）：§2 纯模式（frame/payload 边界 + **五要求 R1–R5** + 利/弊两节账单 + **§2.5 能力门槛** + Figure 1/2，零实现词汇）→ §3 SOLO 作为其一实现（附要求→机制对照表）→ §4 证据（各小节标注回验 §2 哪条主张）。证据与引用编号与 v0.1 同源；§7 新增「单一实现」威胁。**二选一定稿后废弃另一份**
+> - [`draft-pattern-first.md`](./draft-pattern-first.md) — **定稿候选 v1.0**（2026-08-29 定夺：模式先行结构胜出）：§2 纯模式（frame/payload 边界 + **五要求 R1–R5** + 利/弊两节账单 + **§2.5 能力门槛** + Figure 1/2 SVG）→ §3 SOLO 作为其一实现（附要求→机制对照表）→ §4 证据（各小节标注回验 §2 哪条主张）。数据冻结窗口 2026-06-14 → 08-24（v1.1.0→v1.2.2），此后的发版刻意不计入。引用已按正文首现顺序重编为 [1]–[26] 并补齐作者/URL（⚠️ 与 v0.1 的旧编号**不再同源**）
+> - [`figures/`](./figures/) — Figure 1（箱子解剖）/ Figure 2（上收环）的 SVG 真身（2026-08-29 起替代文内 ASCII 图）；同名 PNG（2x）是给 PDF 构建用的（本机 pyexpat 损坏致 weasyprint 吃不下 SVG）
+> - [`build-pdf.sh`](./build-pdf.sh) → `container-model-preprint-v1.pdf` — 正式版 PDF 构建脚本与产物（标题块含署名，剥 draft 头注；23 页）
+> - [`archive/draft-human-ai-container.md`](./archive/draft-human-ai-container.md) — 初稿 v0.1（实现穿插结构，2026-08-29 落选归档，只留作历史对照，不再维护）
 > - [`publishing-channels.md`](./publishing-channels.md) — 发布渠道对比与推荐路径（中文）
 > - [`feedback/`](./feedback/) — 外部评审意见：`chatgtp.md` · `gemini.md`（2026-08-28 收到，已 triage，见状态清单）· `feedback-history.md`（早期 Gemini 事实核查）
 > - 本文 — 审阅指南：论文说了什么、每条主张的证据在哪、哪些必须由你亲自核实
@@ -18,8 +20,11 @@
 
 ## 二、🔴 必须由你核实/定夺的（我无法替你确认）
 
-1. **作者署名与身份**：现在是占位 "Fuu (independent)"。用真名还是笔名、要不要挂机构，投稿前定。
-2. **公开性红线**：论文点名了 7 个派生项目 codename（colony/finance/ladder/overview/runner/trend/wavely-erp）和「给无终端经验的市场同事铺栈」案例（§4.4）。**mso 是客户生产、finance 在别人服务器上**——这些描述是否可以公开、codename 要不要匿名化（Project A–G），你判断。
+1. ~~**作者署名与身份**~~ → ✅ 2026-08-29 定："Zhongqiang Fu (independent)"，不挂机构。
+2. ~~**公开性红线**~~ → ✅ 2026-08-29 定：codename 全部匿名化为 **Projects A–G**（映射按原字母序：
+   A=colony · B=finance · C=ladder · D=overview · E=runner · F=trend · G=wavely/erp，**此映射只留在
+   本 README，不进论文**）。⚠️ 已知残余：公开的 feedback 语料保留项目原名，论文 Data Availability
+   节已如实声明匿名化是 presentational 而非 cryptographic。
 3. **时间线**：我把可考窗口定为 **2026-06-14（v1.1.0 tag）→ 2026-08-24，约十周**；公开仓库首提交 2026-07-06。SOLO 实际开发起点更早（VERSION.md 拍板 2026-06-11，之前应该还有 v1.0 阶段）——**真实起点你补**，补上后 §4 Setting 和摘要里的时长措辞可以放宽。
 4. **§4.5 的「未证实清单」**：我写了 bridge mesh「designed and adversarially reviewed but not deployed」——依据是 VERSION.v2.md 草案与 org-container feedback 里提到的 §3.6 安全评审。**v2 现状以你为准**，如已有进展要改。
 5. **发布本身**：任何渠道（TechRxiv 也算）都是对外发布，且论文附带公开了 SOLO 的架构细节与运营拓扑的一部分。发不发、何时发，你拍板。
@@ -41,6 +46,9 @@
 | system.report 匿名通道、1000 条裁旧、去重计数 | `docs/feedback/README.md` 通道 1 | 已核 |
 
 ## 四、初稿的已知弱点（改稿方向）
+
+> ⚠️ 本节及 §五 历史条目里的 [n] 引用编号是 v0.1 旧编号；2026-08-29 定稿候选已按正文首现顺序
+> 重编为 [1]–[26]，对号请直接看 `draft-pattern-first.md` 文末 References。
 
 1. ~~引用 [17] 占位~~ → 已核对：K.-J. Stol and B. Fitzgerald, "Inner Source — Adopting Open Source Development Practices in Organizations: A Tutorial," *IEEE Software*, 32(4), pp. 60–67, 2015. (doi: **10.1109/MS.2014.77**——Gemini 反馈给的 2015.100 是错的，已对 ACM DL 核实)。
 2. **[15][16][20][24] 是业界来源**（博客/公开帖/工具站）——经验报告档可接受；[20]（Yegge 2011
@@ -98,8 +106,14 @@
       **压后**：双盲匿名化、原始文本摘录（与匿名化冲突，等定 venue）。
       正文 5976 → 7462 词（表/图占其中一部分，LaTeX 排版下不按 word 计篇幅）
 - [x] v0.2 §4.2 加段（2026-08-28，用户提出）：**版本偏差不破坏通讯 = 不变买回来的灵活性**——wire 契约在 frame 里、v1.x 加性演进，箱子自选升级时机而不失去被调用的能力（与 §6 ERP 升级瘫痪互文）；窗口内唯一例外 v1.1.17 user.register BREAKING 有 v1.1.12 起的 upgrade.sh 横幅机制托底（两个时间点已核：横幅先于例外存在）。注：无版本协商机制，兼容靠纪律，此点已如实措辞
-- [ ] **结构定夺：v0.1（实现穿插）vs v0.2（模式先行）二选一**，定稿后删另一份，用户审阅中
+- [x] **结构定夺（2026-08-29）：v0.2 模式先行胜出**，升为定稿候选 v1.0；v0.1 移入 `archive/`
+- [x] 定稿前收尾（2026-08-29）：13 services 事实纠错（services.json 实数 14 含 router）、[12] ATSA 作者纠错（Q. Zhang → Q. Gao，arXiv API 核实）、14 条 arXiv ID 全部验真、缺作者的 10 条引用补齐、业界引源补 URL、引用按首现顺序重编 [1]–[26]、ASCII 图 → `figures/*.svg`、加 Data Availability 节（repo 公开地址）、若干措辞修正（head risk→principal risk 等）
 - [ ] 你的事实核查（§二、§三 其余项）
+- [x] 署名 + 匿名化 + 正式版 PDF（2026-08-29）：署名 Zhongqiang Fu；codename → Projects A–G
+      （映射见 §二.2）；`build-pdf.sh` 产出 `container-model-preprint-v1.pdf`（23 页，图表渲染已目检）
 - [ ] 定 venue（CFP 现查 preprint 政策）
-- [ ] TechRxiv 占位（发布动作，等你明确说发才发）——🔴 2026-08-27：TechRxiv 平台迁移中**暂停收投稿**（用户截图实测，详见 `publishing-channels.md` TechRxiv 节），被动等待；备胎 OSF
+- [ ] 预印本发布（发布动作，等你明确说发才发）——🔴 渠道现实（2026-08-29 现查）：TechRxiv 停收
+      （2026-08-27 确认）、**OSF 通用服务器 2025-08-25 起也停收**（本轮核实，备胎作废）⇒ 唯一即时
+      可发 = **Zenodo**（已注册；不可检索，占 DOI 存档位），TechRxiv 恢复后补挂可检索版，详见
+      `publishing-channels.md` §四修订版
 - [ ] LaTeX 化 + 裁字数

@@ -1,11 +1,12 @@
 # The Container Model: An Experience Report on Enforcing Standards Across Human–AI Software Units
 
-> **Status: DRAFT v0.2 (2026-08-27), not submitted anywhere.**
-> 与 `draft-human-ai-container.md`（v0.1）是同一论文的**结构重构稿**：§2 改为纯模式
-> （边界 + 四要求 + 利弊账单，零实现细节），SOLO 降为 §3 的「其中一个实现」并给出
-> 要求→机制对照表。证据语料与引用编号与 v0.1 完全同源。二选一定稿后废弃另一份。
-> Author placeholder: Fuu (independent). Venue target: experience-report track
-> (CHASE / CAIN / ICSE-SEIP / FORGE). 中文审阅指南见同目录 `README.md`。
+> **Status: v1.0 candidate (2026-08-29) — final text, not yet peer-reviewed,
+> not yet deposited.** Pattern-first restructuring of the earlier v0.1 draft
+> (now in `archive/`). Data freeze: June 14 – August 24, 2026
+> (v1.1.0 → v1.2.2); later releases are deliberately out of scope.
+> Author: Zhongqiang Fu (independent). Venue target: experience-report track
+> (CHASE / CAIN / ICSE-SEIP / FORGE); preprint deposit per
+> `publishing-channels.md`.
 
 ## Abstract
 
@@ -27,8 +28,8 @@ price its costs openly: version lag, a triage bottleneck, provisioning
 burden, and amplified standard errors. We then
 report ten weeks with one implementation — SOLO, an open-source AI-native
 microservice framework — across seven derived production systems: 21 tagged
-releases; 31 feedback reports, 23 triaged at a median of two days and
-upcycled into releases; a natural experiment in which all five observed
+releases; 31 feedback reports, 23 triaged at a median of two days, accepted
+proposals upcycled into releases; a natural experiment in which all five observed
 projects independently re-invented the same missing artifact; and a provisioning case study for a non-technical owner. We distill six lessons and argue that enforced
 invariance — not better prompting — is the missing primitive for scaling
 AI-assisted development beyond one person.
@@ -55,9 +56,9 @@ stored, how services talk to each other, how secrets are handled, what a
 permission is. Left alone, N locally optimizing AIs produce N mutually alien
 architectures. Convention documents do not prevent this — an AI (or a person)
 can read a style guide and still diverge, because *diverging has no
-consequences*. We argue this is the head risk of scaling AI-assisted
+consequences*. We argue this is the principal risk of scaling AI-assisted
 development, and that the known industrial answer to it — platform
-engineering's "golden paths" [15,16] — is necessary but not sufficient,
+engineering's "golden paths" [1,2] — is necessary but not sufficient,
 because golden paths are advisory and are designed for engineers inside one
 platform team's jurisdiction, not for federated units that each own their
 whole stack.
@@ -94,7 +95,7 @@ to validity that entails (§7).
 
 ## 2. The Container Model
 
-The pattern is named after the ISO intermodal container [13] — not after
+The pattern is named after the ISO intermodal container [3] — not after
 OS-level containerization, with which it shares nothing but the word. The
 shipping container succeeded for one reason: its specification did not bend
 to its users. Sixty years of invariance is what made every port, crane, ship
@@ -162,7 +163,7 @@ citation vs. judgment), observed behavior, root cause, proposals ranked by
 value — triaged on the record, whether or not the proposal is accepted.
 Accepted changes ship in the next release *to every box*; the reporting box
 then deletes its workaround. This is upstream-first open-source
-discipline [17] transplanted to an organization's internal human–AI
+discipline [4] transplanted to an organization's internal human–AI
 infrastructure — with one addition worth naming: part of the feedback
 should come from the AIs themselves, at the moment a task hits a wall.
 
@@ -197,49 +198,14 @@ because our own standard lacked it and paid for the omission (§4.1, L3).
 Figure 1 shows where the five requirements bite, and Figure 2 the loop that
 keeps the frame from becoming a straitjacket.
 
-```
-      ┌───────────────────────── ONE BOX ─────────────────────────┐
-      │                                                           │
-      │   FRAME — byte-identical in every box, not the box's      │
-      │   to edit:  framework code · wire contracts · authoring   │  ◀── R1
-      │   rules · checkers · deployment machinery                 │   upgrade
-      │ · · · · · · · · · · · · · · · · · · · · · · · · · · · · · │   overwrites
-      │   PAYLOAD — this box's own, never touched by upgrades:    │   wholesale
-      │   services · data · environment · purpose documents       │
-      │                                                           │
-      └───────────────────────────────────────────────────────────┘
-            ▲                    ▲                        ▲
-            │ R3                 │ R1 (at AI speed)       │ R5
-            │                    │                        │
-      turn begins ──▶ AI proposes ──▶ AI edits ──▶ post-edit gate ──▶ done
-      governing doc          (intent)      (code)   contract check
-      loaded every turn                             fails the edit
-                                                                     
-      R4: calls leaving the box are mediated · R5: resources the box
-      claims (ports, databases) are proven its own at startup, or it
-      refuses to start
-```
+![Figure 1: anatomy of a box](figures/fig1-box-anatomy.svg)
 
 *Figure 1: anatomy of a box. The horizontal split is the pattern's only
 structural boundary; the arrows mark where each requirement takes effect.
 R3 acts before any code exists, R1's gate acts at edit time, R5 at startup —
 three different moments, which is why none of them substitutes for another.*
 
-```
-   box A ──friction the frame causes──▶  report
-                                          │  structured, provenance-labeled
-                                          ▼  (first-hand / second-hand / judgment)
-                                       triage ──── verdict recorded either way
-                                          │         median 2 days in our deployment (Table 2)
-                                          ▼
-                                       release
-                                          │
-              ┌───────────────┬───────────┴───────────┬───────────────┐
-              ▼               ▼                       ▼               ▼
-           box A            box B                   box C           box D…
-        workaround        gets the fix            gets the fix    gets the fix
-         deleted          it never asked for       …
-```
+![Figure 2: the upstream-first loop](figures/fig2-upstream-loop.svg)
 
 *Figure 2: the upstream-first loop (R2). The asymmetry is the point: friction
 is felt by one box and repaid to all of them. One release in our window closed
@@ -339,7 +305,7 @@ one's own before it is touched (R5), and intent is governed before code
 organization. That boundary must itself be enforced rather than assumed —
 R5 exists precisely because we assumed it once and two boxes quietly shared
 a database for it (§4.1, L3). The
-shipping container carries the same lesson [13]: standardized boxes made
+shipping container carries the same lesson [3]: standardized boxes made
 no economic sense while cargo was handled by hand; the container is cargo
 sized to machines — cranes, cells, chassis — and it repaid its constraints
 only once mechanized handling existed. The box is software sized to AI
@@ -367,7 +333,7 @@ distinctions.
 ## 3. SOLO: One Implementation
 
 SOLO is an open-source, AI-native microservice framework (Node.js / Express
-/ Redis): 14 services behind a single Ed25519-signing router with
+/ Redis): 13 services behind a single Ed25519-signing router with
 method-level permissions, an entity factory with audit trails and
 write-ahead logs, a declarative fulfillment engine, and an orchestrator with
 human approval gates and m-of-n signatures. This section describes only the
@@ -398,11 +364,11 @@ every box. Everything created inside the box — private services under
 `api/apps/`, environment, seeds, the operator UI — is `[Solo]`-free and
 never touched by upgrades: this is the payload. The stack is multi-actor by
 construction, realizing §2.1's n-human, n-AI unit: a user service manages
-accounts, sessions and permits for any number of humans, and the gateway
-admits any number of AI actors — interactive coding sessions, scheduled
-collection agents, event-subscribed sentinels, and external agents that
-bootstrap through the router's self-describing guide or its MCP adapter
-(§3.4).
+accounts, sessions and permits for any number of humans, and any number of
+AI actors can work the box — interactive coding sessions and scheduled
+collection agents operating on the stack directly, event-subscribed
+sentinels reacting to its events, and external agents that bootstrap
+through the router's self-describing guide or its MCP adapter (§3.4).
 
 ### 3.2 Upgrade semantics and divergence detection (R1)
 
@@ -417,10 +383,10 @@ merging or carried as visible, enumerated debt.
 
 The mechanics have engineering antecedents we build on deliberately: package
 managers already give dependency code overwrite-on-upgrade semantics,
-template updaters such as cruft and copier [24] propagate scaffold changes
+template updaters such as cruft and copier [5] propagate scaffold changes
 into derived projects with drift detection, and enterprise "clean core"
 doctrine draws the same modified-core-versus-extension line for ERP
-upgrades [25] (§6). SOLO extends the overwritten
+upgrades [6] (§6). SOLO extends the overwritten
 zone beyond code — to contract documentation, deployment scripts, and the AI
 guardrail skills, all in-tree — and reframes the semantics from a
 convenience (staying current with a template) to a governance boundary (the
@@ -481,20 +447,21 @@ them on upgrade — the requirement and its enforcement travel together.
 ## 4. Experience and Evidence
 
 **Setting.** One maintainer develops the framework; seven long-running
-derived systems (project codenames: colony, finance, ladder, overview,
-runner, trend, wavely/erp) are built and operated on scaffolded boxes — plus
+derived systems (anonymized here as Projects A–G) are built and operated on
+scaffolded boxes — plus
 an eighth box provisioned as a one-off trial for a non-technical role (the
 §4.4 case study) — spanning organizational dashboards, financial tracking,
 trend collection, job orchestration, and an ERP. Box populations vary and
 overlap rather than forming one-to-one pairs: most boxes share a single
 human operator, who owns several boxes at once; individual boxes are worked
 by multiple AI actors (interactive sessions, scheduled collectors, external
-agents arriving through the self-describing gateway, §3.4); boxes with
+agents arriving through the router's self-describing guide, §3.4); boxes with
 automated roles run most days with no human in the loop, their humans
 appearing only as owner and occasional maintainer; and the §4.4 box involved
 two humans in different roles, a provisioner and an operator. The deployment
 topology spans a home server, two VPSs, and developer machines. The
-framework's public repository opened in July 2026; the observation window
+framework's public repository (github.com/ff13dfly/solo) opened in July
+2026; the observation window
 for the statistics below is June 14 – August 24, 2026 unless stated
 otherwise.
 
@@ -515,7 +482,7 @@ control, the loop's cadence is auditable rather than self-reported
 | Median report → triage latency | **2 days** (n = 21 of 23; range 1–19) |
 | Archived reports cited by filename in release notes | 14 of 23 (lower bound; others credited in prose) |
 | Boxes that filed at least one report | 6 of 7 |
-| Reports from the most active single box | 15 of 28 attributable |
+| Reports from the most active single box | 15 of 28 attributable (3 reports name no box) |
 
 *Table 2: the upstream loop, measured from repository history.*
 
@@ -529,14 +496,14 @@ originating box in prose without naming the file.
 
 Releases are traceable to reports; three cases illustrate the loop's shape:
 
-- **An agent-facing gap found by agents.** A derived project (wavely)
+- **An agent-facing gap found by agents.** A derived project (Project G)
   reported that external AI agents could not bootstrap against a box without
   human hand-holding. Triage produced the framework's self-describing
   `system.guide` mechanism — anonymous first-call returns the authentication
   flow, envelope format and error codes — shipped in v1.1.11. The report
   that motivated it is archived verbatim.
 - **A silent-failure class found by co-located boxes.** Two boxes sharing a
-  machine (overview, trend) discovered that a Redis port collision fails
+  machine (Projects D and F) discovered that a Redis port collision fails
   *silently*: the second box attaches to the first box's database and
   corrupts it. The report traced the root cause and the fix class — startup
   checks must prove ownership, not just reachability, and must fail closed.
@@ -546,7 +513,7 @@ Releases are traceable to reports; three cases illustrate the loop's shape:
 - **Batch upcycling.** v1.1.16 closed out six derived-project reports in one
   release — and those six came from **three different boxes**, so one
   upgrade repaid friction that three separate crews had hit independently;
-  v1.1.17 closed five more from a single project (colony). Upcycling is
+  v1.1.17 closed five more from a single project (Project A). Upcycling is
   routine, not exceptional: it is the release train's main cargo, and it is
   the mechanism behind the compounding-evolution claim of §2.3.
 
@@ -609,8 +576,8 @@ colleague could *operate* the box (converse with an AI assistant; the
 per-turn governing document did the day-to-day governing), but could not
 *provision* it: installing the runtime dependencies, allocating ports,
 generating keys and validating Redis ownership all required judgment the
-colleague could not supply. The working solution was to have an experienced
-machine generate the complete box and deliver it. This works but does not
+colleague could not supply. The working solution was to generate the
+complete box on an expert's machine and deliver it ready to run. This works but does not
 scale (every new person costs an expert a session), which converts
 "deployment slimming" from an optimization into a feasibility precondition
 for the model at organization scale — a prioritization insight we fed back
@@ -624,7 +591,7 @@ frame.
 Honesty requires listing the unproven half. R4's cross-box half — the
 bridge mesh with narrow permits — is designed and adversarially reviewed but
 not deployed; all cross-box questions today are answered by humans. (As of
-this writing, a first same-operator testbed — a loopback bridge between two
+the final revision of this paper, late August 2026, a first same-operator testbed — a loopback bridge between two
 co-located boxes — and a three-channel asynchronous interaction protocol for
 it, downlink archival-acknowledgment plus periodic pull plus doorbell, have
 entered specification; deployment has not begun.) Governance of the
@@ -657,7 +624,7 @@ as a bug class.
 **L4 — Label evidence provenance in feedback.** Requiring reports to mark
 each claim first-hand / second-hand / judgment made bad upstreaming cheap to
 catch (§4.1) and kept the standard's evolution anchored to measurements
-rather than to telephone.
+rather than hearsay.
 
 **L5 — Version lag is the honest price of no-fork.** Enforced invariance
 converts what would be N invisible forks into N visible lags plus an
@@ -672,23 +639,23 @@ prompting problem (§4.4).
 
 ## 6. Related Work
 
-**All-AI software organizations.** MetaGPT [1], ChatDev [2], AgentMesh [3]
-and CodePori [4] assign organizational roles to LLM agents and automate the
+**All-AI software organizations.** MetaGPT [7], ChatDev [8], AgentMesh [9]
+and CodePori [10] assign organizational roles to LLM agents and automate the
 SDLC end to end. The container model inverts the premise: humans are not
 simulated but retained as each node's accountable owners, and the replicated
 artifact is the infrastructure standard, not the org chart.
 
 **Human–AI teaming.** The HCI and organizational literature studies
-task-level collaboration: trust [6], situation awareness [7], team design
-and reviews [5,8]. It treats the infrastructure the humans and AIs work
+task-level collaboration: trust [11], situation awareness [12], team design
+and reviews [13,14]. It treats the infrastructure the humans and AIs work
 *inside* as given; the container model is precisely about that
 infrastructure.
 
 **Platform engineering and golden paths.** Industry practice equips
-engineers — and recently agents [15,16] — with paved roads inside one
+engineers — and recently agents [1,2] — with paved roads inside one
 organization's platform. Recent academic treatments frame skills and
-policies as agent-consumable institutional knowledge [10,11]. The closest of
-these, Knowledge Activation [11], converts institutional knowledge into an
+policies as agent-consumable institutional knowledge [15,16]. The closest of
+these, Knowledge Activation [16], converts institutional knowledge into an
 agent-traversable graph of atomic units and reports developer-experience
 gains from a single-organization deployment; it standardizes the *knowledge
 schema* consumed by agents, but the stack remains centrally operated — there
@@ -707,8 +674,8 @@ mature answer is doctrine the container model would recognize. SAP's
 "clean core" mandates that extensions live outside an unmodified core,
 attached only through released extension points, precisely so that
 extensions do not break upgrades and upgrades do not break
-extensions [25]; software product lines engineer the same discipline
-academically, as a shared platform with designed variation points [26].
+extensions [6]; software product lines engineer the same discipline
+academically, as a shared platform with designed variation points [17].
 The container model shares the invariant-core/owned-extension split
 (§2.1) but differs on three axes. *Granularity*: the standardized
 artifact is a complete per-role stack inside one small organization, not
@@ -729,7 +696,7 @@ there: the frame is born read-only.
 **Organizational antecedents.** Enforced standards across autonomous units
 are not new to organizations. Amazon's 2002 service-interface mandate — all
 teams expose functionality only through service interfaces, on pain of
-dismissal, as later documented by Yegge [20] — is enforced invariance for
+dismissal, as later documented by Yegge [18] — is enforced invariance for
 team boundaries; Haier's *rendanheyi* model decomposes the firm into
 thousands of self-managing microenterprises on a shared platform [19]. The
 container model can be read as the human–AI-era descendant of both, with two
@@ -741,23 +708,23 @@ and upgrade semantics of the unit's own stack.
 **Agent context files.** A recent empirical line studies the governing
 documents themselves: large-scale characterizations of AGENTS.md/CLAUDE.md
 files find them to be complex, config-like artifacts dominated by build and
-architecture content [21,22], and controlled evaluations of their effect on
-task success report mixed results [23]. That literature measures the files
+architecture content [20,21], and controlled evaluations of their effect on
+task success report mixed results [22]. That literature measures the files
 as they are used in the wild — largely as *technical* context. Our §4.3
 observation is complementary and different in kind: when boxes lacked a root
 governing document, every box independently created one, and what they put
 in it was not build context but *organizational* governance (purpose, scope
 discipline, data policy) — content the task-success lens does not measure.
 
-**Runtime agent governance.** Governance-as-a-Service [9], Institutional
-AI [12], and sovereign-agent infrastructure [14] govern agent *behavior* at
+**Runtime agent governance.** Governance-as-a-Service [23], Institutional
+AI [24], and sovereign-agent infrastructure [25] govern agent *behavior* at
 runtime with monitors, scores, and sanctions. The container model governs
 the *substrate* statically and cheaply — filesystem semantics and upgrade
 overwrites — and reserves runtime governance (approval gates, signatures)
 for the actions that need it.
 
 **End-user software engineering.** The vision of non-programmers owning
-their software is classic [18] and newly practical with LLMs. Our
+their software is classic [26] and newly practical with LLMs. Our
 contribution to that line is narrow and empirical: the binding constraint we
 observed is provisioning, not operation (§4.4, L6).
 
@@ -771,12 +738,12 @@ units that each own a complete stack.
 
 | Approach | Unit | Standard enforced? | Unit owns a full stack | Documented upstream evolution | AI governed per-turn | Federated units |
 |---|---|---|---|---|---|---|
-| Golden paths [15,16] | team / service | No — advisory | No — platform-operated | Informal | No | No |
-| InnerSource [17] | project | No | Partly | **Yes** — its core practice | No | Partly |
-| Software product lines [26] | family member | Yes — variation points | Only within designed variation | Via platform team | No | No |
-| Clean core [25] | enterprise system | Yes — upgrade-safe extension points | Extensions only | Vendor-driven, opaque | No | No |
-| Knowledge Activation [11] | knowledge unit | No — schema only | No — centrally operated | Not documented | Partly (agent context) | No |
-| All-AI organizations [1–4] | agent role | n/a | No human owner | n/a | Yes (prompts) | No |
+| Golden paths [1,2] | team / service | No — advisory | No — platform-operated | Informal | No | No |
+| InnerSource [4] | project | No | Partly | **Yes** — its core practice | No | Partly |
+| Software product lines [17] | family member | Yes — variation points | Only within designed variation | Via platform team | No | No |
+| Clean core [6] | enterprise system | Yes — upgrade-safe extension points | Extensions only | Vendor-driven, opaque | No | No |
+| Knowledge Activation [16] | knowledge unit | No — schema only | No — centrally operated | Not documented | Partly (agent context) | No |
+| All-AI organizations [7–10] | agent role | n/a | No human owner | n/a | Yes (prompts) | No |
 | **Container model** | **box** | **Yes — overwrite-on-upgrade** | **Yes** | **Yes — triaged, provenance-labeled** | **Yes** | **By design (R4); intra-box only today (§4.5)** |
 
 *Table 3: the container model against adjacent approaches. The final cell is
@@ -861,89 +828,114 @@ author reviewed and verified every claim against the primary artifacts and
 takes full responsibility for the content. This disclosure follows the ACM
 and IEEE policies on the use of generative AI in publications.
 
+## Data Availability
+
+The framework, its release history (git tags v1.1.0 – v1.2.2), the complete
+feedback corpus (`docs/feedback/`, including archived reports with their
+recorded triage verdicts), and the changelogs cited in §4 are public at
+https://github.com/ff13dfly/solo. Every quantitative claim in Table 2 is
+recomputable from that repository's version-control history. The derived
+projects' payloads are private; the paper refers to them by anonymized
+label (Projects A–G). The archived feedback reports in the public corpus
+retain the projects' working names, so the anonymization is presentational
+rather than cryptographic.
+
 ## References
 
-[1] S. Hong et al. MetaGPT: Meta Programming for a Multi-Agent
-Collaborative Framework. ICLR 2024. arXiv:2308.00352.
+[1] Platform Engineering for the Agentic AI Era. Microsoft All Things
+Azure blog, 2026. (industry reference)
+https://devblogs.microsoft.com/all-things-azure/platform-engineering-for-the-agentic-ai-era/
+(accessed August 2026).
 
-[2] C. Qian et al. ChatDev: Communicative Agents for Software Development.
-ACL 2024. arXiv:2307.07924.
+[2] AI Agents Need Platform Engineering, Too. platformengineering.com,
+2026. (industry reference)
+https://platformengineering.com/features/ai-agents-need-platform-engineering-too/
+(accessed August 2026).
 
-[3] AgentMesh: A Cooperative Multi-Agent Generative AI Framework for
-Software Development Automation. arXiv:2507.19902.
-
-[4] Z. Rasheed et al. CodePori: Large-Scale System for Autonomous Software
-Development Using Multi-Agent Technology. arXiv:2402.01411.
-
-[5] T. O'Neill, N. McNeese, A. Barron, B. Schelble. Human–Autonomy
-Teaming: A Review and Analysis of the Empirical Literature. Human Factors,
-2022.
-
-[6] Collaborative Human-AI Trust (CHAI-T): A Process Framework for Active
-Management of Trust in Human-AI Collaboration. Computers in Human Behavior:
-Artificial Humans, 2025.
-
-[7] Q. Zhang et al. Agent Teaming Situation Awareness (ATSA): A Situation
-Awareness Framework for Human-AI Teaming. arXiv:2308.16785.
-
-[8] B. Lou et al. Unraveling Human–AI Teaming: A Review and Outlook.
-arXiv:2504.05755.
-
-[9] Governance-as-a-Service: A Multi-Agent Framework for AI System
-Compliance and Policy Enforcement. arXiv:2508.18765.
-
-[10] The AI-Native Large-Scale Agile Software Development Manifesto.
-arXiv:2605.07717.
-
-[11] Knowledge Activation: AI Skills as the Institutional Knowledge
-Primitive for Agentic Software Development. arXiv:2603.14805.
-
-[12] Institutional AI: A Governance Framework for Distributional AGI
-Safety. arXiv:2601.10599.
-
-[13] M. Levinson. The Box: How the Shipping Container Made the World
+[3] M. Levinson. The Box: How the Shipping Container Made the World
 Smaller and the World Economy Bigger. Princeton University Press, 2006.
 
-[14] Sovereign Agents: Towards Infrastructural Sovereignty and Diffused
-Accountability in Decentralized AI. arXiv:2602.14951.
-
-[15] Platform Engineering for the Agentic AI Era. Microsoft All Things
-Azure blog, 2026. (industry reference)
-
-[16] AI Agents Need Platform Engineering, Too. platformengineering.com,
-2026. (industry reference)
-
-[17] K.-J. Stol and B. Fitzgerald. Inner Source — Adopting Open Source
+[4] K.-J. Stol and B. Fitzgerald. Inner Source — Adopting Open Source
 Development Practices in Organizations: A Tutorial. IEEE Software, 32(4),
 pp. 60–67, 2015. doi: 10.1109/MS.2014.77.
 
-[18] A. J. Ko et al. The State of the Art in End-User Software
-Engineering. ACM Computing Surveys, 43(3), Article 21, pp. 1–44, 2011.
+[5] cruft and copier: project-template update tools with drift detection.
+(industry reference) https://cruft.github.io/cruft/ and
+https://copier.readthedocs.io/ (accessed August 2026).
+
+[6] SAP. "Clean Core" extensibility guidance for SAP S/4HANA Cloud —
+extensions must not break upgrades and upgrades must not break
+extensions; extend via released extension points on-stack or side-by-side
+on SAP BTP. SAP News Center / SAP Community, 2023–2025. (industry
+reference) https://news.sap.com/2025/08/extend-sap-s4hana-cloud-right-way-clean-clear/
+(accessed August 2026).
+
+[7] S. Hong et al. MetaGPT: Meta Programming for a Multi-Agent
+Collaborative Framework. ICLR 2024. arXiv:2308.00352.
+
+[8] C. Qian et al. ChatDev: Communicative Agents for Software Development.
+ACL 2024. arXiv:2307.07924.
+
+[9] S. Khanzadeh. AgentMesh: A Cooperative Multi-Agent Generative AI
+Framework for Software Development Automation. arXiv:2507.19902.
+
+[10] Z. Rasheed et al. CodePori: Large-Scale System for Autonomous
+Software Development Using Multi-Agent Technology. arXiv:2402.01411.
+
+[11] M. J. McGrath et al. Collaborative Human-AI Trust (CHAI-T): A
+Process Framework for Active Management of Trust in Human-AI
+Collaboration. Computers in Human Behavior: Artificial Humans, 2025.
+
+[12] Q. Gao, W. Xu, M. Shen, and Z. Gao. Agent Teaming Situation
+Awareness (ATSA): A Situation Awareness Framework for Human-AI Teaming.
+arXiv:2308.16785.
+
+[13] T. O'Neill, N. McNeese, A. Barron, B. Schelble. Human–Autonomy
+Teaming: A Review and Analysis of the Empirical Literature. Human Factors,
+2022.
+
+[14] B. Lou, T. Lu, T. S. Raghu, and Y. Zhang. Unraveling Human–AI
+Teaming: A Review and Outlook. arXiv:2504.05755.
+
+[15] R. Britto, F. Palmgren, N. Saini, and M. Ohlin. The AI-Native
+Large-Scale Agile Software Development Manifesto. arXiv:2605.07717.
+
+[16] G. Bakal. Knowledge Activation: AI Skills as the Institutional
+Knowledge Primitive for Agentic Software Development. arXiv:2603.14805.
+
+[17] P. Clements and L. Northrop. Software Product Lines: Practices and
+Patterns. Addison-Wesley, 2001.
+
+[18] S. Yegge. Stevey's Google Platforms Rant. Public post, 2011.
+(documents Amazon's 2002 service-interface mandate; the original memo is
+not publicly available)
 
 [19] G. Hamel and M. Zanini. The End of Bureaucracy. Harvard Business
 Review, 96(6), Nov–Dec 2018. (Haier's rendanheyi microenterprise model)
 
-[20] S. Yegge. Stevey's Google Platforms Rant. Public post, 2011.
-(documents Amazon's 2002 service-interface mandate; the original memo is
-not publicly available)
+[20] W. Chatlatanagulchai, H. Li, Y. Kashiwa, B. Reid, et al. Agent
+READMEs: An Empirical Study of Context Files for Agentic Coding.
+arXiv:2511.12884.
 
-[21] Agent READMEs: An Empirical Study of Context Files for Agentic
-Coding. arXiv:2511.12884.
+[21] W. Chatlatanagulchai, K. Thonglek, B. Reid, Y. Kashiwa, et al. On
+the Use of Agentic Coding Manifests: An Empirical Study of Claude Code.
+arXiv:2509.14744.
 
-[22] On the Use of Agentic Coding Manifests: An Empirical Study of Claude
-Code. arXiv:2509.14744.
-
-[23] Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for
+[22] T. Gloaguen, N. Mündler, M. Müller, V. Raychev, et al.
+Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for
 Coding Agents? arXiv:2602.11988.
 
-[24] cruft (cruft.github.io) and copier: project-template update tools
-with drift detection. (industry reference)
+[23] S. Gaurav, J. Heikkonen, and J. Chaudhary. Governance-as-a-Service:
+A Multi-Agent Framework for AI System Compliance and Policy Enforcement.
+arXiv:2508.18765.
 
-[25] SAP. "Clean Core" extensibility guidance for SAP S/4HANA Cloud —
-extensions must not break upgrades and upgrades must not break
-extensions; extend via released extension points on-stack or side-by-side
-on SAP BTP. SAP News Center / SAP Community, 2023–2025. (industry
-reference)
+[24] F. Pierucci, M. Galisai, M. Syrnikov Bracale, M. Prandi, et al.
+Institutional AI: A Governance Framework for Distributional AGI Safety.
+arXiv:2601.10599.
 
-[26] P. Clements and L. Northrop. Software Product Lines: Practices and
-Patterns. Addison-Wesley, 2001.
+[25] B. A. Hu and H. Rong. Sovereign Agents: Towards Infrastructural
+Sovereignty and Diffused Accountability in Decentralized AI.
+arXiv:2602.14951.
+
+[26] A. J. Ko et al. The State of the Art in End-User Software
+Engineering. ACM Computing Surveys, 43(3), Article 21, pp. 1–44, 2011.

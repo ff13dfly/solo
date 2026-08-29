@@ -5,6 +5,11 @@
 > 结论先行：**首选 TechRxiv 占位 + 投 CHASE/CAIN 类会议；arXiv 等录用后再挂。**
 > 🔴 2026-08-27 状态：TechRxiv 因平台迁移**暂停收新投稿**（见 §一 TechRxiv 节），占位动作被动等待；
 > 若定稿后仍未恢复，备胎是 OSF（见 §一）。
+> 🔴 2026-08-29 状态：用户已注册 **Zenodo** 账号；同日现查发现 **OSF 备胎也作废了**——
+> 通用服务器 2025-08-25 起停收新投稿（见 §一 OSF 节，已核实），社区分站无 CS/SE 对口。
+> ⇒ **当前唯一即时可发的渠道 = Zenodo**（Preprints.org 可投但观感减分，不推）。
+> 修正后的路径见 §四：Zenodo 挂 v1 占 DOI 存档 → TechRxiv 恢复后补挂可检索版 →
+> 投会议 → 录用后 arXiv。
 
 ---
 
@@ -58,9 +63,15 @@
 - **费用**：阅读下载免费；〔背景〕投稿免费，但站内有付费推广位等商业化设计，下载页体验有登录墙倾向。
 - **结论**：**不选**。除非论文改投组织行为学/管理学方向（human-AI teaming 的 OB 线在社科圈有受众）才有意义。
 
-### OSF Preprints（可用备选）〔背景，未逐条核实〕
+### OSF Preprints ⛔ 备胎作废（2026-08-29 现查核实）
 
-- 运营：Center for Open Science，非营利。注册即投、免费、发 DOI、审核宽松（只查范围与格式）。Google Scholar 收录正常。学科无壁垒，但 CS 圈存在感一般。→ TechRxiv 不顺时的第二选择。
+- **🔴 通用服务器 2025-08-25 起停收新投稿**：官方公告原文 "Effective 8/25/2025, OSF has
+  suspended submissions to their generalist server hosted by OSF Preprints"（经
+  [罗切斯特大学 LibGuide](https://libguides.lib.rochester.edu/c.php?g=1370983&p=10131308)
+  转引核实；OSF 自家帮助页反而没挂横幅，别被它误导）。已发布内容不受影响、可修订。
+- 社区分站（PsyArXiv/SocArXiv 等）照常收稿，但**没有 CS / 工程对口分站** ⇒ 本论文无处可投。
+- 原〔背景〕结论「注册即投的第二选择」**作废**。若日后重开再重估。
+- 运营：Center for Open Science，非营利；免费、发 DOI、Google Scholar 收录正常（这些仍属实，只是进不去）。
 
 ### Preprints.org〔背景，未逐条核实〕
 
@@ -92,7 +103,7 @@
 | **TechRxiv** | ✅ 注册即投 | 轻审核 1–3 天 | ✅ | ✅〔背景〕 | ✅ IEEE/CS | **首选占位** |
 | Zenodo | ✅ 零审核 | 无 | ✅ 版本化 | 🔴 基本不收 | 通用 | 只用于软件 DOI |
 | SSRN | ✅ | 轻审核 | ✅〔背景〕 | ✅ | 🔴 社科向 | 不选 |
-| OSF | ✅ | 轻审核 | ✅ | ✅ | 通用 | 第二备选 |
+| OSF | 🔴 2025-08-25 起停收 | — | ✅ | ✅ | 通用 | ⛔ 备胎作废，等重开 |
 | Preprints.org | ✅ | 轻审核 | ✅ | ✅ | 通用 | 观感扣分，不优先 |
 | viXra | ✅ | 无 | — | — | — | ⛔ 负资产 |
 
@@ -106,6 +117,11 @@
 ## 四、推荐路径（一句话版）
 
 **TechRxiv 挂 v1 占位（免费、对口、有 DOI）→ 查目标会 CFP 确认 preprint 政策 → 投 CHASE 或 CAIN 经验报告档 → 录用后挂 arXiv + Zenodo 给代码发 DOI。**
+
+（2026-08-29 修订，TechRxiv 停收 + OSF 作废后的现实版）：**Zenodo 先挂 v1**——版本化 DOI、
+永久存档，代价是 Google Scholar 搜不到、只能拿链接传播 → **TechRxiv 恢复后补挂可检索版**并互链
+两个 DOI → 查 CFP 投 CHASE / CAIN → 录用后挂 arXiv + 给 solo 仓库发软件 DOI。投稿系统里如实
+申报 Zenodo 存档版。
 
 ---
 

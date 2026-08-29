@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 440" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555"/>
+    </marker>
+  </defs>
+  <rect width="760" height="440" fill="#ffffff"/>
+
+  <!-- box A (origin) -->
+  <rect x="40" y="36" width="90" height="40" rx="7" fill="#fff" stroke="#666" stroke-width="1.4"/>
+  <text x="85" y="60" text-anchor="middle" font-size="12" fill="#222">box A</text>
+
+  <!-- friction arrow -->
+  <line x1="130" y1="56" x2="308" y2="56" stroke="#555" stroke-width="1.4" marker-end="url(#arr)"/>
+  <text x="219" y="46" text-anchor="middle" font-size="11" fill="#555" font-style="italic">friction the frame causes</text>
+
+  <!-- report -->
+  <rect x="312" y="36" width="110" height="40" rx="7" fill="#fff" stroke="#666" stroke-width="1.4"/>
+  <text x="367" y="60" text-anchor="middle" font-size="12" fill="#222">report</text>
+  <text x="440" y="52" font-size="11" fill="#555" font-style="italic">structured, provenance-labeled:</text>
+  <text x="440" y="67" font-size="11" fill="#555" font-style="italic">first-hand / second-hand / judgment</text>
+
+  <!-- report -> triage -->
+  <line x1="367" y1="76" x2="367" y2="124" stroke="#555" stroke-width="1.4" marker-end="url(#arr)"/>
+
+  <!-- triage -->
+  <rect x="312" y="128" width="110" height="40" rx="7" fill="#eef1f7" stroke="#345995" stroke-width="1.6"/>
+  <text x="367" y="152" text-anchor="middle" font-size="12" fill="#222">triage</text>
+  <text x="440" y="144" font-size="11" fill="#555" font-style="italic">verdict recorded either way &#183;</text>
+  <text x="440" y="159" font-size="11" fill="#555" font-style="italic">median 2 days in our deployment (Table 2)</text>
+
+  <!-- triage -> release -->
+  <line x1="367" y1="168" x2="367" y2="216" stroke="#555" stroke-width="1.4" marker-end="url(#arr)"/>
+
+  <!-- release -->
+  <rect x="312" y="220" width="110" height="40" rx="7" fill="#fff" stroke="#666" stroke-width="1.4"/>
+  <text x="367" y="244" text-anchor="middle" font-size="12" fill="#222">release</text>
+  <text x="440" y="236" font-size="11" fill="#555" font-style="italic">ships to every box,</text>
+  <text x="440" y="251" font-size="11" fill="#555" font-style="italic">not just the reporter</text>
+
+  <!-- fan-out -->
+  <g stroke="#555" stroke-width="1.4">
+    <line x1="340" y1="260" x2="120" y2="316" marker-end="url(#arr)"/>
+    <line x1="358" y1="260" x2="290" y2="316" marker-end="url(#arr)"/>
+    <line x1="376" y1="260" x2="446" y2="316" marker-end="url(#arr)"/>
+    <line x1="394" y1="260" x2="616" y2="316" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- receiving boxes -->
+  <g font-size="12" fill="#222" text-anchor="middle">
+    <rect x="66" y="320" width="90" height="40" rx="7" fill="#fff" stroke="#666" stroke-width="1.4"/>
+    <text x="111" y="344">box A</text>
+    <rect x="236" y="320" width="90" height="40" rx="7" fill="#fff" stroke="#666" stroke-width="1.4"/>
+    <text x="281" y="344">box B</text>
+    <rect x="406" y="320" width="90" height="40" rx="7" fill="#fff" stroke="#666" stroke-width="1.4"/>
+    <text x="451" y="344">box C</text>
+    <rect x="576" y="320" width="90" height="40" rx="7" fill="#fff" stroke="#666" stroke-width="1.4"/>
+    <text x="621" y="344">box D &#8230;</text>
+  </g>
+  <g font-size="10.5" fill="#666" text-anchor="middle" font-style="italic">
+    <text x="111" y="380">workaround</text>
+    <text x="111" y="394">deleted</text>
+    <text x="281" y="380">gets the fix it</text>
+    <text x="281" y="394">never asked for</text>
+    <text x="451" y="380">gets the fix it</text>
+    <text x="451" y="394">never asked for</text>
+    <text x="621" y="380">gets the fix it</text>
+    <text x="621" y="394">never asked for</text>
+  </g>
+</svg>
