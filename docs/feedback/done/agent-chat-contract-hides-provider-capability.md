@@ -111,6 +111,31 @@ awareness 的既定供应商是火山引擎方舟（OpenAI 兼容的 `/chat/comp
 - `messages` 透传的**端到端验证**：见本文档提交时 awareness 侧的验证记录；
   若该项未完成，①的结论仍为静态推断，triage 时请以实跑结果为准。
 
-## 处理结论
+## 处理结论（solo 侧）
 
-（待 triage）
+**建议 1、2、4 采纳，2026-08-29 落地**（agent introspection 契约补全，不动 provider 行为；
+v1.2.7 后 main，随下个 release 下发）：
+
+1. `agent.chat` 契约补 `messages`（optional array）。**核实中发现报告未覆盖的关键前提**：
+   `messages` 是 **gemini 独有**——qwen 的 chat 签名是 `{ text, history, model }`（`history`
+   同样是未声明参数）、openai 只解构 `{ text, model }`，两家对 `messages` 直接忽略、走
+   text 路径。所以补契约必须带 caveat（已写进 description，methods 自省可见），否则是把
+   「以为没有 system prompt 位置」换成「以为跨 provider 都有」——换一个坑。跨 provider
+   归一化（qwen/openai 支持 messages）另立 BACKLOG §3。
+2. `agent.text.parse` 契约补 `schema`（qwen/gemini 均已实现，核实属实）。
+3. **`agent.decide` 一条报告有误**：v1.2.7 契约里 `schema` 已声明（`git show v1.2.7` 核对，
+   params 第 4 项，带 description）。无动作。按 R2 溯源纪律记一笔：该条标注「代码阅读」，
+   属阅读遗漏。
+4. 限流 bot 语义：`agent.chat` description 追加「按身份计数、relay/bot 整服务共享一个
+   5/min 窗口」。bot 单独计额不做——改 limit 语义涉及 Router checkAccess 侧（红线），且
+   5/min 对现有消费者未证不足；真实撞限再议。
+5. 建议 3（先补契约再收紧校验）：与 `library/validate.js` 既有立场一致——`checkParams`
+   头注明写 "Unknown keys in params are NOT rejected (additive payloads stay legal)"，未声明
+   参数不拒是**成文设计**而非疏漏（报告 ② 的「未文档化」在这点上不准确，但「契约该补全」
+   的结论方向对）。契约已补，此项无额外动作。
+6. 建议 5（ark provider）：**缓，进 BACKLOG §3**。`OPENAI_BASE_URL` 接 OpenAI 兼容端点的
+   已验证范围 = 无（RESERVED 注释属实），等 awareness 真接方舟时以实测回填。
+
+- **awareness 侧动作**：升级后 `ai-client.js` 里「依赖未声明行为」的注释可撤（messages
+  已入契约），但「gemini 独有」的前提必须保留——provider 一旦换离 gemini，messages 即
+  静默失效（正是你们 ② 里预言的那类失败）。`assertShape` 兜底继续留着。

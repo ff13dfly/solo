@@ -61,6 +61,21 @@
 已在 `api/autocheck/static/public-surface-check.js` 加 `awareness` 一节，带 `[Project]`
 标记与「升级后要补回」的注释，并记进项目 `CLAUDE.md` 的升级待办。
 
-## 处理结论
+## 处理结论（solo 侧）
 
-（待 triage）
+**采纳建议 1，2026-08-29 落地**（v1.2.7 后 main，随下个 release 下发）：
+`public-surface-check.js` 增加项目侧外挂——检查时读项目根 `deploy/public-surface.json`
+（`[Project]`，升级不触碰），与框架表**取并集**；文件缺失 = 空集，解析失败/格式错 fail
+loud（报错并仍按未登记拦，不会反向变成放行）。报错指引文本同步改为双轨（框架服务改
+ALLOWED_PUBLIC_METHODS / 私有 app 写外挂）。定位用 `__dirname` 上溯三级，不依赖 cwd。
+已单测四场景：无外挂拦 / 有外挂放行 / 坏 JSON 报错仍拦 / 非字符串数组报错仍拦；
+`core/user` 正常路径回归无变化。
+
+- **建议 2（就近 publicReason）不采**：集中视图正是这道门禁的价值——安全评审一眼看全
+  公开面；分散进各 introspection 后，audit 要 grep 全仓。
+- **建议 3（upgrade.sh diff 告警）被建议 1 取代**：外挂落地后本文件不应再被项目编辑，
+  不为「不该发生的编辑」再加机制。
+- **依据核实**：根因引用属实（硬编码字面量、四键全为框架服务、报错文本指向只读区）；
+  `api/autocheck/` 属 `[Solo]` 交付区与 scaffold README 目录表一致。
+- **awareness 侧动作**：升级到含此改动的版本后，撤掉 autocheck 里的 `[Project]` 补丁、
+  改写 `deploy/public-surface.json`（13 个方法名原样搬过去），并清项目 CLAUDE.md 的升级待办。

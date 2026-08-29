@@ -33,7 +33,14 @@ const methods = [
     // 1 Dot
     {
         name: 'agent.chat',
-        params: [{ name: 'text', type: 'string', maxLength: 4000 }, { name: 'model', type: 'string', optional: true, maxLength: 64 }],
+        params: [
+            { name: 'text', type: 'string', maxLength: 4000 },
+            // Contract completion (docs/feedback/agent-chat-contract-hides-provider-capability.md):
+            // `messages` was implemented but undeclared — callers reading `methods` concluded
+            // there was no place for a system prompt and inlined it into `text`.
+            { name: 'messages', type: 'array', optional: true, description: "OpenAI-style [{role,content}] turns; wins over `text` when both given. Provider coverage: gemini maps role:'system' → systemInstruction (content parts incl. image_url supported); qwen and openai IGNORE this param and use `text` — do not rely on it cross-provider" },
+            { name: 'model', type: 'string', optional: true, maxLength: 64 },
+        ],
         // Common across providers: only success + metadata. `text` (qwen, gemini legacy/error)
         // and `content` (gemini messages path) are mutually-exclusive-ish and NOT guaranteed.
         // Legacy ['response','history','usage'] were all fictional — none are ever returned.
@@ -44,7 +51,7 @@ const methods = [
             { name: 'content', type: 'string' },  // gemini messages/legacy path (absent on qwen)
             { name: 'metadata', type: 'object', required: true },
         ],
-        description: 'Chat with AI',
+        description: 'Chat with AI. Read `content` || `text` from the result. Rate limit counts per authenticated identity: relay/bot callers share their service bot identity, so one service shares one 5/min window',
         ai: true,
         limit: { window: 60, max: 5, by: 'user' }
     },
@@ -194,7 +201,9 @@ const methods = [
     ], description: 'Transcribe audio (audio = base64; mimeType e.g. audio/webm|mp3|m4a)', ai: true },
     // qwen + gemini → { success, data, metadata }. Legacy ['intent','entities','confidence'] were
     // fictional — the extracted payload lives under `data`.
-    { name: 'agent.text.parse', params: [{ name: 'text', type: 'string', maxLength: 4000 }, { name: 'model', type: 'string', optional: true, maxLength: 64 }], returns: ['success', 'data'], returns_schema: [
+    // `schema` was implemented by both providers but undeclared — same contract gap as
+    // agent.chat's `messages` (docs/feedback/agent-chat-contract-hides-provider-capability.md).
+    { name: 'agent.text.parse', params: [{ name: 'text', type: 'string', maxLength: 4000 }, { name: 'schema', type: 'object', optional: true, description: 'Desired output shape; honored by qwen and gemini (qwen returns the raw string under `data` when omitted)' }, { name: 'model', type: 'string', optional: true, maxLength: 64 }], returns: ['success', 'data'], returns_schema: [
         { name: 'success', type: 'boolean', required: true },
         { name: 'data', required: true },        // parsed object OR raw string (qwen passes raw when no schema)
         { name: 'metadata', type: 'object', required: true },

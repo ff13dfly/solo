@@ -19,6 +19,12 @@ const path = require('path');
 
 // service 目录 basename → 允许 public:true 的完整方法名集合。
 // 未出现在这里的服务 = 不允许任何 public 方法(默认空集)。
+// 🔴 这张表只登记**框架自己的**服务(core/apps)。派生项目的私有 app 需要 public 方法时
+// **不要写进本文件**——api/autocheck/ 是 [Solo] 交付区,upgrade.sh 升级整体覆盖,写进来的
+// 白名单会静默消失(docs/feedback/public-surface-allowlist-in-readonly-area.md)。
+// 项目自己的白名单声明在项目根 `deploy/public-surface.json`([Project],升级不触碰):
+//   { "<service目录名>": ["service.entity.action", ...] }
+// 检查时两份取并集;文件缺失 = 空集,解析失败按错误上报(fail loud)。
 const ALLOWED_PUBLIC_METHODS = {
     user: new Set([
         'user.register',
@@ -52,12 +58,38 @@ function isMethodNameCandidate(name) {
     return name.includes('.') || RESERVED_BARE_NAMES.has(name);
 }
 
+// 读项目侧白名单外挂。以本文件位置定位项目根(api/autocheck/static → 上三级),
+// 不依赖 cwd——checker 从哪个目录跑都一样。
+function loadProjectAllowlist(serviceName, results) {
+    const overlayPath = path.resolve(__dirname, '../../..', 'deploy/public-surface.json');
+    if (!fs.existsSync(overlayPath)) return new Set();
+    try {
+        const overlay = JSON.parse(fs.readFileSync(overlayPath, 'utf-8'));
+        const entry = overlay[serviceName];
+        if (entry === undefined) return new Set();
+        if (!Array.isArray(entry) || entry.some(m => typeof m !== 'string')) {
+            results.errors.push(
+                `❌ [public-surface] deploy/public-surface.json 的 '${serviceName}' 必须是字符串数组`
+            );
+            return new Set();
+        }
+        return new Set(entry);
+    } catch (e) {
+        results.errors.push(
+            `❌ [public-surface] deploy/public-surface.json 解析失败: ${e.message}`
+        );
+        return new Set();
+    }
+}
+
 function check(servicePath, results) {
     const introspectionPath = path.join(servicePath, 'handlers/introspection.js');
     if (!fs.existsSync(introspectionPath)) return;
 
     const serviceName = path.basename(servicePath);
-    const allowed = ALLOWED_PUBLIC_METHODS[serviceName] || new Set();
+    const projectAllowed = loadProjectAllowlist(serviceName, results);
+    const frameworkAllowed = ALLOWED_PUBLIC_METHODS[serviceName] || new Set();
+    const allowed = new Set([...frameworkAllowed, ...projectAllowed]);
 
     const src = fs.readFileSync(introspectionPath, 'utf-8');
     const positions = [...src.matchAll(/name:\s*['"]([a-zA-Z0-9_.]+)['"]/g)]
@@ -78,7 +110,9 @@ function check(servicePath, results) {
         results.errors.push(
             `❌ [public-surface] ${unexpected.length} 个未登记的 public:true 方法:\n` +
             unexpected.map(m => `       - ${m}`).join('\n') +
-            `\n       若确需公开,先评审必要性,再把方法名加进 autocheck/static/public-surface-check.js 的 ALLOWED_PUBLIC_METHODS['${serviceName}']`
+            `\n       若确需公开,先评审必要性,再登记白名单:框架服务改 autocheck/static/public-surface-check.js` +
+            `\n       的 ALLOWED_PUBLIC_METHODS['${serviceName}'];项目私有 app 写进项目根 deploy/public-surface.json` +
+            `\n       的 ["${serviceName}"] 数组([Project] 文件,升级不覆盖)`
         );
         return;
     }
