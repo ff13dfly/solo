@@ -15,6 +15,40 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
+## [v1.2.8] — 2026-08-29
+
+### Added — public 白名单项目侧外挂：`deploy/public-surface.json`
+
+> 来源：[`docs/feedback/done/public-surface-allowlist-in-readonly-area.md`](../feedback/done/public-surface-allowlist-in-readonly-area.md)
+> （awareness：私有 app 的 public 方法被迫登记进 `[Solo]` 只读区的硬编码表,
+> 升级整体覆盖即被冲掉——安全评审结论静默消失,CI 下一轮才红）。
+
+- `autocheck/static/public-surface-check.js` 检查时读**项目根** `deploy/public-surface.json`
+  （`[Project]`,升级不触碰）,与框架表取并集。格式:`{ "<service目录名>":
+  ["service.entity.action", ...] }`。文件缺失 = 空集;坏 JSON / 非字符串数组 fail loud
+  （报错并仍按未登记拦,不会反向放行）。定位用 `__dirname` 上溯,不依赖 cwd。
+- 框架表回归纯框架语义（只登记 core/apps 自己的服务）,报错指引改双轨。
+
+### Fixed — agent 契约补全：实现了却没声明的参数,和它们的 provider 边界
+
+> 来源：[`docs/feedback/done/agent-chat-contract-hides-provider-capability.md`](../feedback/done/agent-chat-contract-hides-provider-capability.md)
+> （awareness：读 `methods` 自省得出「agent.chat 没有 system prompt 的位置」,被迫把
+> 安全边界拼进 4000 字 `text` 或依赖未声明行为）。**只补声明,不动 provider 行为。**
+
+- `agent.chat` 声明 `messages`（optional array）,description 明写 provider 覆盖面：
+  **gemini 独有**（`role:'system'` → systemInstruction,content parts 含 image_url）;
+  **qwen / openai 忽略此参数走 text 路径**——跨 provider 调用别依赖它。
+  归一化已立项 BACKLOG §3「agent provider 能力面」。
+- `agent.text.parse` 声明 `schema`（qwen/gemini 均已实现,qwen 缺省时 `data` 返回裸字符串）。
+- `agent.chat` description 补限流语义：按身份计数,relay/bot 调用整服务共享一个 5/min 窗口。
+- 报告中「`agent.decide` 缺 `schema`」核实为**误报**——v1.2.7 契约已声明,无改动。
+
+下游 action：**仅当你曾把私有 app 的 public 方法写进 `api/autocheck/static/public-surface-check.js`
+（`[Project]` 本地补丁,awareness 即此情形）**——升级会冲掉那一节,先把方法名迁到项目根
+`deploy/public-surface.json`,再升级,然后删本地补丁与项目 CLAUDE.md 的升级待办。其余消费者无动作。
+
+---
+
 ## [v1.2.7] — 2026-08-28
 
 ### Fixed — bundle 入口三重守卫：require 不再起舰队、缺省不再全量、绑定失败不再谎报成功
