@@ -11,6 +11,46 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+---
+
+## [v1.2.9] — 2026-08-30
+
+### Added — Entity Factory 批量写入 `createMany()` / `deleteMany()`
+
+> 来源：[`docs/feedback/done/entity-factory-no-bulk-write.md`](../feedback/done/entity-factory-no-bulk-write.md)
+> （finance 实测 v1.2.8：21000 行导入服务端耗时 22.0s，**落在 Router 10s 转发超时之外**；
+> 追下去瓶颈不在解析、不在内存，在逐行写入——每行 11 条 Redis 命令、3 次往返，
+> 其中只有 1 条在写数据。读侧有 `multiGet`，写侧一直没有对位物）。
+
+- **`createMany(rows, { chunkSize = 500 })`**：一个 chunk 一次 MULTI，**键结构与 `create()`
+  完全相同**（data key + 主索引 SET + 游标 ZSET + 每行一条 WAL 账本），提速不是靠少写东西
+  换来的。两处关键设计：① 序号用一次 `INCRBY n` 预分配取代每行一次 `INCR`，区间连续且严格
+  递增——游标 ZSET 唯一依赖的性质不变；② 唯一性**按 chunk 证明**（内存生成 → 去重 → 一次
+  pipelined `EXISTS` → 只重生成撞上的），保持 `SET NX` 的同等保证而往返从 N 次降到 1 次。
+  `clientId` opt-in 的客户端指定 id 照旧支持，重复/已存在如实抛错。
+- **`deleteMany(ids, { chunkSize = 500 })`**：重导的另一半（导入型实体重导 = 删一遍再写一遍，
+  两头都吃满）。缺失 id **跳过并计数、不抛错**（批量删除必须可重跑）；owner-scoped 会话下
+  「不是你的行」与「不存在」给同一个答案，不泄露存在性。软删实体走标记 DELETED，**不带
+  `update()` 的 CAS 重试**——批量语义下 last-write-wins，JSDoc 已写明。
+- **修 `destroy()` 的游标索引泄漏**（本轮核实时发现）：它 `sRem` 主索引却从不 `zRem` 游标
+  索引，被 purge 的 id 永久留在 ZSET。读侧不出错（孤儿取到 null 被过滤），但 ZSET 无界增长、
+  且每页游标窗口被已消失的 id 占掉一部分。
+- **20 万行 e2e 评测**（新增 `api/bench/entity-bulk-write.bench.js`，真 Redis + 真工厂跑完整
+  导入生命周期）：`createMany` 200k = **4.41s**（45,968 行/秒）· `listAll` 读回 = **478ms** ·
+  `deleteMany` 200k = **3.22s** · **重导一整轮（删 200k + 写 200k）= 7.46s，落在 Router 10s
+  预算内**（余量 2.54s）；对照逐行 `create()` 外推 **75.0s = 超时 7.5 倍**。四项结构校验
+  （返回条数 / id 唯一 / 主索引 / 游标索引）均精确等于 200,000，重导后无残留无重复。
+- 新增 17 条 hermetic 用例（`library/tests/entity-bulk-write.test.js`，已进 CI 白名单）。
+- ⚠️ **未解决、已记 BACKLOG §3**：`createMany` 只是把撞墙的行数区间推远，**「Router 转发超时
+  不取消下游 handler」这个假失败机制仍在**（`forward.js:83` 的 `axios.post` 只设 timeout、
+  无 AbortController）——调用方收到 `-32099`，数据其实写成功了。
+- 顺带纠正反馈的一处判断：WAL archiver **本来就是批量消费的**（`COUNT: batchSize` 默认 100 +
+  整批一次 `xAck`），实测「每行 3 条命令」是慢生产者的产物，写入变批量后自行消失，
+  archiver 未改一行。
+
+下游 action：无（纯新增 API + 一处索引泄漏修复）。导入型服务可把 `for … await create()`
+换成 `createMany()`；重导路径同时换 `deleteMany()`。
+
 ### Added — Entity Factory 取全量一等语义 `listAll()`；截断不再静默
 
 > 来源：[`docs/feedback/done/entity-list-fetch-all-semantics.md`](../feedback/done/entity-list-fetch-all-semantics.md)

@@ -74,6 +74,7 @@ module.exports = {
         '<rootDir>/library/tests/entity-list-order.test.js',
         '<rootDir>/library/tests/entity-owner-scope.test.js',
         '<rootDir>/library/tests/entity-cursor-pagination.test.js',
+        '<rootDir>/library/tests/entity-bulk-write.test.js',
         '<rootDir>/library/tests/pagination.test.js',
         '<rootDir>/library/tests/ports.test.js',
         '<rootDir>/library/tests/constants.test.js',

@@ -207,6 +207,60 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
         }
     };
 
+    // Chunk-wide id assignment for createMany(): generate in memory → de-dupe → prove free
+    // with ONE pipelined EXISTS → regenerate only the collisions. create() proves the same
+    // property with a SET NX round trip *per row*; this keeps the guarantee and drops the
+    // round trips to one per chunk.
+    const assignBulkIds = async (slice) => {
+        const out = new Array(slice.length);
+        const taken = new Set();
+        const generated = [];
+
+        slice.forEach((params, i) => {
+            const supplied = clientId && params.id !== undefined && params.id !== null && params.id !== '';
+            if (supplied) {
+                const id = String(params.id);
+                if (taken.has(id)) throw jsonrpc.INVALID_PARAM(`${entityName} id "${id}" appears twice in the same batch`);
+                taken.add(id);
+                out[i] = id;
+            } else {
+                generated.push(i);
+            }
+        });
+
+        let unresolved = generated;
+        let attempts = 0;
+        while (attempts < 10) {
+            for (const i of unresolved) {
+                let id;
+                do { id = idPrefix + generator.generateId(idLength); } while (taken.has(id));
+                taken.add(id);
+                out[i] = id;
+            }
+            // First pass probes every id (client-supplied included, so a duplicate of an
+            // existing row still fails loudly); later passes only re-probe the collisions.
+            const probeIdx = attempts === 0 ? slice.map((_, i) => i) : unresolved;
+            const probe = redis.multi();
+            for (const i of probeIdx) probe.exists(getDataKey(out[i]));
+            const flags = await probe.exec();
+
+            const collided = [];
+            probeIdx.forEach((i, n) => {
+                if (Number(flags[n]) === 0) return;
+                const params = slice[i];
+                if (clientId && params.id !== undefined && params.id !== null && params.id !== '') {
+                    throw jsonrpc.INVALID_PARAM(`${entityName} id "${out[i]}" already exists`);
+                }
+                taken.delete(out[i]);
+                collided.push(i);
+            });
+            if (collided.length === 0) return out;
+            unresolved = collided;
+            attempts++;
+        }
+        throw new Error('[EntityFactory] Failed to generate unique IDs for a batch after 10 attempts.');
+    };
+
     return {
         /**
          * Create a new entity instance.
@@ -293,6 +347,84 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             }
 
             return data;
+        },
+
+        /**
+         * Bulk create — the write side's counterpart to multiGet().
+         *
+         * @why create() costs 3 round trips per row (SET NX id probe → INCR sequence →
+         *      MULTI[data + index + cursor + WAL]). At import scale — account balances,
+         *      journal lines, statements arrive by the thousand — that serial cost is a
+         *      structural ceiling, and the wall it hits first is the Router's 10s forward
+         *      timeout, not memory or Redis. Worse, that timeout does not cancel the
+         *      downstream handler: the caller gets -32099 while the write actually
+         *      succeeds. This writes a whole chunk in ONE round trip with the identical
+         *      key structure — same data key, same SET index, same cursor ZSET, same
+         *      per-row WAL row — so the speedup is not bought by writing less.
+         *      (docs/feedback/done/entity-factory-no-bulk-write.md)
+         * @attention
+         *   1. Sequence numbers come from one INCRBY per chunk instead of one INCR per row.
+         *      The allocated range is contiguous and strictly increasing — the only property
+         *      the cursor ZSET relies on (see create()).
+         *   2. Uniqueness is proven per CHUNK, not per row (see assignBulkIds).
+         *   3. Each chunk is one MULTI, so a chunk applies whole or not at all. Across
+         *      chunks it is not one transaction: a failure mid-import leaves earlier chunks
+         *      written. Import-style callers should be re-runnable anyway (see deleteMany).
+         * @param {object[]} rows - Same shape you would pass to create(), one per entity.
+         * @param {number} [chunkSize=500] - Rows per MULTI. Higher = fewer round trips and a
+         *                                   bigger command buffer; 500 is where the curve flattens.
+         * @returns {Promise<{items: object[], total: number}>} created rows, in input order.
+         */
+        async createMany(rows, { chunkSize = 500 } = {}) {
+            if (!Array.isArray(rows)) throw jsonrpc.INVALID_PARAM('rows must be an array');
+            if (rows.length === 0) return { items: [], total: 0 };
+            // Degraded clients (unit-test mocks without MULTI) keep working, one row at a time.
+            if (typeof redis.multi !== 'function') {
+                const items = [];
+                for (const params of rows) items.push(await this.create(params));
+                return { items, total: items.length };
+            }
+
+            const indexKey = getIndexKey();
+            const cursorIndexKey = getCursorIndexKey();
+            const owner = ownerScope();
+            const items = [];
+
+            for (let start = 0; start < rows.length; start += chunkSize) {
+                const slice = rows.slice(start, start + chunkSize);
+                const ids = await assignBulkIds(slice);
+                const base = await redis.incrBy(getCursorSeqKey(), slice.length);
+                const firstSeq = base - slice.length + 1;
+
+                const now = Date.now();
+                const multi = redis.multi();
+                const batch = [];
+                for (let i = 0; i < slice.length; i++) {
+                    const params = slice[i];
+                    const id = ids[i];
+                    const key = getDataKey(id);
+                    const data = {
+                        status: STATUS_ACTIVE,
+                        ...params,
+                        id, // force: data.id ALWAYS equals the Redis key id
+                        createdAt: params.createdAt !== undefined ? params.createdAt : now,
+                        updatedAt: now
+                    };
+                    // 行隔离盖章：与 create() 同序（params 展开之后，先于 WAL 快照）。
+                    if (owner) data[owner.field] = owner.value;
+
+                    if (useJson) multi.json.set(key, '$', data);
+                    else multi.set(key, JSON.stringify(data));
+                    multi.sAdd(indexKey, id);
+                    multi.zAdd(cursorIndexKey, { score: firstSeq + i, value: id });
+                    if (canAtomicWal) walMulti(multi, 'create', key, null, data);
+                    batch.push(data);
+                }
+                await multi.exec();
+                if (!canAtomicWal) for (const d of batch) walFile('create', getDataKey(d.id), null, d);
+                items.push(...batch);
+            }
+            return { items, total: items.length };
         },
 
         /**
@@ -414,6 +546,84 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             }
 
             return { success: true };
+        },
+
+        /**
+         * Bulk delete — the other half of the import problem. A re-import deletes the old
+         * period before writing the new one, so both directions sit on the hot path: at
+         * 21k rows finance was paying the per-row round trip twice.
+         *
+         * @attention
+         *   1. Missing ids are SKIPPED and counted, not thrown. A bulk delete must be
+         *      re-runnable (retried imports, at-least-once delivery); single-row delete()
+         *      keeps its NOT_FOUND throw. For an owner-scoped session a row belonging to
+         *      someone else is counted as skipped too — indistinguishable from absent, the
+         *      same non-disclosure rule assertOwned() enforces elsewhere.
+         *   2. On soft-delete entities this stamps status DELETED **without** the CAS retry
+         *      update() performs: a concurrent write to a row inside the batch is
+         *      last-write-wins. That is the deliberate bulk trade — use delete() per row
+         *      for contended rows. Batch-replace entities (the import case) declare
+         *      softDelete: false and take the hard-delete path below anyway.
+         * @param {string[]} ids
+         * @param {number} [chunkSize=500]
+         * @returns {Promise<{deleted: number, skipped: number}>}
+         */
+        async deleteMany(ids, { chunkSize = 500 } = {}) {
+            if (!Array.isArray(ids)) throw jsonrpc.INVALID_PARAM('ids must be an array');
+            if (ids.length === 0) return { deleted: 0, skipped: 0 };
+            if (typeof redis.multi !== 'function') {
+                let deleted = 0, skipped = 0;
+                for (const id of ids) {
+                    try { await this.delete({ id }); deleted++; } catch (_) { skipped++; }
+                }
+                return { deleted, skipped };
+            }
+
+            const indexKey = getIndexKey();
+            const cursorIndexKey = getCursorIndexKey();
+            const owner = ownerScope();
+            let deleted = 0;
+            let skipped = 0;
+
+            for (let start = 0; start < ids.length; start += chunkSize) {
+                const slice = ids.slice(start, start + chunkSize);
+                const existing = await readManyData(slice.map(getDataKey));
+                const now = Date.now();
+                const multi = redis.multi();
+                const pendingWal = [];
+                let queued = 0;
+
+                for (let i = 0; i < slice.length; i++) {
+                    const id = slice[i];
+                    const before = existing[i];
+                    // Absent, or not this session's row → skip (see @attention 1).
+                    if (!before || (owner && before[owner.field] !== owner.value)) { skipped++; continue; }
+                    const key = getDataKey(id);
+
+                    if (softDelete) {
+                        const after = { ...before, status: STATUS_DELETED, updatedAt: now };
+                        if (useJson) multi.json.set(key, '$', after);
+                        else multi.set(key, JSON.stringify(after));
+                        if (canAtomicWal) walMulti(multi, 'update', key, before, after);
+                        else pendingWal.push(['update', key, before, after]);
+                    } else {
+                        // Hard delete drops the id from BOTH indexes, mirroring delete().
+                        multi.del(key);
+                        multi.sRem(indexKey, id);
+                        multi.zRem(cursorIndexKey, id);
+                        if (canAtomicWal) walMulti(multi, 'delete', key, before, null);
+                        else pendingWal.push(['delete', key, before, null]);
+                    }
+                    queued++;
+                }
+
+                if (queued > 0) {
+                    await multi.exec();
+                    for (const [op, key, before, after] of pendingWal) walFile(op, key, before, after);
+                    deleted += queued;
+                }
+            }
+            return { deleted, skipped };
         },
 
         /**
@@ -742,20 +952,29 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             if (!existing) throw jsonrpc.NOT_FOUND(entityName);
             assertOwned(existing);   // 行隔离：不是你的行 → NOT_FOUND
 
+            // Purge drops the id from BOTH indexes. Before this, destroy() sRem'd the SET
+            // but left the id in the cursor ZSET forever: reads stayed correct (the orphan
+            // fetches null and is filtered out) but the ZSET grew unboundedly and every
+            // cursor page wasted part of its window on ids whose data was gone.
+            const cursorIndexKey = getCursorIndexKey();
+
             if (canAtomicWal) {
                 const multi = redis.multi();
                 multi.del(key);
                 multi.sRem(indexKey, id);
+                multi.zRem(cursorIndexKey, id);
                 walMulti(multi, 'destroy', key, existing, null);
                 await multi.exec();
             } else {
                 if (useJson) {
                     await redis.del(key);
                     await redis.sRem(indexKey, id);
+                    await redis.zRem(cursorIndexKey, id);
                 } else {
                     const multi = redis.multi();
                     multi.del(key);
                     multi.sRem(indexKey, id);
+                    multi.zRem(cursorIndexKey, id);
                     await multi.exec();
                 }
                 walFile('destroy', key, existing, null);
