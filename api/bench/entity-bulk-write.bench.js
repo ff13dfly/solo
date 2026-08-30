@@ -19,7 +19,10 @@
  * library/tests/entity-bulk-write.test.js.
  */
 const { createClient } = require('redis');
+const fs = require('fs');
+const { execSync } = require('child_process');
 const createEntity = require('../library/entity');
+const { createWalArchiver } = require('../library/walarchiver');
 
 const URL = process.env.REDIS_URL || 'redis://localhost:6399';
 const N = Number(process.env.N || 200000);
@@ -27,6 +30,11 @@ const CHUNK = Number(process.env.CHUNK || 500);
 // Serial create() at 200k would take minutes; sample it and extrapolate honestly.
 const SERIAL_SAMPLE = Number(process.env.SERIAL_SAMPLE || 3000);
 const SERVICE = 'BULKBENCH';
+// The WAL archiver runs in every deployed service (bootstrap.js), and it competes for the
+// same Redis. Measuring without it overstates throughput — an earlier revision of this
+// script did exactly that and reported numbers ~7x optimistic. Default ON; ARCHIVER=off
+// isolates the write path when you want that comparison specifically.
+const WITH_ARCHIVER = process.env.ARCHIVER !== 'off';
 const ROUTER_TIMEOUT_MS = 10000; // api/router/handlers/forward.js:11 (default)
 
 const row = (i) => ({
@@ -64,9 +72,20 @@ async function clear(redis) {
     redis.on('error', (e) => console.error('[redis]', e.message));
     await redis.connect();
 
+    let archiver = null;
+    let archiverRedis = null;
+    if (WITH_ARCHIVER) {
+        archiverRedis = createClient({ url: URL });
+        archiverRedis.on('error', () => {});
+        await archiverRedis.connect();
+        archiver = createWalArchiver(archiverRedis, { consumer: 'bench:1' });
+        archiver.start().catch((e) => console.error('[archiver]', e.message));
+        await new Promise((r) => setTimeout(r, 300));
+    }
+
     console.log(`\n${'='.repeat(72)}`);
     console.log(`Entity Factory 写入面 e2e 评测 — N=${N.toLocaleString('en-US')} chunk=${CHUNK}`);
-    console.log(`Redis: ${URL}`);
+    console.log(`Redis: ${URL}   WAL archiver: ${WITH_ARCHIVER ? 'ON（生产形态）' : 'off'}`);
     console.log('='.repeat(72));
 
     await clear(redis);
@@ -138,6 +157,39 @@ async function clear(redis) {
     for (const [label, n, ms] of results) budget(label, n, ms);
     console.log(`   ${serialProjected < ROUTER_TIMEOUT_MS ? '✅' : '🔴'} ${pad('（对照）逐行 create', 20)} ${pad(fmt(serialProjected), 9)} 余量 ${fmt(ROUTER_TIMEOUT_MS - serialProjected)}`);
 
+    // ── 8. WAL 审计完整性 + 存储足迹（archiver 打开时才有意义）──────────────
+    if (WITH_ARCHIVER) {
+        const { WAL } = require('../library/constants');
+        console.log(`\n⑧ WAL 审计完整性与存储`);
+        // 等归档追平
+        const logDir = process.env.LOG_DIR;
+        const countRows = () => {
+            try {
+                return +execSync(`find ${logDir} -name '*.log' -type f -exec cat {} + 2>/dev/null | wc -l`).toString().trim();
+            } catch (_) { return -1; }
+        };
+        if (logDir && fs.existsSync(logDir)) {
+            let stable = 0, last = -1;
+            const t0 = Date.now();
+            while (Date.now() - t0 < 300000) {
+                await new Promise((r) => setTimeout(r, 1000));
+                const cur = countRows();
+                if (cur === last) { if (++stable >= 4) break; } else stable = 0;
+                last = cur;
+            }
+            const rowsOnDisk = countRows();
+            const expected = N * 3; // create 200k + delete 200k + re-create 200k
+            const files = +execSync(`find ${logDir} -name '*.log' -type f | wc -l`).toString().trim();
+            const kb = +execSync(`du -sk ${logDir} | cut -f1`).toString().trim();
+            console.log(`   ${rowsOnDisk >= expected ? '✅' : '🔴'} 落盘账本 ${rowsOnDisk.toLocaleString('en-US')} 行 / 应有 ${expected.toLocaleString('en-US')}（写+删+重写）`);
+            console.log(`   ${'  '} ${files} 个文件 · ${(kb / 1024).toFixed(1)} MB · 每行 ${Math.round(kb * 1024 / Math.max(rowsOnDisk, 1))} 字节`);
+            console.log(`   ${'  '} 归档追平后 WAL:STREAM 剩 ${(await redis.xLen(WAL.STREAM)).toLocaleString('en-US')} 条（MAXLEN 上限 ${WAL.MAXLEN.toLocaleString('en-US')}）`);
+        } else {
+            console.log(`   ⚠️  未设 LOG_DIR，跳过落盘校验（设 LOG_DIR=<空目录> 可测完整性与存储）`);
+        }
+    }
+
+    if (archiver) { await archiver.stop().catch(() => {}); await archiverRedis.quit().catch(() => {}); }
     const deleted = await clear(redis);
     console.log(`\n清理：删除 ${deleted.toLocaleString('en-US')} 个键`);
     console.log('='.repeat(72) + '\n');

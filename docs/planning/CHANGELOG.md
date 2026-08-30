@@ -35,11 +35,14 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 - **修 `destroy()` 的游标索引泄漏**（本轮核实时发现）：它 `sRem` 主索引却从不 `zRem` 游标
   索引，被 purge 的 id 永久留在 ZSET。读侧不出错（孤儿取到 null 被过滤），但 ZSET 无界增长、
   且每页游标窗口被已消失的 id 占掉一部分。
-- **20 万行 e2e 评测**（新增 `api/bench/entity-bulk-write.bench.js`，真 Redis + 真工厂跑完整
-  导入生命周期）：`createMany` 200k = **4.41s**（45,968 行/秒）· `listAll` 读回 = **478ms** ·
-  `deleteMany` 200k = **3.22s** · **重导一整轮（删 200k + 写 200k）= 7.46s，落在 Router 10s
-  预算内**（余量 2.54s）；对照逐行 `create()` 外推 **75.0s = 超时 7.5 倍**。四项结构校验
-  （返回条数 / id 唯一 / 主索引 / 游标索引）均精确等于 200,000，重导后无残留无重复。
+- **20 万行 e2e 评测**（新增 `api/bench/entity-bulk-write.bench.js`，真 Redis + 真工厂 +
+  **真 archiver**（生产形态）跑完整导入生命周期）：`createMany` 200k = **6.00s**（33,319 行/秒）·
+  `listAll` 读回 = **493ms** · `deleteMany` 200k = **4.60s** · **重导一整轮（删 200k + 写 200k）
+  = 10.51s**，略微超出 Router 10s 预算 ⇒ **单次调用的实用上限约 19 万行**；对照逐行
+  `create()` 外推 **102.9s = 超时 10 倍**。四项结构校验（返回条数 / id 唯一 / 主索引 /
+  游标索引）均精确等于 200,000，重导后无残留无重复；WAL 落盘 603,000 行全部到齐。
+  跨主机对照（N100，N=50,000）：批量路径差异 ≤13%，逐行路径差异 1.7x——批量成本是
+  「一次 pipeline + 一次顺序 append」，两台机器都远未触及瓶颈。
 - 新增 17 条 hermetic 用例（`library/tests/entity-bulk-write.test.js`，已进 CI 白名单）。
 - ⚠️ **未解决、已记 BACKLOG §3**：`createMany` 只是把撞墙的行数区间推远，**「Router 转发超时
   不取消下游 handler」这个假失败机制仍在**（`forward.js:83` 的 `axios.post` 只设 timeout、
@@ -50,6 +53,45 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 下游 action：无（纯新增 API + 一处索引泄漏修复）。导入型服务可把 `for … await create()`
 换成 `createMany()`；重导路径同时换 `deleteMany()`。
+
+### Fixed — WAL 归档不再静默丢账本；落盘存储降低 10 倍
+
+> 来源：同上一条反馈的二轮核实。**上一轮评测漏跑 archiver**（生产里每个服务都会起一个，
+> `bootstrap.js:53`），补测发现批量写入会**静默丢审计**：20,000 行只归档 18,806 条。
+
+- **根因**：`logger.insert` 按 key 哈希**一个实体一个 `.log` 文件** + 每行一次
+  `appendFileSync`，落盘只有 ~263 行/秒；而 `WAL:STREAM` 是 `MAXLEN ~10000` 的环形缓冲——
+  生产者一快，**XADD 的裁剪把还没被消费组读到的条目直接丢掉，不报错**。
+  一条账本内容 341 字节却占满一个 4KB 文件系统块 = **存储放大 12 倍**。
+- **`logger.insertMany(entries)`**（新增）：整批一次 append 进按天分片的
+  `logs/wal/{year}/{YYYY-MM-DD}.log`。同数据实测 **快 123 倍、小 13 倍**。
+  索引保留原有 4 段、**追加第 5 段字节偏移**（旧格式解析者不受影响）。
+  **`logger.insert()` 一行未动**，存量按 key 的文件仍有效，`query()` 现在两种布局都读并按
+  stamp 归并。
+- **archiver**：整批一次落盘（不再每行一次），`batchSize` 100 → 1000；
+  **裁剪从 MAXLEN 改为 `XTRIM MINID`**——只回收已归档且已 ack 的部分，审计完整性不再依赖
+  「生产者比消费者慢」；archiver 全死则流增长（可见，仍有 XADD 的 MAXLEN 兜底）而非静默丢数据。
+  另加积压告警 `archiver.backlog.high`（`XLEN > MAXLEN/2`）。
+  ⚠️ 修复中踩到：`xInfoGroups` 的字段是 kebab-case `last-delivered-id`，camelCase 别名不存在，
+  取 undefined 会让 `xTrim` 抛错并被 try/catch 吞掉（现象是流长度纹丝不动）。
+- **实测（20,000 行，archiver 打开）**：审计完整性 18,806/20,000 → **20,000/20,000**；
+  写完瞬间流内积压 10,006 → **501**；归档追平 ~70s → **~5s**；每行落盘 4,184 → **424 字节**；
+  文件数 18,806 → **1**；写入速率 6,605 → **29,985 行/秒**。
+
+- **磁盘水位告警**（archiver）：归档只增不删是设计（审计流水），但**满盘会拖垮整栈**
+  （WAL 与 Redis 持久化、服务日志同盘），所以这条不许是静默的。每 60s 查一次
+  `statfs`，低于 15%/2GB 报 `archiver.disk.low`、低于 5%/512MB 报
+  `archiver.disk.critical`（`WAL_DISK_*` 可调）。**检查放在主循环而非 drain 内**——
+  磁盘涨满时 archiver 往往正闲着，放在 drain 里就永远不会报。
+- **`deploy/wal-rotate.sh`**（新增运维脚本）：压缩超过保留窗口的按天日志（gzip 实测 13:1）、
+  可选搬到冷存、可选做 Redis RDB 快照，带 `--dry-run`。
+  ⚠️ 配套把 **`query()` 改为认得 `.gz`**：轮转过的天照样读得到（索引解压 + 按偏移切片），
+  否则压缩就等于让历史静默消失——正是本条要修的那类毛病。
+
+下游 action：无（`logger.insert`/`query` 契约不变，存量日志继续可读）。新账本进
+`logs/wal/{year}/{date}.log`，按 key 查仍用 `logger.query(key)`。
+建议给长期运行的栈挂上 `deploy/wal-rotate.sh`（Linux 用 systemd timer；
+🔴 macOS 别用 cron/launchd，TCC 会静默拦掉，挂在常驻栈生命周期里）。
 
 ### Added — Entity Factory 取全量一等语义 `listAll()`；截断不再静默
 

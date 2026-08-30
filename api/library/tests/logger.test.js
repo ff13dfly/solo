@@ -19,7 +19,7 @@ process.env.LOG_DIR = TMP;
 process.env.WAL_DIR = TMP; // not read by the module, set per test-harness convention
 
 const logger = require('../logger');
-const { insert, query, snapshot, createLogger, redactSensitive } = logger;
+const { insert, insertMany, query, snapshot, createLogger, redactSensitive } = logger;
 
 // A custom sub-folder to exercise the explicit `folder`/`lines` arguments (vs defaults).
 const CUSTOM = path.join(TMP, 'custom-folder');
@@ -461,5 +461,119 @@ describe('logger.redactSensitive — depth + array branches', () => {
         expect(out.list[0]).toBe(1);
         expect(out.list[1]).toBe('two');
         expect(out.list[2].apikey).toBe('***');
+    });
+});
+
+// ===========================================================================
+// insertMany() — the archiver's batched, day-sharded path
+// ===========================================================================
+describe('logger.insertMany — batched day-sharded write', () => {
+    const BATCH = path.join(TMP, 'batch-folder');
+
+    test('writes every row into ONE day log + one index, not a file per key', () => {
+        const entries = Array.from({ length: 50 }, (_, i) => ({
+            key: `BM:ROW:${i}`,
+            row: { op: 'create', key: `BM:ROW:${i}`, stamp: Date.UTC(2026, 7, 30, 10), n: i },
+        }));
+        const res = insertMany(entries, BATCH);
+        expect(res.written).toBe(50);
+        expect(res.files).toHaveLength(1);
+
+        const dir = path.join(BATCH, 'wal', '2026');
+        const logs = fs.readdirSync(dir).filter((f) => f.endsWith('.log'));
+        expect(logs).toEqual(['2026-08-30.log']);
+        const lines = fs.readFileSync(path.join(dir, '2026-08-30.log'), 'utf8').trim().split('\n');
+        expect(lines).toHaveLength(50);
+        expect(JSON.parse(lines[0]).n).toBe(0);
+    });
+
+    test('index keeps the legacy 4 fields and appends the byte offset as a 5th', () => {
+        insertMany([{ key: 'BM:OFF:1', row: { op: 'update', stamp: Date.UTC(2026, 7, 30, 11), v: 1 } }], BATCH);
+        const idx = fs.readFileSync(path.join(BATCH, 'wal', '2026', '2026-08-30.index'), 'utf8')
+            .trim().split('\n');
+        const mine = idx.find((l) => l.includes('|BM:OFF:1|'));
+        const parts = mine.split('|');
+        expect(parts[0]).toBe(String(Date.UTC(2026, 7, 30, 11)));  // stamp
+        expect(parts[1]).toBe('update');                            // op
+        expect(parts[2]).toBe('BM:OFF:1');                          // key
+        expect(parts[3]).toMatch(/2026-08-30\.log$/);               // relative log path
+        expect(Number.isFinite(parseInt(parts[4], 10))).toBe(true);  // NEW: byte offset
+    });
+
+    test('query() finds day-sharded rows (seeks by the recorded offset)', () => {
+        insertMany([
+            { key: 'BM:Q:1', row: { op: 'create', stamp: Date.UTC(2026, 7, 30, 12), tag: 'first' } },
+            { key: 'BM:Q:2', row: { op: 'create', stamp: Date.UTC(2026, 7, 30, 12), tag: 'other' } },
+            { key: 'BM:Q:1', row: { op: 'delete', stamp: Date.UTC(2026, 7, 30, 13), tag: 'second' } },
+        ], BATCH);
+        const rows = query('BM:Q:1', BATCH);
+        expect(rows.map((r) => r.tag)).toEqual(['first', 'second']);   // stamp order, key-scoped
+        expect(query('BM:Q:2', BATCH).map((r) => r.tag)).toEqual(['other']);
+    });
+
+    test('query() merges the legacy per-key layout with the day-sharded one', () => {
+        const MIX = path.join(TMP, 'mixed-folder');
+        insert('BM:MIX:1', { op: 'create', stamp: 1000, tag: 'legacy' }, MIX);
+        insertMany([{ key: 'BM:MIX:1', row: { op: 'update', stamp: 2000, tag: 'sharded' } }], MIX);
+        expect(query('BM:MIX:1', MIX).map((r) => r.tag)).toEqual(['legacy', 'sharded']);
+    });
+
+    test('a batch straddling midnight lands in the right day files', () => {
+        const SPLIT = path.join(TMP, 'split-folder');
+        insertMany([
+            // Local-time timestamps: the day shard follows the local calendar day,
+            // matching getIndexPath()'s existing convention.
+            { key: 'BM:D:1', row: { op: 'create', stamp: new Date(2026, 7, 30, 23, 59).getTime(), d: 'a' } },
+            { key: 'BM:D:2', row: { op: 'create', stamp: new Date(2026, 7, 31, 0, 1).getTime(), d: 'b' } },
+        ], SPLIT);
+        const files = fs.readdirSync(path.join(SPLIT, 'wal', '2026')).filter((f) => f.endsWith('.log')).sort();
+        expect(files).toHaveLength(2);
+    });
+
+    test('empty / malformed input is a no-op, never a throw', () => {
+        expect(insertMany([], BATCH)).toEqual({ written: 0, files: [] });
+        expect(insertMany(null, BATCH)).toEqual({ written: 0, files: [] });
+        expect(insertMany([{ key: '', row: { x: 1 } }], BATCH).written).toBe(0);
+    });
+
+    test('an oversized row is replaced by a truncation marker, not dropped', () => {
+        const BIG = path.join(TMP, 'big-folder');
+        insertMany([{ key: 'BM:BIG:1', row: { op: 'create', stamp: Date.UTC(2026, 7, 30, 14), blob: 'x'.repeat(40 * 1024) } }], BIG);
+        const rows = query('BM:BIG:1', BIG);
+        expect(rows).toHaveLength(1);
+        expect(rows[0].error).toBe('LOG_TOO_LARGE');
+    });
+
+    test('a rotated (gzipped) day stays readable — rotation must not silently hide history', () => {
+        const zlib = require('zlib');
+        const ROT = path.join(TMP, 'rotated-folder');
+        insertMany([
+            { key: 'BM:ROT:1', row: { op: 'create', stamp: new Date(2026, 6, 1, 9).getTime(), tag: 'archived' } },
+            { key: 'BM:ROT:2', row: { op: 'create', stamp: new Date(2026, 6, 1, 9).getTime(), tag: 'other' } },
+        ], ROT);
+        expect(query('BM:ROT:1', ROT).map((r) => r.tag)).toEqual(['archived']);
+
+        // Simulate deploy/wal-rotate.sh: gzip the closed day's log AND index, drop originals.
+        const dir = path.join(ROT, 'wal', '2026');
+        for (const f of fs.readdirSync(dir)) {
+            const full = path.join(dir, f);
+            fs.writeFileSync(`${full}.gz`, zlib.gzipSync(fs.readFileSync(full)));
+            fs.unlinkSync(full);
+        }
+        expect(fs.readdirSync(dir).every((f) => f.endsWith('.gz'))).toBe(true);
+
+        // Same answer after rotation — the offset addresses the uncompressed stream.
+        expect(query('BM:ROT:1', ROT).map((r) => r.tag)).toEqual(['archived']);
+        expect(query('BM:ROT:2', ROT).map((r) => r.tag)).toEqual(['other']);
+    });
+
+    test('storage: one block-sized file per batch, not one per row', () => {
+        const DENSE = path.join(TMP, 'dense-folder');
+        insertMany(Array.from({ length: 200 }, (_, i) => ({
+            key: `BM:DENSE:${i}`, row: { op: 'create', stamp: Date.UTC(2026, 7, 30, 15), i },
+        })), DENSE);
+        // The whole point of the layout change: 200 ledger rows must not become 200 files.
+        const logFiles = fs.readdirSync(path.join(DENSE, 'wal', '2026')).filter((f) => f.endsWith('.log'));
+        expect(logFiles).toHaveLength(1);
     });
 });
