@@ -98,6 +98,57 @@ finance 的生产机跑 UTC，一开始担心财务数据算错。查下来结�
 
 ---
 
-## 处理结论
+## 处理结论（2026-08-30 核实，**结论=暂缓,不改代码**）
 
-（待 triage）
+**报告属实,但严重性需要重新定性;本轮刻意不动代码**——`entity.js` 刚在 v1.2.9 有较大改动
+（`createMany`/`deleteMany` + WAL 落盘面重写),此时再翻全文件的时间源,是把两件不相关的
+风险叠在同一个未发布版本里。**留待单独一轮处理。**
+
+### 核实结果
+
+- **现象属实**：`clock.js` 的 require 不在 `entity.js` 里,实体时间戳走裸 `Date.now()`,
+  `clock.freeze()` 冻不住 `createdAt/updatedAt`。
+- **🔴 违规点已从 5 处涨到 7 处,新增的两处是 v1.2.9 加的**（照着 `create()` 的现成写法抄的,
+  当时没意识到这条正躺在待处理队列里）：
+  | 行 | 位置 | 来源 |
+  |---|---|---|
+  | 175 · 203 | WAL stamp（`walFields` / `walFile`） | 原有 |
+  | 304 | `create()` 的 `now` | 原有 |
+  | **399** | **`createMany()` 的 `now`** | **v1.2.9 新增** |
+  | 473 · 492 | `update()` 的 `updatedAt` | 原有 |
+  | **591** | **`deleteMany()` 的 `now`** | **v1.2.9 新增** |
+
+### 严重性定性（与报告的措辞有出入,按实测校正）
+
+- **生产不会算错**。未冻结时 `clock.now()` 直接返回 `Date.now()`（`clock.js:63-66`）,
+  两个时间基完全等价 ⇒ 这不是「生产账目会错」的 bug。报告的标题容易被读成那个意思。
+- **真正的损失是「本该能测的东西测不了」**：冻结后同一条记录里**两个时间基**——
+  `approval` 的 `expiresAt/signedAt/approvedAt` 走 `clock.now()`（2020）,而同记录的
+  `createdAt/updatedAt` 走 `Date.now()`（2026）。想验「记录建立满 N 天后过期」这类逻辑,
+  拿到的 `createdAt` 是真实墙钟,用例立不住。
+- **外加一个埋着的陷阱**：本轮全量扫过,**当前没有**生产代码做
+  `clock.now() - entity.createdAt` 这种跨基比较（只有 orchestrator 手写实体的
+  `updatedAt: Date.now()`,它本就不走 Factory）。但将来一旦有人写「这条记录多老了」,
+  **生产正常、一冻结就错**,且错得安静——测试绿着、逻辑是坏的。
+- **clock 的真实消费面**（15 个生产文件,供判断影响范围）：approval（`gate`/`record`,
+  到期与签名时刻）· gateway（`delivery`/`sms`/`webhook`/`probe`,重试窗口与幂等 TTL）·
+  ingress（`audit`/`review`/`ingest`/`source`）· orchestrator（`trace-audit`）·
+  collection（`payment`）· market（`order`/`shipment`）。
+  ⚠️ **nexus 一处都没引 clock**——别按「这是给 nexus 测试用的」来判断优先级。
+
+### 处理时该做什么（留给下一轮）
+
+1. `entity.js` 引入 `clock`,7 处 `Date.now()` 全换 `clock.now()`（含 v1.2.9 新增的两处）。
+   生产行为零变化（两者等价）,风险集中在「有没有测试断言依赖了当前的真实时间戳」,
+   动手前先全量扫一遍断言。
+2. 补 autocheck 静态规则堵复发——这正是报告标题「唯一没有门禁的红线」的要害:
+   约束写在 `SKILL.md:67`,却没有任何检查器拦得住。
+3. WAL stamp 那两处（175/203）要单独判断:账本时间戳跟着冻结走是否合适,
+   与「审计必须反映真实墙钟」可能有张力,别一刀切。
+
+### 附:这篇为什么积压了 5 天
+
+**没有被 triage 过,是漏的**——它搭着 `57896ef`（v1.2.4,正事是修 npm ci 锁文件）进的仓库,
+那个 commit 的 message 一个字没提它;之后 8-26 转 steward、8-27~29 转论文,再没人回看。
+`docs/feedback/` 的积压队列**没有任何机制会主动捞出来**（会话开头的 hook 只推 overview 的
+捕获队列）。同批积压的还有 8 篇,最老的 8-16。

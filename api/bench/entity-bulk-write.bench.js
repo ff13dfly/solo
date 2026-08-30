@@ -92,6 +92,31 @@ async function clear(redis) {
     const entity = createEntity(redis, { serviceName: SERVICE, entityName: 'TBAL', idLength: 12 });
     const results = [];
 
+    // ── 0. 回归反馈里那个具体场景 ─────────────────────────────────────────────
+    // 21,000 行是 finance 报的真实月度导入量，服务端实测 22.0s、落在 Router 10s 之外
+    // （docs/feedback/done/entity-factory-no-bulk-write.md）。整套评测的其余部分是
+    // 「能跑多快」，这一节是「那个报上来的 bug 还在不在」——它必须是一个会红的断言，
+    // 而不是靠 200k 的数字外推。
+    const REPORTED_ROWS = 21000;
+    const reportedRows = Array.from({ length: REPORTED_ROWS }, (_, i) => row(i));
+    const reported = await timed('reported', async () => {
+        const created = await entity.createMany(reportedRows, { chunkSize: CHUNK });
+        // 重导 = 删一遍再写一遍，这才是月度导入的真实形态
+        await entity.deleteMany(created.items.map((i) => i.id), { chunkSize: CHUNK });
+        await entity.createMany(reportedRows, { chunkSize: CHUNK });
+    });
+    const reportedOk = reported.ms < ROUTER_TIMEOUT_MS;
+    console.log(`\n⓪ 回归：反馈实际场景 ${REPORTED_ROWS.toLocaleString('en-US')} 行（原报告单次导入 22.0s，落在 Router 10s 之外）`);
+    console.log(`   ${reportedOk ? '✅' : '🔴'} ${fmt(reported.ms)} —— 首次导入 + 一轮重导（删+写），共 3×${REPORTED_ROWS.toLocaleString('en-US')} 行操作`);
+    console.log(`      比原报告的单次导入更重，仍余 ${fmt(ROUTER_TIMEOUT_MS - reported.ms)}`);
+    const rIdx = await redis.sCard(`${SERVICE}:TBAL:INDEX`);
+    console.log(`   ${rIdx === REPORTED_ROWS ? '✅' : '🔴'} 重导后主索引 ${rIdx.toLocaleString('en-US')}（无残留、无重复）`);
+    if (!reportedOk) {
+        console.error('🔴 回归失败：反馈里的场景仍然超出 Router 转发预算');
+        process.exitCode = 1;
+    }
+    await clear(redis);
+
     // ── 1. 基线：逐行 create()（抽样外推，200k 全跑要几分钟）────────────────
     const serial = await timed('serial', async () => {
         for (let i = 0; i < SERIAL_SAMPLE; i++) await entity.create(row(i));
