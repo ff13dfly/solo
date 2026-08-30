@@ -13,6 +13,35 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
+## [v1.2.10] — 2026-08-30
+
+### Added — 反馈实际场景（21,000 行）成为会红的回归断言
+
+> v1.2.9 的评测跑的是 20k / 50k / 200k，靠 `N=` 参数化，**唯独没跑反馈里那个具体数字**。
+> 「那个报上来的 bug 还在不在」应该是一个会失败的断言，不是从别的量级外推出来的。
+
+- `api/bench/entity-bulk-write.bench.js` 新增第 ⓪ 节：跑 finance 报的真实月度导入量
+  21,000 行（原报告服务端 22.0s、落在 Router 10s 转发预算之外），超预算即
+  `process.exitCode = 1`。实测 **1.88s**，且刻意做得比原报告更重——测的是
+  **首次导入 + 一轮完整重导**（3×21,000 行操作），而报告里那 22 秒只是单次导入，仍余 8.12s。
+
+### Changed — `docs/feedback/entity-factory-bypasses-clock.md` 核实回写，结论暂缓
+
+- 报告属实但**严重性需要校正**：未冻结时 `clock.now()` 直接返回 `Date.now()`，两个时间基
+  等价 ⇒ 不是「生产账目会错」。真正的损失是**本该能测的东西测不了**——冻结后同一条记录里
+  两个时间基（approval 的 `expiresAt` 是 2020，同记录 `createdAt` 是 2026）。
+- 🔴 **违规点从 5 处涨到 7 处，新增两处是 v1.2.9 加的**（`entity.js` `createMany:399` /
+  `deleteMany:591`，照着 `create()` 现成写法抄的）。
+- **本轮刻意不改代码**：`entity.js` 刚在 v1.2.9 大改过，此时再翻全文件的时间源，是把两件
+  不相关的风险叠进同一个未发布版本。文件保留在待处理队列，未归档。
+- 顺带记录：`clock` 的真实消费面是 15 个生产文件（approval / gateway / ingress /
+  orchestrator / collection / market），**nexus 一处都没引它**——别按「这是给 nexus 测试用的」
+  判优先级。
+
+下游 action：无（评测脚本与反馈文档，不影响运行时）。
+
+---
+
 ## [v1.2.9] — 2026-08-30
 
 ### Added — Entity Factory 批量写入 `createMany()` / `deleteMany()`
