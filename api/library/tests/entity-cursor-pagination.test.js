@@ -165,3 +165,66 @@ describe('cursor pagination on pre-existing (SET-only) data requires migrateCurs
         expect(final.items[0].name).toBe('c');
     });
 });
+
+describe('listAll — first-class fetch-all (no magic upper bound)', () => {
+    test('walks every page to exhaustion; result has no cap', async () => {
+        for (let i = 0; i < 7; i++) await entity.create({ name: `all${i}`, createdAt: 1000 + i });
+        const res = await entity.listAll({ pageSize: 3 });
+        expect(res.items).toHaveLength(7);
+        expect(res.total).toBe(7);
+        expect(res.truncated).toBe(false);
+        expect(res.items[0].name).toBe('all6'); // newest-first, same as every other path
+    });
+
+    test('filter applies across pages', async () => {
+        for (let i = 0; i < 6; i++) await entity.create({ name: `f${i}`, createdAt: 1000 + i, keep: i % 3 === 0 });
+        const res = await entity.listAll({ pageSize: 2, filter: (it) => it.keep });
+        expect(res.items.map((i) => i.name).sort()).toEqual(['f0', 'f3']);
+        expect(res.total).toBe(2);
+    });
+
+    test('self-heals pre-existing SET-only data: migrates in place, no manual step', async () => {
+        // Same legacy shape as the suite above, on its own entity so the cursor ZSET is
+        // genuinely absent the first time listAll walks.
+        const heal = createEntity(redis, { serviceName: SERVICE, entityName: 'HEAL', idLength: 8 });
+        for (const [name, ts] of [['h-old', 1000], ['h-new', 2000]]) {
+            const id = `legacy-${name}`;
+            await redis.set(`${SERVICE}:HEAL:${id}`, JSON.stringify({ id, name, status: 'ACTIVE', createdAt: ts }));
+            await redis.sAdd(`${SERVICE}:HEAL:INDEX`, id);
+        }
+        const res = await heal.listAll();
+        expect(res.items.map((i) => i.name)).toEqual(['h-new', 'h-old']);
+        // The healed index stays online: the plain cursor path now works too.
+        const page = await heal.list({ cursor: null, limit: 10 });
+        expect(page.items).toHaveLength(2);
+    });
+});
+
+describe('offset-path truncation is loud: `truncated` flag and onTruncate', () => {
+    test('truncated: true when the page drops matches; total stays honest', async () => {
+        for (let i = 0; i < 3; i++) await entity.create({ name: `t${i}`, createdAt: 1000 + i });
+        const page = await entity.list({ limit: 2 });
+        expect(page.items).toHaveLength(2);
+        expect(page.total).toBe(3);
+        expect(page.truncated).toBe(true);
+    });
+
+    test('truncated: false when everything fits', async () => {
+        await entity.create({ name: 'only' });
+        const page = await entity.list({ limit: 10 });
+        expect(page.truncated).toBe(false);
+    });
+
+    test("onTruncate: 'throw' fails loudly instead of returning a short list", async () => {
+        for (let i = 0; i < 3; i++) await entity.create({ name: `x${i}` });
+        await expect(entity.list({ limit: 2, onTruncate: 'throw' }))
+            .rejects.toMatchObject({ code: -32602, message: expect.stringContaining('listAll') });
+    });
+
+    test('batchSize path: limit/offset ignored, ALL matches returned (contractual), truncated: false', async () => {
+        for (let i = 0; i < 3; i++) await entity.create({ name: `b${i}` });
+        const res = await entity.list({ batchSize: 2, limit: 1 });
+        expect(res.items).toHaveLength(3);
+        expect(res.truncated).toBe(false);
+    });
+});

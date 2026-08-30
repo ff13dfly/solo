@@ -11,7 +11,9 @@
  *
  *   entity.list = async (params = {}) => {
  *       const { limit, offset, keyword, ...rest } = params;
- *       const all = await baseList({ ...rest, limit: 9999, offset: 0 });
+ *       // listAll(), never list({ limit: <a big number> }): a guessed ceiling silently
+ *       // slices away everything past it (see entity.js listAll / multiGet `truncated`).
+ *       const all = await baseListAll({ ...rest });
  *       return applySearch(all.items, {
  *           keyword,
  *           searchFields: ['id', 'targetId', 'meta.booth'],

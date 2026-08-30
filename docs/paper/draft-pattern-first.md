@@ -1,6 +1,6 @@
 # The Container Model: An Experience Report on Enforcing Standards Across Human–AI Software Units
 
-> **Status: v1.0 candidate (2026-08-29) — final text, not yet peer-reviewed,
+> **Status: v1.0 candidate (2026-08-30) — final text, not yet peer-reviewed,
 > not yet deposited.** Pattern-first restructuring of the earlier v0.1 draft
 > (now in `archive/`). Data freeze: June 14 – August 24, 2026
 > (v1.1.0 → v1.2.2); later releases are deliberately out of scope.
@@ -104,7 +104,9 @@ organizations of humans and AIs. One clarification before the definitions:
 the principle this paper argues for is **enforced invariance** — a standard
 whose violation carries an automatic cost; the container is the metaphor
 that names it and, as §2.5 shows, the historical case that predicts when it
-pays. The metaphor is not the argument. This section defines the pattern without
+pays. The metaphor is not the argument; nor is *invariance* a formal term —
+we use it operationally, for a property held in place by an enforced
+consequence, not in the verification sense of a proven invariant. This section defines the pattern without
 reference to any implementation: everything here is a definition, a
 requirement, or a claimed consequence; §3 supplies one implementation and §4
 the measurements.
@@ -727,6 +729,25 @@ for the actions that need it.
 their software is classic [26] and newly practical with LLMs. Our
 contribution to that line is narrow and empirical: the binding constraint we
 observed is provisioning, not operation (§4.4, L6).
+
+**The mundane alternatives: monorepo, template, package.** Three everyday
+mechanisms deserve the same scrutiny, because a practitioner reaches for
+them first. A *monorepo* delivers a shared standard by collapsing
+ownership — every unit under one repository and one review regime — which
+is exactly the centralization the box refuses: payloads are independently
+owned and deployed, including by non-engineering roles (§4.4). A
+*repository template* standardizes only the moment of birth: nothing
+propagates after instantiation, so divergence starts on day one and is
+invisible thereafter; the updaters that fix this (cruft, copier [5]) are
+the antecedent §3.2 builds on, and they stop at drift detection, with no
+protocol for the instances' friction to evolve the template. Distributing
+the frame as a *package dependency* enforces nothing: a dependency is
+version-pinned at the consumer's pleasure, and it reaches only code — not
+the deployment scripts, contract documents, and per-turn governing
+artifacts the frame must also carry (§3.2). Each supplies one ingredient —
+a standard, a starting point, an upgrade channel — and none combines
+enforced invariance, independently owned full stacks, and a documented
+upstream path.
 
 **Separating the pattern from its neighbours.** Each line above shares
 something with the container model, which invites the reasonable objection

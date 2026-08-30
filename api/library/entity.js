@@ -447,6 +447,11 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
          * @param {number}   [batchSize] - If set, fetch IDs in chunks of this size,
          *                                 applying `filter` per batch to reduce peak memory.
          *                                 Useful when total records are large but matches are few.
+         *                                 ⚠️ When batchSize is set, `limit`/`offset` are IGNORED
+         *                                 and EVERY match is returned — long-standing behavior,
+         *                                 previously unwritten, now contractual. For an explicit
+         *                                 fetch-all prefer listAll(), which doesn't materialize
+         *                                 the whole index.
          * @param {Function} [filter]    - Per-item predicate applied inside each batch.
          *                                 Only matched items are kept; the raw batch is released.
          * @param {string}   [keyword]   - Optional keyword to search against configured searchFields.
@@ -456,8 +461,13 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
          *                                 each subsequent call. Omit entirely (don't pass the
          *                                 key at all) to keep today's offset/total behavior —
          *                                 that path is untouched by cursor mode.
+         * @param {string}   [onTruncate] - Offset path only. Pass 'throw' to fail loudly when the
+         *                                 page drops matched items, instead of returning a partial
+         *                                 `items` — for callers where a wrong number is worse than
+         *                                 an error (reports, finance). Default: return the page
+         *                                 with `truncated: true` (see multiGet).
          */
-        async list({ status = STATUS_ACTIVE, limit = 50, offset = 0, includeDeleted = false, batchSize, filter, keyword, cursor } = {}) {
+        async list({ status = STATUS_ACTIVE, limit = 50, offset = 0, includeDeleted = false, batchSize, filter, keyword, cursor, onTruncate } = {}) {
             // 行隔离在最外层合入：keyword 分支往下复合的是 finalFilter（而不是原始 filter），
             // owner 谓词才不会在那个分支被覆盖丢掉。
             let finalFilter = ownerFilter(filter);
@@ -487,7 +497,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             // 这里保持不变正是为了不传 cursor 的调用方零变化（见 CHANGELOG v1.1.13）。
             const ids = await redis.sMembers(indexKey); // SAFE: legacy path, cursor 是 opt-in 快路径
 
-            if (!ids || ids.length === 0) return { items: [], total: 0 };
+            if (!ids || ids.length === 0) return { items: [], total: 0, truncated: false };
 
             // Batched path: fetch → filter per chunk → accumulate only matches
             if (batchSize) {
@@ -506,17 +516,55 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
                 }
                 // Same newest-first default as the multiGet path (see below).
                 matched.sort((a, b) => toSortableMs(b.createdAt) - toSortableMs(a.createdAt));
-                return { items: matched, total: matched.length };
+                return { items: matched, total: matched.length, truncated: false };
             }
 
-            return this.multiGet({ ids, status, limit, offset, includeDeleted, filter: finalFilter });
+            return this.multiGet({ ids, status, limit, offset, includeDeleted, filter: finalFilter, onTruncate });
+        },
+
+        /**
+         * Fetch ALL matching entities — the first-class "give me everything" form.
+         *
+         * @why Callers used to fake this with list({ limit: <a big number> }): anything past
+         *      the guess is silently sliced away, and allOf-style callers that only read
+         *      `items` never see the loss (`total` is honest, but nobody compares). This
+         *      walks the bounded cursor path (_listByCursor) page by page instead: the
+         *      result has no upper bound, and peak per-round-trip cost is one page.
+         * @attention Entities created before the cursor ZSET existed need a one-time
+         *      migrateCursorIndex(); rather than making every deploy environment remember
+         *      to run it (forgetting = a hard 500), this self-heals: it catches that
+         *      specific fail-loud refusal, runs the idempotent migration in place, and
+         *      retries — the migration's full-scan cost is paid exactly once.
+         *      (Upstreamed from finance's insight listAll wrapper.)
+         * @returns {Promise<{items: Array, total: number, truncated: false}>} newest-first.
+         */
+        async listAll({ status = STATUS_ACTIVE, includeDeleted = false, filter, keyword, pageSize = 1000 } = {}) {
+            const walk = async () => {
+                const out = [];
+                let cursor = null;
+                do {
+                    const { items, nextCursor } = await this.list({ cursor, limit: pageSize, status, includeDeleted, filter, keyword });
+                    out.push(...items);
+                    cursor = nextCursor;
+                } while (cursor !== null);
+                return out;
+            };
+            let items;
+            try {
+                items = await walk();
+            } catch (e) {
+                if (!/sorted index not migrated/.test(String(e && e.message))) throw e;
+                await this.migrateCursorIndex();
+                items = await walk();
+            }
+            return { items, total: items.length, truncated: false };
         },
 
         /**
          * Retrieve multiple entities by ID list.
          */
-        async multiGet({ ids, status = STATUS_ACTIVE, limit, offset, includeDeleted = false, filter }) {
-            if (!ids || !Array.isArray(ids) || ids.length === 0) return { items: [], total: 0 };
+        async multiGet({ ids, status = STATUS_ACTIVE, limit, offset, includeDeleted = false, filter, onTruncate }) {
+            if (!ids || !Array.isArray(ids) || ids.length === 0) return { items: [], total: 0, truncated: false };
             // 行隔离：multiGet 也被服务直接调用（不只经 list），这里再合一次。经 list 进来时
             // filter 已含 owner 谓词，重复合入是纯谓词、幂等无害。
             filter = ownerFilter(filter);
@@ -545,9 +593,23 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             const end = limit ? start + limit : filtered.length;
             const paged = filtered.slice(start, end);
 
+            // Truncation is a signal, never silent: `truncated` = this response does not
+            // contain every match (true on any non-final page — pagers read `total` and
+            // don't care; fetch-all-by-big-limit callers finally get told). onTruncate
+            // 'throw' upgrades the signal to an error for callers where a short list is
+            // worse than a crash.
+            const truncated = paged.length < filtered.length;
+            if (truncated && onTruncate === 'throw') {
+                throw jsonrpc.INVALID_PARAMS(
+                    `list truncated: ${filtered.length} matched, only ${paged.length} returned ` +
+                    `(offset=${start}, limit=${limit}). Page through, or use listAll() for the full set.`
+                );
+            }
+
             return {
                 items: paged,
-                total: filtered.length
+                total: filtered.length,
+                truncated
             };
         },
 

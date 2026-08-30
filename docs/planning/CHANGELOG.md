@@ -11,6 +11,31 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+### Added — Entity Factory 取全量一等语义 `listAll()`；截断不再静默
+
+> 来源：[`docs/feedback/done/entity-list-fetch-all-semantics.md`](../feedback/done/entity-list-fetch-all-semantics.md)
+> （finance 实测 v1.1.14：科目余额 2,715 行/月，`list({ limit: maxList })` 这类
+> 「够大了吧」的数字撞上限后**静默少行**，报表 YTD 悄悄少算、无任何报错）。
+
+- **`entity.listAll({ status, includeDeleted, filter, keyword, pageSize })`**：取全量的一等
+  形态，内部走 cursor 分页逐页取尽——结果无上限、峰值内存一页，取代
+  `list({ limit: <大数> })`。**含就地迁移自愈**：存量实体缺 cursor ZSET 时框架会 fail-loud
+  拒绝（刻意设计），`listAll` 捕获该错误后跑一次幂等的 `migrateCursorIndex()` 再重试，
+  免掉「每个部署环境都要记得人肉跑迁移、忘了就是全站报表 500」。自愈逻辑上收自 finance。
+- **截断响亮化**：`list()`/`multiGet()` 返回新增 **`truncated`** 布尔（offset 路径任何
+  非末页为 true）；新增 **`list({ onTruncate: 'throw' })`** 把截断升级为 `-32602` 报错，
+  文案指向 `listAll()`——给报表/财务这类「错的数字比崩溃更糟」的调用方。
+- **`batchSize` 的既有隐藏语义写进契约**：设了 `batchSize` 时 `limit`/`offset` 被忽略、
+  返回全部匹配（长期行为，此前未文档化），JSDoc 写明并指向 `listAll()`。
+- 文档：`library/search.js` 的 `@usage` 示例不再教 `limit: 9999`；scaffold 的
+  `solo-service` skill 软删标准补出口——**整批替换语义**的实体（导入型）应显式声明
+  `softDelete: false` 并写明理由（软删 churn 数据会把墓碑永久堆进 INDEX，实测某实体
+  87% 键为 DELETED，每次 list 都在为死数据付读取成本）。
+- 新增 8 条用例（`entity-cursor-pagination.test.js`）；白名单 130 套 2113 例全绿。
+
+下游 action：无（纯新增；`truncated` 是新字段，既有读 `items`/`total` 的调用方零变化）。
+升级后可把自建的「全量读循环 + 迁移自愈」包装换成 `entity.listAll()`。
+
 ### Fixed — gemini provider 不再把错误吞成 `success: true`；已下线的默认模型全量更换
 
 > 来源：[`docs/feedback/done/agent-provider-swallows-errors-as-success.md`](../feedback/done/agent-provider-swallows-errors-as-success.md)

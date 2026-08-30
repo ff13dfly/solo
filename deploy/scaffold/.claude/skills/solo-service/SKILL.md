@@ -66,8 +66,14 @@ Router capability catalog in Redis — you don't guess it. These docs supply the
   has already passed — do NOT re-check method-level permission. You DO still enforce **data-level**
   `constraints` yourself (row scoping / ownership).
 - **Entities go through the Entity Factory** (`api/library/entity.js`): it gives you CRUD + indexing
-  + MULTI/EXEC + WAL for free. Declare `sensitiveFields` explicitly in `entities.js`. Implement
-  logical soft-delete (`is_deleted`), never hard-delete. (autocheck `entity-factory` / `soft-delete-check`)
+  + MULTI/EXEC + WAL for free. Declare `sensitiveFields` explicitly in `entities.js`. Default to
+  logical soft-delete (`softDelete: true` → status `DELETED`, restorable). Exception: batch-replace
+  entities (import-style, where a re-import rewrites the whole period and restoring a single row is
+  meaningless) should declare `softDelete: false` instead, with the rationale stated in
+  `entities.js` — soft-deleting churn data piles tombstones into the INDEX that every `list()`
+  pays to read forever. Either way, logic and `entities.js` must agree. And for "give me
+  everything" reads use `entity.listAll()`, never `list({ limit: <a big number> })` — anything
+  past the guess is silently dropped. (autocheck `entity-factory` / `soft-delete-check`)
 - **Every `*.list` method declares its pagination — or declares that it has none.** The rule is a
   fork, not a blanket "always paginate":
   - **Unbounded collection** (user data, anything that grows with usage) → declare `limit` /

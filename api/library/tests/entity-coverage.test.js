@@ -432,13 +432,13 @@ describe('list — batched path', () => {
 describe('list / multiGet — edges', () => {
     test('list on an empty index returns {items:[], total:0}', async () => {
         const empty = createEntity(redis, { serviceName: SERVICE, entityName: 'EMPTY', idLength: 8 });
-        expect(await empty.list()).toEqual({ items: [], total: 0 });
+        expect(await empty.list()).toEqual({ items: [], total: 0, truncated: false });
     });
 
     test('multiGet: empty / null / non-array ids short-circuit', async () => {
-        expect(await listEntity.multiGet({ ids: [] })).toEqual({ items: [], total: 0 });
-        expect(await listEntity.multiGet({ ids: null })).toEqual({ items: [], total: 0 });
-        expect(await listEntity.multiGet({ ids: 'nope' })).toEqual({ items: [], total: 0 });
+        expect(await listEntity.multiGet({ ids: [] })).toEqual({ items: [], total: 0, truncated: false });
+        expect(await listEntity.multiGet({ ids: null })).toEqual({ items: [], total: 0, truncated: false });
+        expect(await listEntity.multiGet({ ids: 'nope' })).toEqual({ items: [], total: 0, truncated: false });
     });
 
     test('multiGet: null rows dropped; status filter; includeDeleted; filter', async () => {
