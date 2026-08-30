@@ -150,6 +150,7 @@ async function bootstrap() {
                     'ping': () => ({ status: 'ok', uptime: process.uptime(), version: config.version }),
                     'methods': () => ({ methods: introspectionMethods, description: config.description || {} }),
                     'storage.asset.upload': (p) => logic.asset.upload(p, ctx),
+                    'storage.asset.external': (p) => logic.asset.external(p, ctx),
                     'storage.asset.list': (p) => logic.asset.list(p, ctx),
                     'storage.asset.get': (p) => logic.asset.get(p, ctx),
                     'storage.asset.resolve': (p) => logic.asset.resolve(p, ctx),

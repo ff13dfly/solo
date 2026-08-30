@@ -60,6 +60,21 @@ const ASSET_UPLOAD = [
     { name: 'thumbnails',   type: 'object' },   // undefined unless mode='pregenerate' + image → not required
 ];
 
+// External placeholder (storage.asset.external): no bytes ⇒ sha256/key/path are null and
+// `sizeVerified` is always false — the contract says "storage did not look".
+const ASSET_EXTERNAL = [
+    { name: 'id',           type: 'string',  required: true },
+    { name: 'kind',         type: 'string',  required: true },   // always 'external'
+    { name: 'externalUrl',  type: 'string',  required: true },
+    { name: 'url',          type: 'string',  required: true },   // === externalUrl
+    { name: 'originalName', type: 'string',  required: true },
+    { name: 'mimeType',     type: 'string',  required: true },
+    { name: 'size',         type: 'number' },                    // null when not declared
+    { name: 'sizeVerified', type: 'boolean', required: true },   // always false
+    { name: 'visibility',   type: 'string',  required: true },
+    { name: 'createdAt',    type: 'string',  required: true },
+];
+
 module.exports = [
     {
         name: 'storage.asset.upload',
@@ -74,6 +89,25 @@ module.exports = [
         description: 'Upload file and return CAS asset ID (records owner + visibility)',
         ai: true,
         public: false   // narrowed: writes need an authenticated owner (anon upload closed)
+    },
+    {
+        name: 'storage.asset.external',
+        params: [
+            { name: 'url', type: 'string', required: true, maxLength: 2048, desc: 'http(s) URL served by the owning service' },
+            { name: 'filename', type: 'string', maxLength: 128, desc: 'Original filename' },
+            { name: 'mimeType', type: 'string', maxLength: 64, desc: 'MIME type' },
+            { name: 'size', type: 'number', desc: 'Declared byte size — NOT verified by storage' },
+            { name: 'visibility', type: 'string', maxLength: 16, desc: 'public | internal | private (default: internal)' }
+        ],
+        returns: ['id', 'kind', 'externalUrl', 'size', 'url'],
+        returns_schema: ASSET_EXTERNAL,
+        description: 'Register a placeholder for a file this storage does NOT hold, so it still gets an assetId. '
+            + 'For large files the box serves itself (upload caps at ~3.7MB base64 through the Router). '
+            + 'Storage stores only the pointer: no bytes, no sha256/dedup, no thumbnails, `size` is unverified, '
+            + 'and once the URL is handed out storage is off the byte path — access control on the payload is '
+            + 'the owning service\'s job. The pointer can dangle if that service deletes its copy.',
+        ai: true,
+        public: false   // writes need an authenticated owner, same as upload
     },
     {
         name: 'storage.asset.get',

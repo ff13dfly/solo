@@ -23,6 +23,33 @@ CAS（内容寻址）文件存储：文件按 SHA-256 去重，同一内容永�
 短路，返回**同一个** asset，不产生重复。批量灌数据中断后**直接整批重跑即可**，
 无需自己记"哪些传过"。
 
+## 配方一之二：大文件（超过 ~3.7MB）—— 占位资产
+
+`upload` 走 base64 + JSON-RPC + Router，声明上限 `5242880` base64（原文件 ~3.7MB），
+还要吃 Router 的 10s 转发超时。**大文件不要硬塞这条路**，改成「自己存字节 + 在 storage 登记指针」：
+
+1. 你的服务自己保存文件并对外提供一个 http(s) URL（分片、断点续传、CDN 都由你决定 ——
+   框架刻意不做这套，因为各家需求形态差太远）。
+2. `storage.asset.external { url, filename, mimeType, size, visibility }`
+   → 返回 `{ id, kind:'external', externalUrl, url, ... }`，`id` 同样是 assetId，
+   业务实体照旧用 `assetIds` 挂引用，**下游取数的写法完全不变**。
+3. `storage.asset.get/resolve/multi` 对它照常工作，`url` 就是你给的那个地址。
+
+**storage 对这类资产不再保证什么（先看清楚再用）**：
+
+| 事项 | 普通 upload | external 占位 |
+|---|---|---|
+| 字节存在 storage | ✅ | ❌ 你自己存 |
+| **请求时返回数据** | ✅ 对象存储直接给字节 | ❌ **只给指针** —— storage 不代理转发，客户端拿到 URL 后自己去你的服务取 |
+| sha256 内容去重 | ✅ 同文件复用同一资产 | ❌ 无 sha256，两次登记 = 两个资产 |
+| `size` 可信 | ✅ 实测字节数 | ❌ 你申报的，`sizeVerified:false`，**别拿它计费或做配额** |
+| 缩略图 / 图片处理 | ✅ | ❌ 无字节可派生 |
+| **字节面访问控制** | storage + `STORAGE_ACCESS` 两层 | ❌ **完全由你负责** —— `visibility` 只挡「谁能拿到这个指针」，URL 一旦发出去，storage 不在字节路径上，管不了 |
+| 删除 | 引用计数到 0 才清字节 | 只删记录；**你那份文件要自己删** |
+
+⚠️ **悬空指针**：你把自己那份文件删了，storage 里的记录还在、`resolve` 照样返回那个死链。
+storage 无法感知，两边同步是你的责任（删文件时一并 `storage.asset.delete`）。
+
 ## 配方二：建"带图实体"的正确顺序
 
 ```

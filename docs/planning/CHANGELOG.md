@@ -13,6 +13,51 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
+## [v1.2.11] — 2026-08-30
+
+### Added — `storage.asset.external`：大文件的占位资产（字节归箱子，引用身份归框架）
+
+> 起因：`storage.asset.upload` 收 base64、经 JSON-RPC 过 Router，声明上限 5,242,880
+> （原文件 ~3.7MB）+ 10s 转发超时 —— 视频、压缩包、导出件塞不进这条路。而下发文档
+> （`modeling.md §0`）又写着「别建 `file` / `upload` 服务」，于是箱子被夹在中间：
+> 自建要重造一整套、改 storage 是只读区（派生项目只有 bundle、没源码）。
+
+- **`storage.asset.external { url, filename, mimeType, size, visibility }`**：登记一个
+  storage **不持有字节**的占位资产，返回正常 assetId ⇒ 业务实体照旧用 `assetIds` 挂引用，
+  下游取数写法完全不变。**分片 / 断点续传 / 进度 / CDN 一概不进框架**（各家需求形态差太远），
+  框架只保证「引用身份」统一。
+- **实现要点：做成元数据 `kind:'external'` + `externalUrl`，而不是把 `REDIRECT:` 写进文件内容。**
+  后者是带内信令，且会踩一个硬伤——占位内容相同 ⇒ sha256 相同 ⇒ **CAS 去重索引把第二次
+  登记合并成第一个的 assetId**（两个不同的大文件，一条记录）。external 的 `sha256` 恒为
+  `null`，从根上不进去重索引。已用测试钉住。
+- 连带三处必须分叉（否则各是一个 bug）：`urlFor` 返回指针而非对象存储 URL；`delete` 短路
+  （无字节可清，且 `sha256:null` 会让所有 external 挤进同一个 `REFCOUNT:null` 桶、并让全扫
+  兜底把首个匹配当成可清）；`thumbnailRebuild` 跳过（`image/*` 的占位会去读不存在的原件）。
+- **storage 对这类资产停止保证什么，逐项写死**（不写清楚必然再踩）：只给指针**不返回字节**
+  （storage 不代理转发）· `size` 是申报值、`sizeVerified:false`，别计费/配额 · 无 sha256 去重 ·
+  无缩略图 · **字节面访问控制归下游**（`visibility` 只挡「谁能拿到指针」，URL 发出后 storage
+  不在字节路径上）· 指针会悬空（下游删了文件，记录还在、`resolve` 返回死链）。
+- 新增 12 条 hermetic 用例（`apps/storage/tests/asset-external.test.js`，已进白名单）。
+
+### Changed — 下发文档三处拦截，避免箱子绕路
+
+同一条规矩按「决策 → 划分 → 使用」分三层落，不是抄三遍：
+
+- **`deploy/scaffold/.claude/skills/solo-service/SKILL.md`**（每轮 AI 会话加载，最早拦截）：
+  新增红线一条，写服务代码之前就告知上限、三条弯路（自建并行服务 / 改只读区 / 调大上限）
+  和正解。
+- **`docs/authoring/modeling.md §0`**：服务划分表新增「大文件」一行 + ★ 详述节。原第 22 行
+  「别建 `file`/`upload` 服务」正是把人送上绕路的起点，现在带上了边界与出口；
+  §5「常见走偏」补一行「为大文件另起一套存储」（症状：业务实体出现两种文件引用方式）。
+- **`api/apps/storage/GUIDE.md`**：新增「配方一之二」，完整对照表（普通 upload vs external
+  占位），供已在用 storage 的调用方现查。
+
+下游 action：无（`upload` 一行未动，纯新增方法 + 文档）。⚠️ 但客户端取数若要支持大文件，
+需能识别 `kind:'external'`——url 用法不变，只是不能再假设有 thumbnails、`size` 可信。
+派生项目要跑 `deploy/upgrade.sh` 才会拿到新的下发文档。
+
+---
+
 ## [v1.2.10] — 2026-08-30
 
 ### Added — 反馈实际场景（21,000 行）成为会红的回归断言

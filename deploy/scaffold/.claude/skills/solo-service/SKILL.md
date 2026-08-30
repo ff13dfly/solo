@@ -59,6 +59,18 @@ Router capability catalog in Redis — you don't guess it. These docs supply the
   wins**; say so in the header. Refer to methods by their **fully-qualified** `{service}.{entity}.{action}`
   name, never a bare `entity.action` shorthand — an agent will copy it straight into a call.
   Copy the shape from `api/sample/GUIDE.md`. (autocheck `guide-check`, WARN)
+- **Files go to `storage`, and big files go there as a POINTER.** `storage.asset.upload` takes
+  base64 over JSON-RPC (declared cap 5,242,880 ≈ **3.7MB** of file) through a Router with a 10s
+  forward timeout — video, archives and exports do not fit, and raising the cap does not help
+  (base64 inflates 33%, the payload sits in memory three times over). Do **not** answer that by
+  building a parallel file service or by editing `storage` (it is `[Solo]`, shipped as a bundle —
+  your edit is deleted on upgrade). Serve the bytes from your own service, then register the
+  pointer: `storage.asset.external { url, filename, mimeType, size, visibility }` returns a normal
+  assetId, so business entities keep referencing files uniformly. Chunking / resume / CDN are
+  yours to design — the frame deliberately does not. What storage stops guaranteeing (pointer
+  only, no bytes proxied; `size` unverified; no sha256 dedup; no thumbnails; access control on the
+  payload is yours; the pointer can dangle) is spelled out in `docs/authoring/modeling.md §0 ★`
+  and `system.guide storage`. **Read that table before choosing this path.**
 - **No service-to-service direct calls.** Never HTTP/POST another service. Go through the Router:
   `relay.call(...)` for a synchronous reply, or return `_tasks` and let the Router dispatch
   asynchronously, or return `_event` to fan out a fact. (autocheck `relay-check`)

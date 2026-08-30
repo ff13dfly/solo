@@ -82,6 +82,7 @@ module.exports = {
         '<rootDir>/apps/storage/tests/oss-keying.test.js',
         '<rootDir>/apps/storage/tests/oss-provider.test.js',
         '<rootDir>/apps/storage/tests/asset-authz.test.js',
+        '<rootDir>/apps/storage/tests/asset-external.test.js',
         '<rootDir>/apps/storage/tests/returns-contract.test.js',
         '<rootDir>/library/tests/optimistic.test.js',
         '<rootDir>/library/tests/entity-wal-stream.test.js',

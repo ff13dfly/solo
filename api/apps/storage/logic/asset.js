@@ -149,6 +149,18 @@ module.exports = (redisClient, config, store) => {
     // Legacy assets without a visibility field behave as 'internal'.
     const VISIBILITIES = ['public', 'internal', 'private'];
 
+    // Asset kinds. Absent/'file' = storage owns the bytes (every asset before this
+    // existed). 'external' = a placeholder: the box's own service owns the bytes and
+    // storage only holds the pointer + the reference identity (assetId), so business
+    // entities can keep using assetIds uniformly for files storage never touches.
+    // @why not a marker string inside the file content: that is in-band signaling —
+    //      any consumer reading bytes without knowing the convention gets a string where
+    //      a file should be, and (worse) two placeholders with identical marker text hash
+    //      to the same sha256 and collide in the CAS dedup index (see upload step 2).
+    //      A metadata field is out-of-band: sha256 stays null, so external assets never
+    //      enter the dedup index at all.
+    const EXTERNAL_KIND = 'external';
+
     function canRead(meta, ctx) {
         if (ctx === undefined) return true;
         if (ctx && ctx.permit === 'admin') return true;
@@ -291,6 +303,7 @@ module.exports = (redisClient, config, store) => {
     const thumbLabels = () => Object.keys(thumbSizes);
 
     function thumbnailsMapFor(sha256, mimeType) {
+        if (!sha256) return undefined;   // external placeholder — no bytes, no derivatives
         if (thumbMode !== 'pregenerate' || !isImage(mimeType)) return undefined;
         const map = {};
         for (const label of thumbLabels()) map[label] = store.resolveUrl(thumbKeyFor(sha256, label));
@@ -298,6 +311,12 @@ module.exports = (redisClient, config, store) => {
     }
 
     function urlFor(meta, size) {
+        // External placeholder: storage holds no bytes for this asset, only a pointer to
+        // the service that does. Resolution is the ONLY thing storage contributes — it
+        // never proxies the payload (that is the entire point: a large file must not flow
+        // through the JSON-RPC plane). No thumbnails either; there is nothing to derive
+        // them from, so a size hint is ignored rather than answered with a broken URL.
+        if (meta.kind === EXTERNAL_KIND) return meta.externalUrl || null;
         if (size && thumbMode === 'pregenerate' && isImage(meta.mimeType) && thumbSizes[size]) {
             return store.resolveUrl(thumbKeyFor(meta.sha256, size));
         }
@@ -462,6 +481,85 @@ module.exports = (redisClient, config, store) => {
         /**
          * resolve — map an asset ID (optionally a thumbnail size) to a public URL.
          */
+        /**
+         * external — register a placeholder for a file this storage does NOT hold.
+         *
+         * @why Large files (video, archives, dumps) cannot go through storage.asset.upload:
+         *      it takes base64 over JSON-RPC through the Router (declared cap ~3.7MB binary,
+         *      a 10s forward timeout, and the payload sits in memory three times over).
+         *      Chunked/resumable upload is deliberately NOT in the frame — the requirements
+         *      differ too much per box. Instead the box serves its own bytes and registers
+         *      the pointer here, so the file still has an assetId and business entities keep
+         *      referencing files uniformly (assetIds) whether or not storage holds them.
+         * @attention What storage stops guaranteeing for these assets — state it, don't
+         *      discover it:
+         *   1. **Access control is the downstream service's job.** `visibility` still gates
+         *      the RPC (who may resolve the pointer), but once the URL is out, storage does
+         *      not sit on the byte path and cannot enforce anything. Handing a `public`
+         *      external asset to a caller is handing out whatever that URL serves. This is
+         *      the same two-layer trap docs/feedback/done/storage-visibility-semantics.md
+         *      documented for the byte plane — here it is total, not partial.
+         *   2. **`size` is declared, never verified.** Storage never sees the bytes; the
+         *      value is whatever the registrant claimed. Do not bill or quota on it.
+         *   3. **No sha256, therefore no dedup and no content identity.** Two registrations
+         *      of the same underlying file are two assets.
+         *   4. **No thumbnails / image processing** — nothing to derive them from.
+         *   5. **The pointer can dangle.** If the box deletes its copy, this record still
+         *      resolves to a dead URL. Storage cannot detect it; the owner must keep both
+         *      sides in step (delete the asset when deleting the file).
+         */
+        async external({ url, filename, mimeType, size, visibility }, ctx) {
+            if (!url || typeof url !== 'string') throw jsonrpc.INVALID_PARAM('url is required');
+            // Only http(s): a pointer is handed to browsers and other clients, so file://
+            // and friends are both useless and a small SSRF-shaped foot-gun.
+            if (!/^https?:\/\//i.test(url)) throw jsonrpc.INVALID_PARAM('url must be http(s)');
+
+            const owner = (ctx && ctx.user) || null;
+            // Same normalization + validation as upload() (asset.js upload step 1).
+            const vis = visibility || (config.storage && config.storage.defaultVisibility) || 'internal';
+            if (!VISIBILITIES.includes(vis)) {
+                throw jsonrpc.INVALID_PARAMS(`visibility must be one of: ${VISIBILITIES.join(', ')}`);
+            }
+
+            let assetId;
+            let success = false;
+            let attempts = 0;
+            const assetPrefix = config.redis.assetPrefix;
+            while (!success && attempts < 10) {
+                assetId = generator.generateId(config.idLengths.asset);
+                const r = await redisClient.set(`${assetPrefix}${assetId}`, JSON.stringify({}), { NX: true });
+                if (r === 'OK' || r === true) success = true; else attempts++;
+            }
+            if (!success) throw jsonrpc.INTERNAL_ERROR('Failed to generate unique assetId after 10 attempts');
+
+            const metadata = {
+                id: assetId,
+                kind: EXTERNAL_KIND,
+                externalUrl: url,
+                originalName: filename || 'unnamed',
+                mimeType: mimeType || 'application/octet-stream',
+                // sha256/key/path stay null: no bytes ⇒ never joins the CAS dedup index,
+                // never gets a refcount, and delete() must not try to purge an object.
+                sha256: null,
+                size: Number.isFinite(size) ? size : null,
+                sizeVerified: false,
+                key: null,
+                path: null,
+                owner,
+                visibility: vis,
+                createdAt: new Date().toISOString()
+            };
+
+            await redisClient.set(`${assetPrefix}${assetId}`, JSON.stringify(metadata));
+            const createdAtMs = new Date(metadata.createdAt).getTime();
+            await redisClient.zAdd(config.redis.assetIdSortedSet, { score: createdAtMs, value: assetId });
+            if (owner) await redisClient.zAdd(`${config.redis.assetByOwnerPrefix}${owner}`, { score: createdAtMs, value: assetId });
+            if (vis === 'public') await redisClient.zAdd(config.redis.assetPublicSortedSet, { score: createdAtMs, value: assetId });
+            else if (vis === 'internal') await redisClient.zAdd(config.redis.assetInternalSortedSet, { score: createdAtMs, value: assetId });
+
+            return { ...metadata, url: urlFor(metadata) };
+        },
+
         async resolve({ id, size }, ctx) {
             const meta = await this.get({ id }, ctx); // validates existence + access
             return { url: urlFor(meta, size) };
@@ -484,6 +582,13 @@ module.exports = (redisClient, config, store) => {
             if (meta.owner) await redisClient.zRem(`${config.redis.assetByOwnerPrefix}${meta.owner}`, id);
             if (meta.visibility === 'public') await redisClient.zRem(config.redis.assetPublicSortedSet, id);
             else if (meta.visibility === 'internal') await redisClient.zRem(config.redis.assetInternalSortedSet, id);
+
+            // External placeholder: storage never held bytes for it, so there is no object
+            // to purge and no refcount to decrement. Touching either would be wrong —
+            // sha256 is null, so the key would be `...REFCOUNT:null` (a shared bucket every
+            // external asset would fight over) and the pre-migration fallback below would
+            // full-scan for `m.sha256 === null` and happily "purge" on the first match.
+            if (meta.kind === EXTERNAL_KIND) return { deleted: id };
 
             try {
                 const refcountKey = `${config.redis.sha256RefcountPrefix}${meta.sha256}`;
@@ -533,6 +638,10 @@ module.exports = (redisClient, config, store) => {
                 if (!raw) continue;
                 const meta = JSON.parse(raw);
                 if (!isImage(meta.mimeType)) { skipped++; continue; }
+                // External placeholders have no stored original to read back from — an
+                // image/* mimeType would otherwise send this into the provider for bytes
+                // that were never there.
+                if (meta.kind === EXTERNAL_KIND) { skipped++; continue; }
 
                 let original;
                 try {
