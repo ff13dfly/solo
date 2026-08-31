@@ -159,3 +159,6 @@ docs/private.md
 
 # 产品愿景/灵感backlog — 保留在本地，不进仓库源真相面（易被误读为路线图/现状）
 docs/idea/
+
+# AI 工具本地记忆/状态目录（不进公开仓库历史）
+.workbuddy-ai/
