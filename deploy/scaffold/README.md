@@ -156,7 +156,7 @@ bash deploy/run.sh
     ├─ 读 .solo-version → 定位 api/publish/solo.v{ver}.js
     │
     ├─ 确保 Redis 在跑 → seed-registry.js 写服务注册表到 Redis(active_services)
-    │      ↑ 关键：没这步 router 启动只认识 administrator，user.* / planner.* 等全 -32601
+    │      ↑ 关键：没这步 router 启动只认识 administrator，user.* / storage.* 等全 -32601
     │
     ├─ 设 SOLO_SERVICES_JSON=deploy/solo-services.json
     │      ↓
@@ -190,7 +190,7 @@ bash deploy/run.sh
 
 ### 服务注册（为什么 run.sh 要跑 seed-registry）
 
-Router 启动时**只认识 administrator**，其余服务必须登记进 Redis 的 `active_services`，Router 才会把方法路由过去——否则 `user.register`、`planner.*`、你的私有 app 方法全部返回 `-32601 Method not found`。
+Router 启动时**只认识 administrator**，其余服务必须登记进 Redis 的 `active_services`，Router 才会把方法路由过去——否则 `user.register`、`storage.*`、你的私有 app 方法全部返回 `-32601 Method not found`。
 
 `deploy/seed-registry.js` 在 bundle 启动前，把 `solo-services.json` + `services.json` 里的每个服务（router 除外）写成 stub（url + 端口，methods 留空）存进 `active_services`。Router boot 时载入这份清单，约 2 秒后自动内省（`methods` RPC）补全每个服务的方法表。`run.sh` 在 Redis 就绪后会自动调它，**幂等**——已在表里的服务跳过。
 

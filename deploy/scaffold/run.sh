@@ -371,7 +371,7 @@ fi
 # --- 7b. Seed Router service registry ---
 #
 # The Router boots knowing only the administrator service; every other method
-# (user.register, planner.*, your private apps) returns -32601 until the service
+# (user.register, storage.*, your private apps) returns -32601 until the service
 # is registered. seed-registry.js writes stub entries into Redis `active_services`
 # from solo-services.json + services.json BEFORE the bundle starts, so the Router
 # loads them on boot and its updateCapabilityMap (~2 s later) fills in methods.

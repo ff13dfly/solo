@@ -13,6 +13,38 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
+## [v1.2.12] — 2026-08-31
+
+### Deprecated — `planner` 不再随新项目下发（第一步：只停下发，不动 bundle）
+
+> 起因：`CLAUDE.md` §1 写着「纯框架/基础设施层，**没有业务层**」，而 `planner`（日程 + 待办）
+> 是纯业务——它是 `modeling.md` 服务划分表里唯一一行业务，也是那句话唯一的例外。
+> 实扫 8 个下游：**项目自写调用 0**，它在下游出现的每一处都是框架自己下发的示例材料
+> （`workflows.md`、两个示例 workflow、`risk.test.js`、bundle 自身）。
+> 换句话说，它唯一的实际角色是**充当自家文档的演示主角**——而演示不需要一个真跑的服务。
+
+- **`deploy/scaffold/services.solo.json` 移除 planner（13 → 12）** ⇒ `init.sh` 建的新项目
+  不再启动它。`SOLO_COUNT` 由模板长度推导（`init.sh:329`），端口段自动收到 12 个，无需手改。
+- **下发的两个 workflow 示例换主角**：`planner.todo.create` → **`storage.asset.external`**。
+  挑它是因为只写元数据、**不碰字节、不发外部请求**，反复试跑没有副作用外溢，且 storage 仍是
+  默认服务，保住了「起栈即可加载试跑」。`modeling.md` 划分表那一行改成「业务实体 = 你自己的服务」。
+- **🔴 本次刻意不动 `deploy/services.json`，也不删 `api/apps/planner/`。** 原因是
+  `gen-entry.js:179-183` 是 **fail-closed**：`solo-services.json` 里出现 REGISTRY 没有的服务名
+  会 `process.exit(1)`——**不是跳过那一个，是整个 bundle 的 12 个服务全不启动**。而
+  `deploy/solo-services.json` 是 **[Project] 区**（`upgrade.sh:325-326` 明列「Left untouched」），
+  升级永不代改。现有 8 家里 **6 家**（colony·finance·overview·trend·steward·awareness）
+  的 `solo-services.json` 仍列着 planner，此刻从 `services.json` 摘掉就会让它们下次升 bundle
+  整栈起不来。所以 planner 仍在 bundle 的 REGISTRY 里，**现有栈一切照旧**。
+- **第二步（等下游摘干净后，或 v2）**才做：从 `deploy/services.json` 移除 + 删
+  `api/apps/planner/` + 删 `e2e/suites/22-planner.e2e.test.js` + `CLAUDE.md` §2 表 14 → 13。
+
+下游 action：**用不到 planner 的项目，把 `deploy/solo-services.json` 里 `planner` 那一节删掉**
+（它是你的文件，升级不会代改；删完 `deploy/run.sh` 重启即可，端口空一个不影响）。
+仍在用 `planner.*` 的项目：本版无需任何动作，但请知悉它已进入废弃期——把日程/待办搬进你自己的
+服务（`api/apps/`，用 Entity Factory），后续某个版本会从 bundle 里移除它。
+
+---
+
 ## [v1.2.11] — 2026-08-30
 
 ### Added — `storage.asset.external`：大文件的占位资产（字节归箱子，引用身份归框架）

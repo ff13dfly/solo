@@ -215,9 +215,12 @@ create  ──►  PENDING_REVIEW  ──►  approve(审批人 ≠ 提交人)  
 
 | 文件 | 演示 |
 |------|------|
-| `01-sync-minimal.json` | 最简单：同步单步（`planner.todo.create`） |
-| `02-sync-multistep-condition.json` | 两步链路：`$step` 取上一步结果 + JsonLogic `condition` + `ignore_error`（`notification.send` → `planner.todo.create`） |
+| `01-sync-minimal.json` | 最简单：同步单步（`storage.asset.external`） |
+| `02-sync-multistep-condition.json` | 两步链路：`$step` 取上一步结果 + JsonLogic `condition` + `ignore_error`（`notification.send` → `storage.asset.external`） |
 | `03-event-webhook.json` | 事件触发：`allowed_triggers:["event"]` + `event_subscriptions` + `$input.data.*`（`notification.send`） |
 
-> 三个示例只用**随栈默认启动的核心服务** `planner` + `notification`，起栈即可加载试跑。换成你项目自己的方法时，照 §1 的目录改 `service`/`method`/`params`。
+> 三个示例只用**随栈默认启动的核心服务** `storage` + `notification`，起栈即可加载试跑。换成你项目自己的方法时，照 §1 的目录改 `service`/`method`/`params`。
+> 挑 `storage.asset.external` 当演示动作是有意的：它只写一条元数据记录，**不碰字节、不发外部请求**，
+> 所以反复试跑不会把东西发出去、也不会占空间（代价是库里会留下几条指向 `example.invalid` 的悬空指针资产，
+> 试完自己 `storage.asset.delete` 掉即可）。
 > 注意：`sample` 是**代码模板**（`api/sample/`），默认不随栈启动——要用 `sample.item.*` 得先在 `deploy/services.json` 注册它。

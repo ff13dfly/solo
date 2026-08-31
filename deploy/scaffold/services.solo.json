@@ -10,6 +10,5 @@
   { "name": "orchestrator",  "path": "core/orchestrator/index.js",  "port": 8408 },
   { "name": "storage",       "path": "apps/storage/index.js",       "port": 8409 },
   { "name": "fulfillment",   "path": "apps/fulfillment/index.js",   "port": 8410 },
-  { "name": "planner",       "path": "apps/planner/index.js",       "port": 8411 },
-  { "name": "approval",      "path": "apps/approval/index.js",      "port": 8412 }
+  { "name": "approval",      "path": "apps/approval/index.js",      "port": 8411 }
 ]
