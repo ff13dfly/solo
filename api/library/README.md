@@ -48,6 +48,28 @@ Using a shared library in a microservices environment involves a deliberate stra
 | `validate.js` | Param-string hygiene | `PATTERNS` registry + `checkString`/`hasControlChars`/`isBlank`/`normalizeString`. Backs the Router's param validator and per-service semantic checks (declare in the schema, enforce at the Router, implement here). |
 | `vector.js` | Vector search helpers | ⚠️ **未实现桩**（占位、零生产引用；见 `docs/planning/BACKLOG.md` §6）。设想：Embedding/KNN utilities over redis-stack。 |
 
+## Entity Factory 的边界：它维护什么、不维护什么
+
+`entity.js` 按 **id** 寻址。**按业务键**的索引不在框架职责内，是各服务自己的——这是刻意的
+划分（形状差得太远，收进来只会把 N 种手写变成 N 种配置），不是待补的缺口。逐项写死：
+
+| 能力 | Entity Factory | 你自己写的二级索引 |
+|---|---|---|
+| 按 id 的 CRUD + 索引 + MULTI/EXEC + WAL | ✅ 全包 | — |
+| 分页（`limit`/`offset`/`cursor`）、行隔离（`$owner`）、敏感字段掩码 | ✅ 全包 | — |
+| 按业务键 upsert（身份槽）/ 按 `requestId` 去重（幂等槽）/ 枚举集合 | ❌ **无原语** | 你写裸 Redis 键 |
+| 删除时清理你的键 | ❌ **无 hook，不通知** | 在你自己的 `delete` 里撤 |
+| 软删后把记录藏起来 | ⚠️ **只有 `list` 藏，`get` 不藏** | **你必须自己判 `status`** |
+
+🔴 **最后一行是唯一会静默咬人的那条**：`softDelete: true` 时 `delete` 只盖 `status='DELETED'`，
+`get({id})` **照常返回该记录**，而 `list()` 默认 `status = ACTIVE` 会过滤掉。于是存了 id 的
+幂等槽在重试时交回一条已删记录，调用方看到正常对象、日志打「已创建」，活儿静默丢掉。
+`.catch(() => null)` 挡不住——它只覆盖硬删。
+
+这个不对称**不能就地抹平**：`restore()` 正是靠 `get` 读出 DELETED 记录再翻回 ACTIVE
+（`entity.js` 的 `restore`），让 `get` 默认过滤会当场废掉它。所以它是要绕开的契约，不是 bug。
+下发给项目的完整说明在 `deploy/scaffold/docs/authoring/service.md` §6.6。
+
 ## Test Coverage
 
 Hermetic unit tests live in `tests/` (pure assertions, or a Map-backed **fake** redis — no real services, no network). They run in the CI green subset (`jest.ci.config.js`). When changing a covered module, keep its test green; when adding a module, add a test.

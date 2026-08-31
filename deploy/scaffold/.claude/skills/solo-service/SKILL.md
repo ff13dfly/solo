@@ -115,6 +115,23 @@ Router capability catalog in Redis — you don't guess it. These docs supply the
   acceptable in exactly one place: a boot-time one-shot index rebuild, marked `// SAFE:` with the
   reason on that line. (autocheck `pagination-safety` — also flags `sMembers` / `hGetAll` /
   `zRange(k, 0, -1)`; don't silence those with a bare `// SAFE:` unless the set is genuinely bounded.)
+- **Lookups by a business key are yours to build — and yours to clean up.** The Entity Factory
+  addresses records **by id only**. "Get-or-create this `{platform, slug}`", "has this `requestId`
+  already been handled", "which slugs exist under this platform" have no primitive in
+  `library/entity.js` — you write them as plain Redis keys, and that split is deliberate: the
+  shapes vary too much between services to be worth a framework abstraction. Two things the
+  framework will **not** do for you, both of which fail silently:
+  - **`get` does not filter tombstones; `list` does.** On a `softDelete: true` entity, `delete`
+    only stamps `status: 'DELETED'`, and `entity.get({ id })` still returns that record — while
+    `entity.list()` defaults to `status: ACTIVE` and hides it. So an idempotency slot that stores
+    an id hands back a **deleted** record on the retry: the caller gets a normal-looking object,
+    logs "already created", and the work is never redone. `.catch(() => null)` does **not** save
+    you — that only covers a *hard* delete. **Any secondary index storing an id must check
+    `rec.status !== 'DELETED'` itself.** The asymmetry can't be removed: `entity.restore()` reads
+    deleted records through `get`.
+  - **Deleting a record never touches your keys.** No hook fires. Whatever you `sAdd` / `zAdd` /
+    `set` on create, you undo in your own `delete` — including the "last member gone, so drop the
+    parent from its enumeration set" case, which is the one that gets forgotten.
 - **`app.listen` takes a host** — `app.listen(PORT, bindAddr('<service>'), cb)` with
   `bindAddr` from `api/library/ports.js`. Omitting the host makes Node bind **every
   interface**, so the day the box gets a public NIC your service is on the internet and

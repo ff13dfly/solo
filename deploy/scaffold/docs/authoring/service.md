@@ -287,7 +287,50 @@ autocheck 的 `pagination-safety` 规则会拦 `keys` / `sMembers` / `hGetAll` /
 
 ---
 
-## 7. 写完自查（8 条最常踩）
+## 6.6 ★ 按业务键找记录：二级索引是你的，墓碑判定也是你的
+
+上一节说「别扫 keyspace，用索引」，但它给的替代品 `entity.list({limit, cursor})` 是**按 id
+的游标遍历**——它解决内存问题，不解决**按业务键寻址**。而后者几乎每个服务都要：
+
+| 你要做的事 | Entity Factory 有吗 |
+|---|---|
+| `save({platform, slug})` 这种按业务键 upsert（身份槽） | ❌ 没有「按业务键 get-or-create」 |
+| 按 `requestId` 去重，重试不重复建（幂等槽） | ❌ 同上 |
+| 「这个平台下有哪些 slug」（枚举集合） | ❌ 走 `list` 就是全索引拉取再过滤 |
+
+**这三类你自己用裸 Redis 键写，是设计如此**——各服务的形状差得太远，收进框架只会把 30 种
+手写变成 30 种配置。但框架有两件事**不会**替你做，且两件都是**静默失败**：
+
+**(a) `get` 不过滤墓碑，`list` 过滤——存 id 的索引必然踩这个不对称。**
+
+`softDelete: true` 的实体，`delete` 只把 `status` 盖成 `'DELETED'`（`library/entity.js`
+的 `delete` → `update`）。于是：
+
+```
+entity.get({ id })      → 照常返回那条记录，status = 'DELETED'   ← 不过滤
+entity.list()           → 默认 status = ACTIVE，看不见它          ← 过滤
+```
+
+所以一个存了 id 的幂等槽，在重试时会把**已删记录**交回给调用方：
+
+```
+删掉工单 → 同 requestId 再 create → 命中槽 → get(id) → 拿到 status=DELETED 的对象
+  → 调用方看到一个长得很正常的记录，日志打「已创建」→ 这件事再也不会被做一遍
+```
+
+🔴 **`.catch(() => null)` 挡不住**——它只覆盖**硬删**；软删的记录是**读得到**的。
+**任何存 id 的二级索引，必须自己判 `rec.status !== 'DELETED'`。**
+
+> 这个不对称**不能就地抹平**：`entity.restore()` 正是靠 `get` 读出 DELETED 记录再翻回
+> ACTIVE，让 `get` 默认过滤会当场废掉 restore。所以它是要绕开的契约，不是待修的 bug。
+
+**(b) 删记录不会碰你的键。** 没有任何 hook 会触发。create 时 `sAdd` / `zAdd` / `set` 了什么，
+就要在自己的 `delete` 里原样撤掉——**包括「最后一个成员没了，父项也该从枚举集合里退场」**
+这一步，它是最常被忘掉的那个（父项留下来变成一个「什么都没有」的空条目，只增不减）。
+
+---
+
+## 7. 写完自查（9 条最常踩）
 
 1. **声明↔注册不同步** → `autocheck --static` 直接红。先跑它。
 2. **自己重写了 library 已有的东西**（category/entity/index/auth）→ 回 §0/§4 改成 `require` + 挂载。
@@ -300,5 +343,8 @@ autocheck 的 `pagination-safety` 规则会拦 `keys` / `sMembers` / `hGetAll` /
    直接对外。接 `bindAddr('<service>')`（§2）。
 8. **`walContext.run` 手写 store 字面量** → passport 外部会话的行隔离（`$owner`）进不了
    Entity Factory，外部主体能读全表且零告警。用 `requestContext(req)`（§2）。
+9. **手写的二级索引（身份槽/幂等槽/枚举集合）没判墓碑、没配清理** → 幂等槽把已软删的记录
+   当成"已建好"交回去，活儿静默丢掉；枚举集合只增不减，留下空条目（§6.6）。判据两条：
+   存了 id 就必须查 `status !== 'DELETED'`；`sAdd`/`zAdd` 了什么，自己的 `delete` 里就要撤掉。
 
 > 跑通后：`node api/autocheck/checker.js api/apps/{{PROJECT_NAME}} --static` 必须 PASS；把服务加进 `deploy/solo-services.json` 或你的 services.json 才会被 Router 拉起。
