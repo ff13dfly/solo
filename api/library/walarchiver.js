@@ -188,30 +188,77 @@ function createWalArchiver(redis, {
      *      both delivered AND acked, so audit completeness no longer depends on the producer
      *      staying slower than the archiver. If every archiver dies the stream simply grows —
      *      visible (and still capped by the XADD valve) instead of quietly lossy.
+     * @attention The hot stream is a READ SURFACE, not just a transit queue: this file's own
+     *      header calls it a "bounded ring buffer", nexus.trace.byTrace folds entity-WAL rows
+     *      out of it into the ExecutionTrace view, and e2e reads recent ledger history from
+     *      it. v1.2.10's first cut of this reclaim trimmed every archived entry immediately,
+     *      which collapsed that documented window from "newest ~WAL.MAXLEN entries" to
+     *      "whatever the archiver hasn't drained yet" (seconds) — trace views lost their WAL
+     *      rows and two e2e suites went red. So trimming keeps the newest WAL_STREAM_KEEP
+     *      entries (default = the XADD valve ⇒ pre-v1.2.10 window, ~4MB at 10000 rows) even
+     *      when archived; set 0 to reclaim maximally on memory-tight deployments. Retention
+     *      only ever delays reclaim of rows already on disk — the safe floor still wins, so
+     *      nothing unarchived is ever dropped.
      */
+    const KEEP = Number(process.env.WAL_STREAM_KEEP ?? WAL.MAXLEN);
+    // "ms-seq" stream ids compare numerically field by field; string compare lies ("999-0" > "1000-0").
+    const idBefore = (a, b) => {
+        const [ams, asq] = String(a).split('-').map(Number);
+        const [bms, bsq] = String(b).split('-').map(Number);
+        return ams !== bms ? ams < bms : (asq || 0) < (bsq || 0);
+    };
+
     async function reclaim(c) {
         try {
             // The oldest un-acked entry is the safe floor: everything below it is archived.
             const pending = await c.xPending(stream, group);
-            const floor = (pending && pending.pending > 0 && pending.firstId) ? pending.firstId : null;
-            if (floor) {
-                await c.xTrim(stream, 'MINID', floor);
-            } else {
-                const info = await c.xInfoGroups(stream);
-                const g = (info || []).find((x) => x.name === group);
-                // node-redis returns this field kebab-cased (`last-delivered-id`); the
+            const pendingCount = (pending && pending.pending) || 0;
+            let floor = (pendingCount > 0 && pending.firstId) ? pending.firstId : null;
+            let lag = null;
+
+            const info = await c.xInfoGroups(stream);
+            const g = (info || []).find((x) => x.name === group);
+            if (g) {
+                // node-redis returns these fields kebab-cased (`last-delivered-id`); the
                 // camelCase alias does not exist, so reading it silently yields undefined
                 // → xTrim throws → the entire reclaim is skipped and the stream never
                 // shrinks. Accept both spellings.
-                const lastDelivered = g && (g['last-delivered-id'] || g.lastDeliveredId);
-                if (lastDelivered) await c.xTrim(stream, 'MINID', lastDelivered);
+                if (!floor) floor = g['last-delivered-id'] || g.lastDeliveredId || null;
+                // Redis 7 XINFO GROUPS reports `lag` = entries not yet delivered to the group.
+                if (g.lag !== undefined && g.lag !== null) lag = Number(g.lag);
             }
 
-            // Backlog must never be silent again: if the stream keeps growing, say so.
             const len = await c.xLen(stream);
-            if (len > BACKLOG_WARN) {
+
+            // Retention (see @attention): never trim into the newest KEEP entries. Fast path:
+            // a stream at or under the window needs no trim at all — the common steady state.
+            if (floor && KEEP > 0) {
+                if (len <= KEEP) {
+                    floor = null;
+                } else {
+                    // The (len-KEEP+1)-th oldest entry is the first survivor. Reading only the
+                    // trimmable prefix keeps this O(entries above the window), not O(KEEP);
+                    // capped so a one-off bloated stream converges over cycles instead of one
+                    // giant read.
+                    const prefix = Math.min(len - KEEP + 1, 5001);
+                    const oldest = await c.xRange(stream, '-', '+', { COUNT: prefix });
+                    if (oldest && oldest.length) {
+                        const keepFloor = oldest[oldest.length - 1].id;
+                        if (idBefore(keepFloor, floor)) floor = keepFloor;
+                    }
+                }
+            }
+            if (floor) await c.xTrim(stream, 'MINID', floor);
+
+            // Backlog must never be silent again: warn on the UNARCHIVED backlog — undelivered
+            // (group lag) plus delivered-but-unacked (pending) — not raw stream length: with
+            // the retention tail the stream legitimately sits at ~KEEP entries, and warning on
+            // that would train everyone to ignore the alarm. Pre-Redis-7 fallback (no `lag`):
+            // entries above the retention window are the closest observable proxy.
+            const backlog = (lag !== null && Number.isFinite(lag)) ? lag + pendingCount : Math.max(0, len - KEEP);
+            if (backlog > BACKLOG_WARN) {
                 log.warn('archiver.backlog.high', {
-                    streamLength: len, warnAt: BACKLOG_WARN,
+                    backlog, streamLength: len, warnAt: BACKLOG_WARN,
                     hint: 'WAL entries risk being trimmed before archiving — check archiver health / disk',
                 });
             }

@@ -146,6 +146,40 @@ describe('walarchiver — stream → file', () => {
         await archiver.stop();
         expect(Date.now() - t0).toBeLessThan(2000);
     });
+
+    test('reclaim retention: archived entries stay in the stream up to WAL_STREAM_KEEP', async () => {
+        // KEEP is read per-instance from env (default = the XADD valve WAL.MAXLEN).
+        // The hot stream is a read surface (nexus.trace.byTrace folds entity-WAL rows
+        // out of it), so reclaim must keep a recent tail instead of emptying it —
+        // v1.2.10's first cut trimmed everything archived and the trace view went blank.
+        process.env.WAL_STREAM_KEEP = '5';
+        try {
+            await redis.del(STREAM).catch(() => {});   // clean slate → exact length asserts
+            const items = [];
+            for (let i = 0; i < 8; i++) items.push(await entity.create({ name: `keep-${i}` }));
+
+            const archiver = createWalArchiver(redis, { blockMs: 100, consumer: 'test:keep' });
+            await archiver.ensureGroup(redis);
+            await drainAll(archiver, redis);
+
+            // Completeness unchanged: all 8 reached the file tier …
+            for (const it of items) {
+                expect(logger.query(`${SERVICE}:ITEM:${it.id}`)).toHaveLength(1);
+            }
+            // … and the stream keeps exactly the newest KEEP entries as the hot window.
+            expect(await redis.xLen(STREAM)).toBe(5);
+
+            // KEEP=0 → maximal reclaim (the memory-tight opt-out): the next drained entry
+            // triggers a reclaim that trims everything below the delivery floor.
+            process.env.WAL_STREAM_KEEP = '0';
+            await entity.create({ name: 'keep-final' });
+            const aggressive = createWalArchiver(redis, { blockMs: 100, consumer: 'test:keep0' });
+            await drainAll(aggressive, redis);
+            expect(await redis.xLen(STREAM)).toBeLessThanOrEqual(1);
+        } finally {
+            delete process.env.WAL_STREAM_KEEP;
+        }
+    });
 });
 
 /**

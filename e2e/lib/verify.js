@@ -57,10 +57,22 @@ async function assertRecord(redis, key, expected = {}, opts = {}) {
 /**
  * 断言 data key 有一条 op 的 WAL 行;校验 before/after/user.
  * create 行额外断言 before===null(entity.js wal()).
+ * ⚠️ async + 轮询:文件 WAL 是归档器的**异步副本**(walarchiver 头注释的 honest
+ * boundary),行晚于 RPC 返回落盘是合同内行为 —— 与 98 套「文件副本最终一致,轮询
+ * ≤10s」同口径。此前同步即查,靠 XREADGROUP 即时唤醒在毫秒级赢下比赛,归档器
+ * housekeeping 稍长一点就闪红(2026-09-01 suite 59 实测:两行都在文件里、偏移全对,
+ * 只是断言跑在了落盘前几毫秒)。
  */
-function assertWal(logDir, key, op, expected = {}) {
-    const rows = wal.query(key, logDir);
-    const row = [...rows].reverse().find((r) => r.op === op);
+async function assertWal(logDir, key, op, expected = {}) {
+    const deadline = Date.now() + 10_000;
+    let rows = [];
+    let row;
+    for (;;) {
+        rows = wal.query(key, logDir);
+        row = [...rows].reverse().find((r) => r.op === op);
+        if (row || Date.now() > deadline) break;
+        await new Promise((r) => setTimeout(r, 100));
+    }
     assert.ok(row, `no WAL '${op}' row for ${key} (found ${rows.length} rows)`);
     assert.strictEqual(row.key, key, `WAL key mismatch: ${row.key} ≠ ${key}`);
     if ('user' in expected) {

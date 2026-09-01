@@ -64,7 +64,7 @@ gate('59 · planner agenda CRUD + sync + todo.delete/sync + AI stubs', () => {
             { title: 'Standup', date: '2026-06-10', status: 'ACTIVE' },
             { indexKey: aIndex() });
         // ③ WAL create(before===null,user=uid)
-        V.assertWal(undefined, aKey(a.id), 'create', { user: uid });
+        await V.assertWal(undefined, aKey(a.id), 'create', { user: uid });
     }, 30_000);
 
     test('agenda.get / list 反映该 agenda', async () => {
@@ -82,7 +82,7 @@ gate('59 · planner agenda CRUD + sync + todo.delete/sync + AI stubs', () => {
         const id = [...agendaIds][0];
         V.assertResult(await rpc('planner.agenda.update', { id, endTime: '10:00' }, token), 'agenda.update');
         await V.assertRecord(redis, aKey(id), { endTime: '10:00', status: 'ACTIVE' });
-        V.assertWal(undefined, aKey(id), 'update', { user: uid });
+        await V.assertWal(undefined, aKey(id), 'update', { user: uid });
     }, 30_000);
 
     test('agenda.delete 硬删:键消失 + 出 index + 不再 get', async () => {

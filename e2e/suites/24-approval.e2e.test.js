@@ -42,7 +42,7 @@ gate('24 · approval SAP protocol (request→verify→confirm)', () => {
 
         const key = `APPROVAL:RECORD:${recordId}`;
         await V.assertRecord(redis, key, { state: 'INIT', status: 'ACTIVE' }, { indexKey: 'APPROVAL:RECORD:INDEX' });  // ②
-        V.assertWal(undefined, key, 'create', { user: uid });   // ③(applicant=调用方)
+        await V.assertWal(undefined, key, 'create', { user: uid });   // ③(applicant=调用方)
         await V.assertNoErrors(redis, ['approval']);
     });
 

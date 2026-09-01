@@ -32,7 +32,7 @@ gate('25 · gateway smtp/template config', () => {
         tplId = t.id;
         const key = `GATEWAY:EMAIL_TEMPLATE:${tplId}`;
         await V.assertRecord(redis, key, { name: 'Welcome', subject: 'Hi {{name}}' }, { indexKey: 'GATEWAY:EMAIL_TEMPLATE:INDEX' });  // ②
-        V.assertWal(undefined, key, 'create');   // ③ 有 create 行(before:null);gateway 不注入 user,故不断言 user
+        await V.assertWal(undefined, key, 'create');   // ③ 有 create 行(before:null);gateway 不注入 user,故不断言 user
         await V.assertNoErrors(redis, ['gateway']);
     });
 

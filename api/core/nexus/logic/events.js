@@ -112,8 +112,10 @@ module.exports = (redis, { config }) => {
         let truncated = keys.length >= MAX_STREAMS;
         const events = [];
         // Also scan the entity-WAL ledger (entity writes carry `trace`) — a different key family
-        // than EVENT:*, added explicitly. NOTE: WAL is a bounded ring buffer (MAXLEN), so only
-        // recent entity writes are here; older ones live in the file archive (an honest gap).
+        // than EVENT:*, added explicitly. NOTE: WAL is a bounded ring buffer (the archiver's
+        // reclaim keeps the newest WAL_STREAM_KEEP entries, default = the XADD MAXLEN valve),
+        // so only recent entity writes are here; older ones live in the file archive (an honest
+        // gap). Don't shrink that retention to zero without giving this a file-tier fallback.
         const allStreams = [...keys.slice(0, MAX_STREAMS), WAL.STREAM];
         for (const stream of allStreams) {
             const r = await scanStreamForTrace(stream, traceId, MAX_SCAN);

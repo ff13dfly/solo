@@ -47,7 +47,7 @@ describe('20 · collection four-layer assertion', () => {
         await V.assertRecord(redis, key, { state: 'RECEIVED', amount: 42, currency: 'CNY', status: 'ACTIVE' }, { indexKey: 'COLLECTION:PAYMENT:INDEX' });
 
         // ③ WAL:create 行,user = 调用方(测试用户 uid),before:null
-        V.assertWal(undefined, key, 'create', { user: uid, after: { state: 'RECEIVED' } });
+        await V.assertWal(undefined, key, 'create', { user: uid, after: { state: 'RECEIVED' } });
 
         // ③ happy-path:collection 的 ERROR:QUEUE 空
         await V.assertNoErrors(redis, ['collection']);

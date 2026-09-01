@@ -11,6 +11,36 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+### Fixed — WAL 热流保留窗口（v1.2.10 reclaim 过冲）+ e2e 追平归档新布局
+
+> 起因：push 后扫 Actions（§6.1 的规矩）发现 **CI 的 e2e job 自 2026-08-30（`ecef0b7`）起
+> 全红**，两天没人看。本地全量复现 66 套定位出三层独立问题——`ecef0b7` 本体（归档不丢 +
+> 落盘提速）方向正确、**不回撤**，但它带出两处附带伤害：
+
+- **① `walarchiver` reclaim 过冲，热流从「bounded ring buffer」塌成秒级中转队列**。
+  reclaim 把已归档条目全部即时裁掉，而热流是**读取面**不只是中转：archiver 自己的头注释
+  就写着 ring buffer，`nexus.trace.byTrace`（ExecutionTrace 页）从中折叠实体 WAL 行，
+  裁空后 trace 视图丢 WAL 行（e2e 101/98 红）。修：保留最新 **`WAL_STREAM_KEEP`** 条
+  （默认 = XADD 阀门 `WAL.MAXLEN`=10000 ⇒ 恢复 v1.2.10 之前的窗口，≈4MB；设 0 =
+  内存吃紧时的旧激进行为）。安全底线不变——**未归档条目永不裁**；backlog 告警改按
+  未归档积压（lag+pending）计，不再拿含保留尾巴的裸流长度误报。单测钉住（keep=5 留 5、
+  keep=0 清空、完整性不变）。
+- **② e2e 的 WAL 读取器没跟上按天分片布局**。`e2e/lib/wal.js` 是刻意自包含的照抄件
+  （README §2 Option C），只认旧 MD5 按 key 路径；`ecef0b7` 后归档行落
+  `logs/wal/{year}/{date}.log`，7 套 ③WAL 断言集体 `found 0 rows`。修：双布局都读
+  （index 5 段、**字节**偏移按 Buffer 切片——拿 utf8 下标切、行里一有中文就错位）。
+  教训写进文件头：**logger.js 改写盘布局时必须同步这份照抄件**。
+- **③ `assertWal` 同步即查，与异步归档器赛跑**。文件 WAL 本来就是异步副本（archiver
+  头注释的 honest boundary），此前靠 XREADGROUP 即时唤醒在毫秒级赢下比赛，housekeeping
+  稍长一点就闪红（实测：两行都在文件里、偏移全对，断言跑在落盘前几毫秒）。修：改 async
+  轮询 ≤10s（与 98 套「文件副本最终一致」同口径），7 处调用点补 await。
+- 验证：本地全量 e2e **66 套 349 例全绿**（修前 7 套红）；api 白名单 133 套全绿
+  （walarchiver 新增保留窗口回归测试）。
+
+下游 action：无（行为恢复到 v1.2.10 前语义；新 env `WAL_STREAM_KEEP` 为可选开关）。
+
+---
+
 ### Fixed — storage CAS 平面的三个并发窗口（upload/delete 竞态）
 
 > 起因：审查「并发上传会不会给错结果」。纯 upload×upload 只是去重失效（多铸一条记录，

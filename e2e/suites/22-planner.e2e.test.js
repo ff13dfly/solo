@@ -32,7 +32,7 @@ gate('22 · planner todo (four-layer, per-user keys)', () => {
 
         const key = `PLANNER:U:${uid.toUpperCase()}:TODO:${t.id}`;
         await V.assertRecord(redis, key, { name: 'Q3 planning', status: 'ACTIVE' }, { indexKey: `PLANNER:U:${uid.toUpperCase()}:TODO:INDEX` });  // ②
-        V.assertWal(undefined, key, 'create', { user: uid });   // ③
+        await V.assertWal(undefined, key, 'create', { user: uid });   // ③
         await V.assertNoErrors(redis, ['planner']);             // ③
     });
 
@@ -43,7 +43,7 @@ gate('22 · planner todo (four-layer, per-user keys)', () => {
         V.assertResult(await rpc('planner.todo.update', { id, content: '# updated goals' }, token), 'todo.update');
         const key = `PLANNER:U:${uid.toUpperCase()}:TODO:${id}`;
         await V.assertRecord(redis, key, { content: '# updated goals', status: 'ACTIVE' });
-        V.assertWal(undefined, key, 'update', { user: uid });
+        await V.assertWal(undefined, key, 'update', { user: uid });
     });
 
     test('get / list reflect the todo', async () => {
