@@ -11,35 +11,37 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
-### Fixed — WAL 热流保留窗口（v1.2.10 reclaim 过冲）+ e2e 追平归档新布局
-
-> 起因：push 后扫 Actions（§6.1 的规矩）发现 **CI 的 e2e job 自 2026-08-30（`ecef0b7`）起
-> 全红**，两天没人看。本地全量复现 66 套定位出三层独立问题——`ecef0b7` 本体（归档不丢 +
-> 落盘提速）方向正确、**不回撤**，但它带出两处附带伤害：
-
-- **① `walarchiver` reclaim 过冲，热流从「bounded ring buffer」塌成秒级中转队列**。
-  reclaim 把已归档条目全部即时裁掉，而热流是**读取面**不只是中转：archiver 自己的头注释
-  就写着 ring buffer，`nexus.trace.byTrace`（ExecutionTrace 页）从中折叠实体 WAL 行，
-  裁空后 trace 视图丢 WAL 行（e2e 101/98 红）。修：保留最新 **`WAL_STREAM_KEEP`** 条
-  （默认 = XADD 阀门 `WAL.MAXLEN`=10000 ⇒ 恢复 v1.2.10 之前的窗口，≈4MB；设 0 =
-  内存吃紧时的旧激进行为）。安全底线不变——**未归档条目永不裁**；backlog 告警改按
-  未归档积压（lag+pending）计，不再拿含保留尾巴的裸流长度误报。单测钉住（keep=5 留 5、
-  keep=0 清空、完整性不变）。
-- **② e2e 的 WAL 读取器没跟上按天分片布局**。`e2e/lib/wal.js` 是刻意自包含的照抄件
-  （README §2 Option C），只认旧 MD5 按 key 路径；`ecef0b7` 后归档行落
-  `logs/wal/{year}/{date}.log`，7 套 ③WAL 断言集体 `found 0 rows`。修：双布局都读
-  （index 5 段、**字节**偏移按 Buffer 切片——拿 utf8 下标切、行里一有中文就错位）。
-  教训写进文件头：**logger.js 改写盘布局时必须同步这份照抄件**。
-- **③ `assertWal` 同步即查，与异步归档器赛跑**。文件 WAL 本来就是异步副本（archiver
-  头注释的 honest boundary），此前靠 XREADGROUP 即时唤醒在毫秒级赢下比赛，housekeeping
-  稍长一点就闪红（实测：两行都在文件里、偏移全对，断言跑在落盘前几毫秒）。修：改 async
-  轮询 ≤10s（与 98 套「文件副本最终一致」同口径），7 处调用点补 await。
-- 验证：本地全量 e2e **66 套 349 例全绿**（修前 7 套红）；api 白名单 133 套全绿
-  （walarchiver 新增保留窗口回归测试）。
-
-下游 action：无（行为恢复到 v1.2.10 前语义；新 env `WAL_STREAM_KEEP` 为可选开关）。
-
 ---
+
+## [v1.2.12] — 2026-09-01
+
+### Deprecated — `planner` 不再随新项目下发（第一步：只停下发，不动 bundle）
+
+> 起因：`CLAUDE.md` §1 写着「纯框架/基础设施层，**没有业务层**」，而 `planner`（日程 + 待办）
+> 是纯业务——它是 `modeling.md` 服务划分表里唯一一行业务，也是那句话唯一的例外。
+> 实扫 8 个下游：**项目自写调用 0**，它在下游出现的每一处都是框架自己下发的示例材料
+> （`workflows.md`、两个示例 workflow、`risk.test.js`、bundle 自身）。
+> 换句话说，它唯一的实际角色是**充当自家文档的演示主角**——而演示不需要一个真跑的服务。
+
+- **`deploy/scaffold/services.solo.json` 移除 planner（13 → 12）** ⇒ `init.sh` 建的新项目
+  不再启动它。`SOLO_COUNT` 由模板长度推导（`init.sh:329`），端口段自动收到 12 个，无需手改。
+- **下发的两个 workflow 示例换主角**：`planner.todo.create` → **`storage.asset.external`**。
+  挑它是因为只写元数据、**不碰字节、不发外部请求**，反复试跑没有副作用外溢，且 storage 仍是
+  默认服务，保住了「起栈即可加载试跑」。`modeling.md` 划分表那一行改成「业务实体 = 你自己的服务」。
+- **🔴 本次刻意不动 `deploy/services.json`，也不删 `api/apps/planner/`。** 原因是
+  `gen-entry.js:179-183` 是 **fail-closed**：`solo-services.json` 里出现 REGISTRY 没有的服务名
+  会 `process.exit(1)`——**不是跳过那一个，是整个 bundle 的 12 个服务全不启动**。而
+  `deploy/solo-services.json` 是 **[Project] 区**（`upgrade.sh:325-326` 明列「Left untouched」），
+  升级永不代改。现有 8 家里 **6 家**（colony·finance·overview·trend·steward·awareness）
+  的 `solo-services.json` 仍列着 planner，此刻从 `services.json` 摘掉就会让它们下次升 bundle
+  整栈起不来。所以 planner 仍在 bundle 的 REGISTRY 里，**现有栈一切照旧**。
+- **第二步（等下游摘干净后，或 v2）**才做：从 `deploy/services.json` 移除 + 删
+  `api/apps/planner/` + 删 `e2e/suites/22-planner.e2e.test.js` + `CLAUDE.md` §2 表 14 → 13。
+
+下游 action：**用不到 planner 的项目，把 `deploy/solo-services.json` 里 `planner` 那一节删掉**
+（它是你的文件，升级不会代改；删完 `deploy/run.sh` 重启即可，端口空一个不影响）。
+仍在用 `planner.*` 的项目：本版无需任何动作，但请知悉它已进入废弃期——把日程/待办搬进你自己的
+服务（`api/apps/`，用 Entity Factory），后续某个版本会从 bundle 里移除它。
 
 ### Fixed — storage CAS 平面的三个并发窗口（upload/delete 竞态）
 
@@ -75,37 +77,33 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 下游 action：无（行为只在并发窗口内收紧；接口、返回形状、顺序语义均不变）。
 
----
+### Fixed — WAL 热流保留窗口（v1.2.10 reclaim 过冲）+ e2e 追平归档新布局
 
-## [v1.2.12] — 2026-08-31
+> 起因：push 后扫 Actions（§6.1 的规矩）发现 **CI 的 e2e job 自 2026-08-30（`ecef0b7`）起
+> 全红**，两天没人看。本地全量复现 66 套定位出三层独立问题——`ecef0b7` 本体（归档不丢 +
+> 落盘提速）方向正确、**不回撤**，但它带出两处附带伤害：
 
-### Deprecated — `planner` 不再随新项目下发（第一步：只停下发，不动 bundle）
+- **① `walarchiver` reclaim 过冲，热流从「bounded ring buffer」塌成秒级中转队列**。
+  reclaim 把已归档条目全部即时裁掉，而热流是**读取面**不只是中转：archiver 自己的头注释
+  就写着 ring buffer，`nexus.trace.byTrace`（ExecutionTrace 页）从中折叠实体 WAL 行，
+  裁空后 trace 视图丢 WAL 行（e2e 101/98 红）。修：保留最新 **`WAL_STREAM_KEEP`** 条
+  （默认 = XADD 阀门 `WAL.MAXLEN`=10000 ⇒ 恢复 v1.2.10 之前的窗口，≈4MB；设 0 =
+  内存吃紧时的旧激进行为）。安全底线不变——**未归档条目永不裁**；backlog 告警改按
+  未归档积压（lag+pending）计，不再拿含保留尾巴的裸流长度误报。单测钉住（keep=5 留 5、
+  keep=0 清空、完整性不变）。
+- **② e2e 的 WAL 读取器没跟上按天分片布局**。`e2e/lib/wal.js` 是刻意自包含的照抄件
+  （README §2 Option C），只认旧 MD5 按 key 路径；`ecef0b7` 后归档行落
+  `logs/wal/{year}/{date}.log`，7 套 ③WAL 断言集体 `found 0 rows`。修：双布局都读
+  （index 5 段、**字节**偏移按 Buffer 切片——拿 utf8 下标切、行里一有中文就错位）。
+  教训写进文件头：**logger.js 改写盘布局时必须同步这份照抄件**。
+- **③ `assertWal` 同步即查，与异步归档器赛跑**。文件 WAL 本来就是异步副本（archiver
+  头注释的 honest boundary），此前靠 XREADGROUP 即时唤醒在毫秒级赢下比赛，housekeeping
+  稍长一点就闪红（实测：两行都在文件里、偏移全对，断言跑在落盘前几毫秒）。修：改 async
+  轮询 ≤10s（与 98 套「文件副本最终一致」同口径），7 处调用点补 await。
+- 验证：本地全量 e2e **66 套 349 例全绿**（修前 7 套红）；api 白名单 133 套全绿
+  （walarchiver 新增保留窗口回归测试）。
 
-> 起因：`CLAUDE.md` §1 写着「纯框架/基础设施层，**没有业务层**」，而 `planner`（日程 + 待办）
-> 是纯业务——它是 `modeling.md` 服务划分表里唯一一行业务，也是那句话唯一的例外。
-> 实扫 8 个下游：**项目自写调用 0**，它在下游出现的每一处都是框架自己下发的示例材料
-> （`workflows.md`、两个示例 workflow、`risk.test.js`、bundle 自身）。
-> 换句话说，它唯一的实际角色是**充当自家文档的演示主角**——而演示不需要一个真跑的服务。
-
-- **`deploy/scaffold/services.solo.json` 移除 planner（13 → 12）** ⇒ `init.sh` 建的新项目
-  不再启动它。`SOLO_COUNT` 由模板长度推导（`init.sh:329`），端口段自动收到 12 个，无需手改。
-- **下发的两个 workflow 示例换主角**：`planner.todo.create` → **`storage.asset.external`**。
-  挑它是因为只写元数据、**不碰字节、不发外部请求**，反复试跑没有副作用外溢，且 storage 仍是
-  默认服务，保住了「起栈即可加载试跑」。`modeling.md` 划分表那一行改成「业务实体 = 你自己的服务」。
-- **🔴 本次刻意不动 `deploy/services.json`，也不删 `api/apps/planner/`。** 原因是
-  `gen-entry.js:179-183` 是 **fail-closed**：`solo-services.json` 里出现 REGISTRY 没有的服务名
-  会 `process.exit(1)`——**不是跳过那一个，是整个 bundle 的 12 个服务全不启动**。而
-  `deploy/solo-services.json` 是 **[Project] 区**（`upgrade.sh:325-326` 明列「Left untouched」），
-  升级永不代改。现有 8 家里 **6 家**（colony·finance·overview·trend·steward·awareness）
-  的 `solo-services.json` 仍列着 planner，此刻从 `services.json` 摘掉就会让它们下次升 bundle
-  整栈起不来。所以 planner 仍在 bundle 的 REGISTRY 里，**现有栈一切照旧**。
-- **第二步（等下游摘干净后，或 v2）**才做：从 `deploy/services.json` 移除 + 删
-  `api/apps/planner/` + 删 `e2e/suites/22-planner.e2e.test.js` + `CLAUDE.md` §2 表 14 → 13。
-
-下游 action：**用不到 planner 的项目，把 `deploy/solo-services.json` 里 `planner` 那一节删掉**
-（它是你的文件，升级不会代改；删完 `deploy/run.sh` 重启即可，端口空一个不影响）。
-仍在用 `planner.*` 的项目：本版无需任何动作，但请知悉它已进入废弃期——把日程/待办搬进你自己的
-服务（`api/apps/`，用 Entity Factory），后续某个版本会从 bundle 里移除它。
+下游 action：无（行为恢复到 v1.2.10 前语义；新 env `WAL_STREAM_KEEP` 为可选开关）。
 
 ---
 
