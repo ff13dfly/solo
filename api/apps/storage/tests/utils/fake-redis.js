@@ -72,6 +72,26 @@ function makeFakeRedis() {
             return sorted.slice(a, end + 1);
         },
 
+        /**
+         * Chainable MULTI, node-redis style: multi().set(...).zAdd(...).exec().
+         * Not atomic here (single-threaded tests don't need it) — it just queues the
+         * same async methods and runs them in order on exec, returning their replies.
+         */
+        multi() {
+            const self = this;
+            const ops = [];
+            const m = {};
+            for (const name of ['get', 'set', 'del', 'incr', 'decr', 'expire', 'zAdd', 'zRem']) {
+                m[name] = (...args) => { ops.push(() => self[name](...args)); return m; };
+            }
+            m.exec = async () => {
+                const replies = [];
+                for (const op of ops) replies.push(await op());
+                return replies;
+            };
+            return m;
+        },
+
         async zUnionStore(dest, keys, opts = {}) {
             const merged = new Map();
             for (const k of keys) {

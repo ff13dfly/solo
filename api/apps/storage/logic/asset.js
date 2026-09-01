@@ -9,6 +9,7 @@ const { createConfig } = require('../../../library/config');
 const { applySearch } = require('../../../library/search');
 const { resolvePaging } = require('../../../library/pagination');
 const { createLogger } = require('../../../library/logger');
+const clock = require('../../../library/clock');
 const { keyFor, thumbKeyFor } = require('../oss/keying');
 
 let sharp;
@@ -130,16 +131,49 @@ module.exports = (redisClient, config, store) => {
         worker.postMessage({ taskId, type: task.type, payload: task.payload });
     }
 
-    // --- In-Memory LRU Cache for Existence Check ---
-    const RECENT_UPLOADS = new Map();
-    const MAX_CACHE_SIZE = config.maxCacheSize || 1000;
+    // --- Per-content-hash serialization (upload/delete critical sections) ---
+    /**
+     * @why upload's "are the bytes there" decision (store.exists → maybe skip put)
+     *      and delete's "may I purge the bytes" decision (refcount decr → deleteMany)
+     *      each pair a Redis read with an object-store action, and the object store
+     *      cannot join a Redis transaction. Unserialized, the interleavings corrupt
+     *      in both directions: an upload skips its put because the bytes exist, a
+     *      concurrent delete of the last same-content record purges them, and the
+     *      fresh record resolves to a 404 forever; two same-content uploads both
+     *      miss the sha256 dedup index and mint duplicate records. A short per-sha
+     *      advisory lock serializes exactly the operations that share a content
+     *      hash — different content never contends, so the steady-state cost is one
+     *      SET NX + one DEL per call.
+     * @attention The TTL is a crash net, not a correctness boundary: critical
+     *      sections are ms-scale (one put + a handful of Redis writes; thumbnail
+     *      generation is the ceiling), so it only bites when a process dies
+     *      mid-section — the lock then self-releases instead of wedging that hash.
+     *      Release is GET-compare-DEL rather than an EVAL CAS: scripting isn't in
+     *      the shared fake-redis test surface, and the compare only loses when OUR
+     *      lock already expired — in which case not deleting is the safe failure.
+     */
+    const LOCK_TTL_MS = 30000;
+    const LOCK_WAIT_MS = 10000;
 
-    function addToCache(id) {
-        if (RECENT_UPLOADS.size >= MAX_CACHE_SIZE) {
-            const firstKey = RECENT_UPLOADS.keys().next().value;
-            RECENT_UPLOADS.delete(firstKey);
+    async function withContentLock(sha256, fn) {
+        const lockKey = `${config.redis.sha256LockPrefix || `${config.redis.sha256Prefix}LOCK:`}${sha256}`;
+        const token = generator.generateId(16);
+        const deadline = clock.now() + LOCK_WAIT_MS;
+        for (;;) {
+            const acquired = await redisClient.set(lockKey, token, { NX: true, PX: LOCK_TTL_MS });
+            if (acquired === 'OK' || acquired === true) break;
+            if (clock.now() > deadline) {
+                throw jsonrpc.INTERNAL_ERROR(`Timed out waiting for the content lock on ${sha256}`);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25 + Math.floor(Math.random() * 50)));
         }
-        RECENT_UPLOADS.set(id, Date.now());
+        try {
+            return await fn();
+        } finally {
+            try {
+                if ((await redisClient.get(lockKey)) === token) await redisClient.del(lockKey);
+            } catch (_) { /* TTL releases it */ }
+        }
     }
 
     // --- Per-asset authorization (toFix §6.4) ---
@@ -358,87 +392,98 @@ module.exports = (redisClient, config, store) => {
             const ext = filename ? path.extname(filename) : '';
             const key = keyFor(sha256, ext);
 
-            // 2. Fast dedup via Redis sha256 index (O(1)).
-            // Owner-aware (toFix §6.4): the byte-level CAS dedup still applies (same
-            // object key), but the metadata record is only reused for the SAME owner —
-            // otherwise user B uploading user A's bytes would inherit A's record and
-            // visibility. Different owner → fall through and mint a fresh record over
-            // the shared bytes (delete's sha256 refcount already handles N records).
-            const existingId = await redisClient.get(`${config.redis.sha256Prefix}${sha256}`);
-            if (existingId) {
-                const raw = await redisClient.get(`${config.redis.assetPrefix}${existingId}`);
-                if (raw) {
-                    const meta = JSON.parse(raw);
-                    if ((meta.owner || null) === owner) {
-                        addToCache(sha256);
-                        // Heal thumbnails in the background if they might be missing
-                        if (thumbMode === 'pregenerate' && isImage(mimeType || meta.mimeType)) {
-                            generateThumbnails(buffer, sha256, mimeType || meta.mimeType).catch(() => {});
+            // Steps 2–6 hold the per-content lock: the dedup read (2), the byte-existence
+            // decision (3) and the record+refcount write (6) all race a concurrent
+            // delete's purge — and each other — without it. See withContentLock's @why.
+            return withContentLock(sha256, async () => {
+                // 2. Fast dedup via Redis sha256 index (O(1)).
+                // Owner-aware (toFix §6.4): the byte-level CAS dedup still applies (same
+                // object key), but the metadata record is only reused for the SAME owner —
+                // otherwise user B uploading user A's bytes would inherit A's record and
+                // visibility. Different owner → fall through and mint a fresh record over
+                // the shared bytes (delete's sha256 refcount already handles N records).
+                const existingId = await redisClient.get(`${config.redis.sha256Prefix}${sha256}`);
+                if (existingId) {
+                    const raw = await redisClient.get(`${config.redis.assetPrefix}${existingId}`);
+                    if (raw) {
+                        const meta = JSON.parse(raw);
+                        if ((meta.owner || null) === owner) {
+                            // Heal thumbnails in the background if they might be missing
+                            if (thumbMode === 'pregenerate' && isImage(mimeType || meta.mimeType)) {
+                                generateThumbnails(buffer, sha256, mimeType || meta.mimeType).catch(() => {});
+                            }
+                            return { ...meta, url: urlFor(meta), thumbnails: thumbnailsMapFor(meta.sha256, meta.mimeType) };
                         }
-                        return { ...meta, url: urlFor(meta), thumbnails: thumbnailsMapFor(meta.sha256, meta.mimeType) };
                     }
                 }
-            }
 
-            // 3. Persist bytes to the object store (content-addressed key → idempotent)
-            if (!(await store.exists(key))) {
-                await store.put(key, buffer, { contentType: mimeType || 'application/octet-stream' });
-            }
-            addToCache(sha256);
+                // 3. Persist bytes to the object store (content-addressed key → idempotent)
+                if (!(await store.exists(key))) {
+                    await store.put(key, buffer, { contentType: mimeType || 'application/octet-stream' });
+                }
 
-            // 4. Pre-generate thumbnails (awaited so the returned URLs resolve immediately)
-            await generateThumbnails(buffer, sha256, mimeType);
+                // 4. Pre-generate thumbnails (awaited so the returned URLs resolve immediately)
+                await generateThumbnails(buffer, sha256, mimeType);
 
-            // 5. Generate System Asset ID
-            let assetId;
-            let success = false;
-            let attempts = 0;
-            const maxAttempts = 10;
-            const assetPrefix = config.redis.assetPrefix;
+                // 5. Generate System Asset ID
+                let assetId;
+                let success = false;
+                let attempts = 0;
+                const maxAttempts = 10;
+                const assetPrefix = config.redis.assetPrefix;
 
-            while (!success && attempts < maxAttempts) {
-                assetId = generator.generateId(config.idLengths.asset);
-                const result = await redisClient.set(`${assetPrefix}${assetId}`, JSON.stringify({}), { NX: true });
-                if (result === 'OK' || result === true) success = true;
-                else attempts++;
-            }
+                while (!success && attempts < maxAttempts) {
+                    assetId = generator.generateId(config.idLengths.asset);
+                    const result = await redisClient.set(`${assetPrefix}${assetId}`, JSON.stringify({}), { NX: true });
+                    if (result === 'OK' || result === true) success = true;
+                    else attempts++;
+                }
 
-            if (!success) throw jsonrpc.INTERNAL_ERROR(`Failed to generate unique assetId after ${maxAttempts} attempts`);
+                if (!success) throw jsonrpc.INTERNAL_ERROR(`Failed to generate unique assetId after ${maxAttempts} attempts`);
 
-            const metadata = {
-                id: assetId,
-                originalName: filename || 'unnamed',
-                mimeType: mimeType || 'application/octet-stream',
-                sha256,
-                size: buffer.length,
-                key,
-                path: key, // kept for back-compat with consumers reading `path`
-                owner,                 // toFix §6.4 — who uploaded (UID string, null = unowned/legacy)
-                visibility: vis,       // 'public' | 'internal' | 'private'
-                createdAt: new Date().toISOString()
-            };
+                const metadata = {
+                    id: assetId,
+                    originalName: filename || 'unnamed',
+                    mimeType: mimeType || 'application/octet-stream',
+                    sha256,
+                    size: buffer.length,
+                    key,
+                    path: key, // kept for back-compat with consumers reading `path`
+                    owner,                 // toFix §6.4 — who uploaded (UID string, null = unowned/legacy)
+                    visibility: vis,       // 'public' | 'internal' | 'private'
+                    createdAt: new Date().toISOString()
+                };
 
-            // 6. Persist metadata + indexes
-            await redisClient.set(`${assetPrefix}${assetId}`, JSON.stringify(metadata));
-            const createdAtMs = new Date(metadata.createdAt).getTime();
-            await redisClient.zAdd(config.redis.assetIdSortedSet, { score: createdAtMs, value: assetId });
-            await redisClient.set(`${config.redis.sha256Prefix}${sha256}`, assetId);
+                // 6. Metadata + every index + the content refcount in ONE transaction.
+                // @why These were sequential awaits before; a crash midway could leave a
+                //      record whose refcount was never counted, and a later delete of a
+                //      sibling record would then purge bytes this record still references.
+                //      With MULTI the record and all its bookkeeping land atomically — a
+                //      crash before EXEC leaves at worst orphan bytes in the object store
+                //      (adopted by the next upload of the same content), the safe direction.
+                const createdAtMs = new Date(metadata.createdAt).getTime();
+                const multi = redisClient.multi();
+                multi.set(`${assetPrefix}${assetId}`, JSON.stringify(metadata));
+                multi.zAdd(config.redis.assetIdSortedSet, { score: createdAtMs, value: assetId });
+                multi.set(`${config.redis.sha256Prefix}${sha256}`, assetId);
 
-            // Visibility-scoped indexes (list()'s fast path below) — maintained
-            // unconditionally for every new upload; legacy assets get these via
-            // deploy/migrate-storage-index.js.
-            if (owner) {
-                await redisClient.zAdd(`${config.redis.assetByOwnerPrefix}${owner}`, { score: createdAtMs, value: assetId });
-            }
-            if (vis === 'public') {
-                await redisClient.zAdd(config.redis.assetPublicSortedSet, { score: createdAtMs, value: assetId });
-            } else if (vis === 'internal') {
-                await redisClient.zAdd(config.redis.assetInternalSortedSet, { score: createdAtMs, value: assetId });
-            }
-            // Content-hash refcount — delete()'s O(1) "can I purge the bytes" check.
-            await redisClient.incr(`${config.redis.sha256RefcountPrefix}${sha256}`);
+                // Visibility-scoped indexes (list()'s fast path below) — maintained
+                // unconditionally for every new upload; legacy assets get these via
+                // deploy/migrate-storage-index.js.
+                if (owner) {
+                    multi.zAdd(`${config.redis.assetByOwnerPrefix}${owner}`, { score: createdAtMs, value: assetId });
+                }
+                if (vis === 'public') {
+                    multi.zAdd(config.redis.assetPublicSortedSet, { score: createdAtMs, value: assetId });
+                } else if (vis === 'internal') {
+                    multi.zAdd(config.redis.assetInternalSortedSet, { score: createdAtMs, value: assetId });
+                }
+                // Content-hash refcount — delete()'s O(1) "can I purge the bytes" check.
+                multi.incr(`${config.redis.sha256RefcountPrefix}${sha256}`);
+                await multi.exec();
 
-            return { ...metadata, url: urlFor(metadata), thumbnails: thumbnailsMapFor(sha256, metadata.mimeType) };
+                return { ...metadata, url: urlFor(metadata), thumbnails: thumbnailsMapFor(sha256, metadata.mimeType) };
+            });
         },
 
         /**
@@ -577,46 +622,64 @@ module.exports = (redisClient, config, store) => {
             // toFix §6.4 — delete is owner-or-admin only (visibility never grants delete).
             if (!canDelete(meta, ctx)) throw jsonrpc.FORBIDDEN('Only the owner or an admin can delete this asset');
 
-            await redisClient.del(`${config.redis.assetPrefix}${id}`);
-            await redisClient.zRem(config.redis.assetIdSortedSet, id);
-            if (meta.owner) await redisClient.zRem(`${config.redis.assetByOwnerPrefix}${meta.owner}`, id);
-            if (meta.visibility === 'public') await redisClient.zRem(config.redis.assetPublicSortedSet, id);
-            else if (meta.visibility === 'internal') await redisClient.zRem(config.redis.assetInternalSortedSet, id);
+            // DEL's return value is the concurrency arbiter: N racing deletes of the same
+            // id all pass the guards above (they read the same meta), but exactly one
+            // observes 1 here and owns the cleanup — the rest surface the same NOT_FOUND
+            // they'd have seen arriving a moment later. Without this, every racer reaches
+            // the refcount decr below, one removed record decrements a shared sha256 N
+            // times, and the bytes get purged while sibling records still reference them.
+            const removeRecord = async () => {
+                const removed = await redisClient.del(`${config.redis.assetPrefix}${id}`);
+                if (!removed) throw jsonrpc.ASSET_NOT_FOUND();
+                await redisClient.zRem(config.redis.assetIdSortedSet, id);
+                if (meta.owner) await redisClient.zRem(`${config.redis.assetByOwnerPrefix}${meta.owner}`, id);
+                if (meta.visibility === 'public') await redisClient.zRem(config.redis.assetPublicSortedSet, id);
+                else if (meta.visibility === 'internal') await redisClient.zRem(config.redis.assetInternalSortedSet, id);
+            };
 
             // External placeholder: storage never held bytes for it, so there is no object
-            // to purge and no refcount to decrement. Touching either would be wrong —
-            // sha256 is null, so the key would be `...REFCOUNT:null` (a shared bucket every
-            // external asset would fight over) and the pre-migration fallback below would
-            // full-scan for `m.sha256 === null` and happily "purge" on the first match.
-            if (meta.kind === EXTERNAL_KIND) return { deleted: id };
-
-            try {
-                const refcountKey = `${config.redis.sha256RefcountPrefix}${meta.sha256}`;
-                let purge;
-                if (await redisClient.exists(refcountKey)) {
-                    // Fast path: O(1). Every asset created after this fix incremented this
-                    // counter at upload time; deploy/migrate-storage-index.js backfills it
-                    // for content that predates the counter.
-                    purge = (await redisClient.decr(refcountKey)) <= 0;
-                    if (purge) await redisClient.del(refcountKey);
-                } else {
-                    // No counter for this hash yet (pre-migration content) — fall back to
-                    // the full scan rather than assume refcount 0, which could delete bytes
-                    // another asset record still references.
-                    const remaining = await redisClient.zRange(config.redis.assetIdSortedSet, 0, -1); // SAFE: pre-migration fallback only
-                    const metas = await mgetMetas(remaining);
-                    purge = !metas.some((m) => m && m.sha256 === meta.sha256);
-                }
-                if (purge) {
-                    const keys = [objectKeyOf(meta), ...thumbLabels().map((l) => thumbKeyFor(meta.sha256, l))];
-                    await store.deleteMany(keys);
-                    RECENT_UPLOADS.delete(meta.sha256);
-                }
-            } catch (e) {
-                logger.warn(`[Storage] delete cleanup for ${id} failed: ${e.message}`);
+            // to purge and no refcount to decrement (⇒ no content lock either). Touching
+            // either would be wrong — sha256 is null, so the key would be `...REFCOUNT:null`
+            // (a shared bucket every external asset would fight over) and the pre-migration
+            // fallback below would full-scan for `m.sha256 === null` and happily "purge" on
+            // the first match.
+            if (meta.kind === EXTERNAL_KIND) {
+                await removeRecord();
+                return { deleted: id };
             }
 
-            return { deleted: id };
+            // The refcount decision + the object-store purge must not interleave with an
+            // upload's byte-existence decision for the same content — see withContentLock.
+            return withContentLock(meta.sha256, async () => {
+                await removeRecord();
+
+                try {
+                    const refcountKey = `${config.redis.sha256RefcountPrefix}${meta.sha256}`;
+                    let purge;
+                    if (await redisClient.exists(refcountKey)) {
+                        // Fast path: O(1). Every asset created after this fix incremented this
+                        // counter at upload time; deploy/migrate-storage-index.js backfills it
+                        // for content that predates the counter.
+                        purge = (await redisClient.decr(refcountKey)) <= 0;
+                        if (purge) await redisClient.del(refcountKey);
+                    } else {
+                        // No counter for this hash yet (pre-migration content) — fall back to
+                        // the full scan rather than assume refcount 0, which could delete bytes
+                        // another asset record still references.
+                        const remaining = await redisClient.zRange(config.redis.assetIdSortedSet, 0, -1); // SAFE: pre-migration fallback only
+                        const metas = await mgetMetas(remaining);
+                        purge = !metas.some((m) => m && m.sha256 === meta.sha256);
+                    }
+                    if (purge) {
+                        const keys = [objectKeyOf(meta), ...thumbLabels().map((l) => thumbKeyFor(meta.sha256, l))];
+                        await store.deleteMany(keys);
+                    }
+                } catch (e) {
+                    logger.warn(`[Storage] delete cleanup for ${id} failed: ${e.message}`);
+                }
+
+                return { deleted: id };
+            });
         },
 
         /**

@@ -46,7 +46,6 @@ function makeFakeStore() {
 const testConfig = {
     serviceName: 'storage-test',
     idLengths: { asset: 8 },
-    maxCacheSize: 100,
     redis: {
         assetPrefix: 'STORAGE:ASSET:',
         sha256Prefix: 'STORAGE:SHA256:',

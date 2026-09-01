@@ -11,6 +11,40 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+### Fixed — storage CAS 平面的三个并发窗口（upload/delete 竞态）
+
+> 起因：审查「并发上传会不会给错结果」。纯 upload×upload 只是去重失效（多铸一条记录，
+> refcount 仍自洽），但相邻两个窗口是真数据损坏：**upload×delete 同内容**——上传在
+> `store.exists` 看到字节存在而跳过 put，同刻 delete 把最后一条同 sha 记录的字节 purge 掉，
+> 新记录永远 resolve 到 404；**delete×delete 同 id**——两个请求都过 read-then-act 守卫、
+> 各自 decr 共享 sha256 的 refcount，一条记录换两次递减，把兄弟记录还引用着的字节清掉。
+> 根因：Redis 决策（去重读 / refcount 判定）与对象存储动作（put / deleteMany）跨两个系统，
+> 进不了同一个事务。
+
+- **per-sha 内容锁**（`STORAGE:SHA256:LOCK:<sha>`，SET NX PX 30s + 随机 token、
+  GET-compare-DEL 释放）：upload 的第 2–6 步与 delete 的 refcount+purge 段串行化。
+  只有**同一内容哈希**的操作互斥，不同内容零竞争；TTL 是崩溃兜底，不是正确性边界。
+  副产品：并发同内容上传现在真正去重（此前两边都 miss 索引、各铸一条记录）。
+- **delete 用 `DEL` 返回值仲裁**：N 个并发删除只有观察到 1 的那个走 refcount 递减与
+  purge，其余抛与「晚到一步」相同的 `ASSET_NOT_FOUND`。顺序语义不变（此前顺序双删
+  第二次本来就是 NOT_FOUND，变的只有并发档从「错误的双成功」到 NOT_FOUND）。
+- **upload 第 6 步七笔写入并成一个 MULTI**（元数据 + 全部索引 + refcount incr）：
+  此前顺序 await 中途 crash 会留下「记录存在但 refcount 没计」，之后删除兄弟记录就会
+  提前 purge；现在要么全落、要么最坏留孤儿字节（下次同内容上传自动认领，安全方向）。
+- 顺手删掉只写不读的 `RECENT_UPLOADS` LRU 死代码及其 `maxCacheSize` 配置。
+- 回归分两层，各司其职：
+  - **hermetic**：`apps/storage/tests/asset-concurrency.test.js`（3 例，已进 CI 白名单）——
+    逐条对修复前代码验证过 **3 红**、修复后 **3 绿**（假 Redis 是纯微任务时序，测试里
+    用 `store.exists` 插桩制造宏任务让位，否则「并发」会意外串行、旧代码也能碰巧绿）。
+    确定性复现竞态窗口归这层。
+  - **e2e**：`e2e/suites/40-concurrency.e2e.test.js` 新增 ⑤⑥⑦（真 Router + 真 Redis +
+    真 local-oss，full profile）——⑤ 并发同内容 upload 收敛同一 assetId；⑥ 并发同 id
+    delete 恰好 1 成功、共享字节 HTTP 200 可达；⑦ upload×delete 混战 6 轮、幸存记录
+    永不悬空。真栈交叉验证：旧代码下 **⑦ 实际打中竞态变红**（悬空 404）；⑤⑥ 在真实
+    时序里是概率性竞态、以不变量护栏形式存在（确定性红由 hermetic 层负责）。
+
+下游 action：无（行为只在并发窗口内收紧；接口、返回形状、顺序语义均不变）。
+
 ---
 
 ## [v1.2.12] — 2026-08-31

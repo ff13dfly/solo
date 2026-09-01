@@ -92,7 +92,12 @@ module.exports = {
     // bytes" in O(1) instead of scanning every asset for a matching sha256. Same
     // fallback story: absent for a given hash (pre-fix content) -> delete() falls back
     // to the old full scan for that one hash, never wrongly deletes shared bytes.
-    sha256RefcountPrefix: 'STORAGE:SHA256:REFCOUNT:'
+    sha256RefcountPrefix: 'STORAGE:SHA256:REFCOUNT:',
+
+    // Per-content-hash advisory lock — serializes the upload/delete critical sections
+    // that pair a Redis decision with an object-store action (byte-existence check vs
+    // purge). Value is a random token, TTL-bounded; see logic/asset.js withContentLock.
+    sha256LockPrefix: 'STORAGE:SHA256:LOCK:'
   },
 
   // Filesystem
@@ -106,9 +111,6 @@ module.exports = {
   idLengths: {
     asset: process.env.ASSET_ID_LENGTH || 8
   },
-
-  // Cache Settings
-  maxCacheSize: Number(process.env.MAX_CACHE_SIZE) || 1000,
 
   // Asset Serving
   assetsPublicPath: process.env.ASSETS_PUBLIC_PATH || '/assets',
