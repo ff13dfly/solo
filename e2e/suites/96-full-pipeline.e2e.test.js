@@ -291,12 +291,20 @@ gate('96 · ingress → orchestrator → fulfillment → nexus → notification 
     // ── 3. fulfillment 状态验证 ────────────────────────────────────────────────────
 
     test('3a. fulfillment instance 状态已变为 PROCESSING', async () => {
-        const res = V.assertResult(
-            await rpc('fulfillment.instance.get', { id: instanceId }, ADMIN_TOKEN),
-            'instance.get after transition',
-        );
+        // 轮询而非即查:test 2 轮询到 run 文档存在即返回,且接受 'RUNNING'(中途态)为合法,
+        // 所以走到这里时 workflow 的 transition 步骤可能还没执行 —— CI 满载下踩中过一次
+        // (读到 DRAFT,而 3b 起全绿 = transition 在两个 test 之间的毫秒里落地)。
+        let res = null;
+        for (let i = 0; i < 60; i++) {   // ≤30s,与 test 2 的等待口径一致
+            res = V.assertResult(
+                await rpc('fulfillment.instance.get', { id: instanceId }, ADMIN_TOKEN),
+                'instance.get after transition',
+            );
+            if (res.state === 'PROCESSING') break;
+            await sleep(500);
+        }
         expect(res.state).toBe('PROCESSING');
-    });
+    }, 60_000);
 
     test('3b. EVENT:FULFILLMENT:TRANSITIONED 流中存在本实例的事件', async () => {
         const msgs = await redis.xRevRange('EVENT:FULFILLMENT:TRANSITIONED', '+', '-', { COUNT: 20 });
