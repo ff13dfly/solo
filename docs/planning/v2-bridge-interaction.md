@@ -10,6 +10,13 @@
 >
 > 术语：**主箱** = 主 SOLO（试验田里是 overview）；**子箱** = 下游 SOLO 网格
 > （runner / colony / steward / finance / trend …）。
+>
+> **2026-09-03 补（用户拍板）**：主箱 / 子箱是**角色**，不是拓扑要求——任何箱都可以是发方，
+> 两箱直连（第一例：steward → finance，剧本结果投回 finance 的 ingress）**不经主箱**，本文的通道划分与
+> 失败语义同样适用。传输层已定为 frame 既有器官：**发方 `gateway.webhook.send`（solo 目标模式）→ 收方
+> `ingress.ingest`**，不新建 bridge 服务；决定与依据见 `VERSION.v2.md` §3.0、
+> [`../feedback/gateway-ingress-dialect-mismatch.md`](../feedback/gateway-ingress-dialect-mismatch.md)。
+> 文中「bridge 代码未动工」仍属实——待动工的是 gateway 的那个模式。
 
 ---
 
@@ -31,6 +38,13 @@
 主箱经 bridge 调子箱的一个**窄入口方法**，子箱同步只做三件事：
 **落库为自己的实体（存档）→ 按幂等键去重 → 回执 `{id, status:'ARCHIVED'}`**。
 指令和数据下发同构：都是「落成子箱的一条存档实体」。
+
+> **传输层（2026-09-03 定）**：那个「窄入口方法」**不必每箱手写——它就是收方的 `ingress.ingest`**。
+> 发方 `gateway.webhook.send`（solo 目标模式）→ 收方 Router `ingress.ingest`：ingress 按
+> `(source, request_id)` SET NX 去重，回执 `{ok, request_id}` 即「已存档」、`{ok, duplicate:true}` 即幂等命中，
+> 落到 `EVENT:WEBHOOK:{源}`；收方订阅者落的那条记录就是本节的「存档实体」。来源标记也不用自报：
+> `actor = webhook:{源}` 由 key 反推、Router 盖章。信封 `meta.hop` 做环路刹车。
+> 收方要做的只剩：建 ingress source（配置）+ 一个订阅该流的消费者（payload 小代码）。
 
 - 🔴 **回执语义 = 「已存档」，不是「已受理」更不是「已完成」。** 执行由子箱自己的状态机
   异步推进，节奏、重试、放弃全部是子箱内政。
@@ -103,12 +117,14 @@
 |---|---|---|---|
 | bot 账号 + 窄只读 permit | 子箱（配置） | 配置动作，非代码 | 通道二 |
 | 只读自述方法 | 子箱 `api/apps/<svc>/` | 小代码 | L2 时（finance / runner 已有现成） |
-| inbox 入口 + 存档实体 + 幂等去重 | 子箱 `api/apps/<svc>/` | 小代码 | 仅开通通道一的箱子 |
+| ~~inbox 入口 + 存档实体 + 幂等去重~~ → **ingress source（建源、发 key）+ 订阅 `EVENT:WEBHOOK:{源}` 的消费者** | 收方：配置 + `api/apps/<svc>/` 小代码 | 入口与去重由 ingress 承担，只写消费者 | 仅开通通道一的箱子 |
 | 拉取循环 + 失败台账 + 新鲜度戳 | 主箱 | 代码 | 通道二 |
-| bridge 出站服务（签名信封） | 主箱（solo 框架件，v2 A 线） | 框架代码 | 通道一跨网格时 |
+| ~~bridge 出站服务（签名信封）~~ → **`gateway.webhook.send` solo 目标模式** | solo frame（v1.x 只加不破，`BACKLOG.md` §3） | 框架小改，一个开关 | 通道一 |
+| 发方存对端 key 的地方 | 发方 payload（如 steward `steward.variable` secret + approve 放行出站目标） | 配置 | 通道一 |
 
-**过渡路径**：通道二不等 bridge——v1.x 的 bot 账号 + `permit.services` 白名单今天就能跑；
-bridge 落地后只换传输层（bearer token → 签名信封），指标契约与自述方法一个字不改。
+**过渡路径（2026-09-03 改写）**：通道二今天就能跑——bot 账号 + `permit.services` 白名单，**这不是过渡，就是终态**
+（跨箱调方法 = 当对方 Router 的普通客户端）。通道一等的只是 gateway 那个模式；签名信封只在跨运营方档才回来，
+届时也只换传输层，指标契约、自述方法、存档确认语义一个字不改。
 
 ## 7. 明确不做的
 
@@ -123,9 +139,12 @@ bridge 落地后只换传输层（bearer token → 签名信封），指标契�
 
 ## 8. 与既有文档的关系
 
-- **机制**（签名 / permit / aud / 预检 / 版本握手）：`VERSION.v2.md` §3，本文不重复。
-- **安全缺口**：§3.6 A 组 #1（信封缺 `aud`）与 #4（federation-public ≠ public）在通道一
-  开通前仍必须立起来；本文的存档确认制只消解 #8（重复执行），不替代其余各项。
+- **机制**：`VERSION.v2.md` §3.0（2026-09-03 收敛：gateway solo 模式 → ingress，同运营者档）；
+  §3.3–§3.6（签名 / principal / aud / 预检，**跨运营方档基线**）。本文不重复。
+- **安全缺口（2026-09-03 更新）**：消息档下 §3.6 A 组 #2 / #4 **按构造不存在**（actor 由 key 反推、
+  peer 只能往自己那条流投递），#8 由 ingress 去重 + gateway 账本消解，#1 在 per-pair 秘密下隐式成立；
+  **唯一要做的是 #5 环路刹车 = 信封 `meta.hop`**，随 solo 模式一起落。逐条对照见
+  [`../feedback/gateway-ingress-dialect-mismatch.md`](../feedback/gateway-ingress-dialect-mismatch.md) §四。
 - **角色与 UI 红线**：overview 仓 `mind/strategy/solo-v2-testbed.md`（跨仓库不设链接）。
 - **治理**（协调层归属人、bridge 配置变更接 approval）：
   [`../feedback/org-container-per-person-mesh.md`](../feedback/org-container-per-person-mesh.md) §2，公司侧生效；个人 mesh 里归属人即本人。

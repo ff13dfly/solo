@@ -15,6 +15,10 @@
 >
 > **2026-07-15 增补**：新增 §3.6「安全考量（设计前必解）」——对 A 线 bridge 设计做了一轮多-agent
 > 对抗式安全评审，结论（四处硬缺口 + 若干承认未解项 + 实现陷阱）归入该节。
+>
+> **🔴 2026-09-03 收敛（用户拍板）**：**A 线 bridge 不再是新服务**——收敛为「gateway 出站 → ingress 入站」，
+> frame 只加 `gateway.webhook.send` 一个 solo 目标模式；§3.3–§3.6 的 mesh 签名 / principal / 预检 / 独立服务
+> 整体收窄为**跨运营方档**条件依赖。判据：SOLO 作为支持层的必要条件是简洁。详见 §3.0。
 
 ---
 
@@ -33,7 +37,7 @@ server-attested 执行）。2026-07-03 拆分把能「只加不破」的项全�
 
 | 线 | 一句话 | 现状 |
 |----|--------|------|
-| **A. 联邦级联（SOLO Bridge）**（原 E 线） | SOLO_A 经 `bridge` 服务分发请求到下游 SOLO_{1..n}，成级联/联邦；**平行处理与租户隔离统一走这个形状**（每租户/每平行单元一套独立网格） | 不存在；跨网格 = 跨机器（+可选跨信任域），硬前置是 v1.1.x 的多机 TLS |
+| **A. 联邦级联（SOLO Bridge）**（原 E 线） | ~~SOLO_A 经 `bridge` 服务分发请求到下游 SOLO_{1..n}~~ → **2026-09-03 收敛（§3.0）**：箱子互为对方 Router 的客户端——调方法用 bot token，投递用对方 ingress 的 API key，传输 = `gateway.webhook.send`（solo 模式）→ `ingress.ingest`；**平行处理与租户隔离统一走这个形状**（每租户/每平行单元一套独立网格） | frame 只欠 gateway 一个 solo 目标模式（`BACKLOG.md` §3，v1.x 只加不破）；签名 / principal / 独立服务收窄为**跨运营方档**；同机多箱不需 TLS，跨机走公网 https |
 | **B. 部署瘦身 / 动态插件平台**（原 F 线） | 瘦内核 + 按配置从 registry/CAS 拉服务工件，不再一个全量 bundle | esbuild 把全部服务打进固定 `solo.js`（~7.7MB）；构建时切片 + 内核依赖瘦身已判定「只加不破」、v1.1.x 可先行（§4.3-A/§4.4） |
 
 ---
@@ -41,9 +45,12 @@ server-attested 执行）。2026-07-03 拆分把能「只加不破」的项全�
 ## 2. 特性清单
 
 ### 2.1 A 线 · 联邦级联（SOLO Bridge）
-- **跨网格 bridge 服务**：SOLO_A 经 `bridge` 把请求分发到下游 SOLO_{1..n}。每个下游是独立网格
-  （独立 Router / Redis / 信任域），认证用 mesh Ed25519 公钥验签、授权用窄 permit，对 router 零改动。详见 §3。
-- **环路 / 深度刹车跨网格存活**：纯拓扑问题，与信任模型无关，同运营者平行网格同样会踩，随 bridge 必做（§3.4-③）。
+- **🔴 2026-09-03 收敛：没有「bridge 服务」这个东西**（§3.0）。箱子互为对方 Router 的客户端：调方法 = bot token +
+  窄 permit（现成）；投递 = `gateway.webhook.send`（**新增 solo 目标模式**，frame 唯一改动）→ 对方 `ingress.ingest`（现成）。
+  对 router 零改动，不新增服务 / 实体 / 方法名。
+- ~~**跨网格 bridge 服务**：SOLO_A 经 `bridge` 把请求分发到下游 SOLO_{1..n}，认证用 mesh Ed25519 公钥验签、授权用窄 permit~~
+  → 收窄为**跨运营方档**（下游属于别人时才需要不可抵赖与边界无共享秘密），设计基线保留在 §3.3–§3.6。
+- **环路刹车**：消息语义下只可能由收方订阅者显式再投回造成，信封 `meta.hop` 计数即够（§3.0），随 solo 模式一起做。
 
 ### 2.2 B 线 · 部署瘦身 / 动态插件平台
 - **真·动态拉取插件平台（v2 主体）**：瘦内核 + 按配置从 registry/CAS 拉服务工件，告别固定全量 bundle。详见 §4.3-B。
@@ -57,12 +64,61 @@ server-attested 执行）。2026-07-03 拆分把能「只加不破」的项全�
 |----|------|-----------------|
 | **actor-claim 全量**（执行面用户签名/服务凭证，旧 A 线） | **搁置**（2026-07-12） | 单信任域内 server 代签 + 事件信封 actor/source 透传（v1.1.9 最小档）已满足审计；平行网格 = 同一运营者同信任域，mesh 签名的**网格级**归因已够。它实质是 bridge 跨信任域档的**子依赖**（§3.4-②），非独立需求。**重启条件：出现跨运营方联邦（下游网格属于别人）。** |
 | **完整 at-least-once 重投 + 全网统一幂等键**（旧 B 线） | **搁置**（2026-07-12，此前 2026-07-03 已降级为可选/非阻塞） | 真 bug 那半（`_task` fire-and-forget 丢投）已拆出并于 v1.1.x 修复（router 有限重试退避，2026-07-05）；bridge 分发语义以**同步转发为默认**（§3.5），异步仅给明确幂等的方法——完整语义没有兑现场景，且会静默重复调用未做幂等的下游 handler（行为破坏）。**重启条件：跨网格异步 fire-and-forget 分发成为刚需。** |
+| **独立 bridge 服务 + mesh Ed25519 签名信任模型 + 外网格 principal + capability 预检**（A 线首发面） | **收窄为跨运营方档条件依赖**（2026-09-03，用户拍板） | 同运营者 mesh 内 API key + TLS 足够：ingress 按构造已解 §3.6 #2/#4/#8，#1 在 per-pair 秘密下隐式成立；签名买到的不可抵赖 / 边界无共享秘密 / 一箱一钥，只在**下游属于别人**时值钱。判据：SOLO 作为支持层必须简洁——bridge 以「owner 要学的新名词数」计，收敛后为零。A 线首发面改为 `gateway.webhook.send` solo 目标模式（§3.0）。**重启条件：出现跨运营方联邦**（与 actor-claim、fieldmask 同一条）。 |
 | **多租户开放档**（同库 tenant scoping，旧 A 线） | **取消**（2026-07-03） | 由 A 线 bridge 的联邦隔离替代——每租户一套独立网格，物理隔离强于逻辑 scoping，不动现有实体/permit 形状。若未来租户量大、需共享基础设施摊薄成本，同库 scoping 可作为独立课题重议（§3.1 回写）。 |
 | **多机部署硬化 · `_task` 丢投修复 · Saga durable 补偿 · autorun 置信判据 · passport TOTP · SSE/MCP/SDK · metrics 正式档 · 构建时切片 + 内核瘦身**（旧 A/B/C/D/F 线的「只加不破」部分） | **拉回 v1.1.x**（2026-07-03，详见 [`VERSION.md`](./VERSION.md) §4 回写） | 均判定纯增量。部分已落地：`_task` 丢投修复（2026-07-05）、Saga durable 补偿与 MCP adapter（v1.1.10）、OTP（2026-06-30）。 |
 
 ---
 
 ## 3. A 线 · 联邦级联 / SOLO Bridge（跨网格联邦）
+
+### 3.0 🔴 2026-09-03 收敛：bridge 不是新服务，是 gateway 出站 → ingress 入站（用户拍板）
+
+> 来源：solo 会话 2026-09-03，起因是 steward ↔ finance 两箱**直连**的真实需求（finance 派 steward 跑剧本、
+> steward 把结果投回 finance 的 ingress，不经总控箱）。反馈与源码对照：
+> [`../feedback/gateway-ingress-dialect-mismatch.md`](../feedback/gateway-ingress-dialect-mismatch.md)。
+> 判据由用户定：**SOLO 作为支持层的必要条件是简洁**——方案以「箱子 owner 为了联邦要学的新名词数量」计，目标为零。
+
+**定义**：箱子之间**互为对方 Router 的客户端**。凭证只有 frame 里已有的两种：
+- 调对方**方法**（读状态、定期拉取、派单）→ **bot token + 窄 permit**。今天就在跑：steward `integrations/dispatch-script.js`
+  用 6 方法的 integrator 账号派单到终局（2026-09-02 线上实测）。
+- 给对方**投递**数据 / 指令 → **`gateway.webhook.send` → 对方 `ingress.ingest`**，凭证是对方 ingress 发的 API key。
+
+不需要总控箱；不新增服务、实体、方法名；对 `api/router/` 零改动。
+
+**frame 唯一要加的：`gateway.webhook.send` 一个 solo 目标模式**（只加不破，v1.x，`BACKLOG.md` §3）——
+JSON-RPC 信封（`request_id` 取 `idempotencyKey`，一键贯穿发方账本与收方去重）· `Authorization: ApiKey` 头 ·
+解析 ingress 回执（`duplicate` / 422 held 如实透出）· 放行同机 loopback 的 Router 目标（同机多箱是 §3.4-④ 立的第一里程碑，
+现有闸会拦死第一跳）· 信封 `meta.hop` 环路刹车。现状是**同一 frame 的出口与入口不说同一种话**（gateway 发裸 JSON + HMAC，
+ingress 收 JSON-RPC + ApiKey），两个 SOLO 箱子今天不能直插。
+
+**§3.1–§3.6 原文的地位**：mesh Ed25519 签名 / `aud` / nonce / 外网格 principal / capability 预检 / 独立 bridge 服务，
+全部**收窄为「跨运营方档」条件依赖**，与 §2.3 actor-claim、§3.4-④ fieldmask 同一个重启条件——**出现跨运营方联邦**。
+原文保留作该档的设计基线与安全评审记录，**不再是 A 线的首发面**。
+
+**按构造已成立的（消息档不另写代码）**：
+- §3.6 **#2**（actor 被当授权输入）：ingress 的 actor = `webhook:{源}`，由 key 反推、Router 盖章，对端无法自报。
+- §3.6 **#4**（federation-public ≠ public）：一把 key 只能往自己命名的那条 `EVENT:WEBHOOK:{源}` 投递，够不到收方任何方法——比「窄 permit」更窄。
+- §3.6 **#8**（重复执行）：ingress `(source, request_id)` SET NX + gateway 投递账本 `idempotencyKey`。
+- §3.6 **#1**（`aud`）：per-pair 秘密下隐式成立（发给 B 的信封 C 验不过）；一箱一把公钥时才需显式 → 跨运营方档。
+
+**未按构造成立、要做的**：§3.6 **#5** 环路刹车 → 信封 `meta.hop`（随 solo 模式一起做；消息语义下 A→B→A 只可能由 B 的
+订阅者**显式**再投回造成，没有 RPC 式自动转发扇出，一个计数就够）。**版本握手** → 靠 `BACKLOG.md` §3「bundle 运行时自报版本」，
+落地后 ping 自然带出，不是 bridge 自己的机制。**#3** callee 钉定 → TLS 证书，跨机公网 https 两侧已有。
+
+**语义改动**：§3.5「同步转发为默认」→ **「投递为默认」**。每次跨箱交互的终点是落到某一箱的 ingress 存档
+（[`v2-bridge-interaction.md`](./v2-bridge-interaction.md) §2 存档确认制、§7 不做同步跨箱调用链）——交互规格本来就这么写，
+这次把 §3 拉齐。需要跨箱**调方法**的场景不另立「RPC 档」，就是当对方 Router 的普通客户端。
+
+**治理面顺带简化**：没有中心协调层，就没有「协调层配置变更谁有权改」的问题
+（[`../feedback/org-container-per-person-mesh.md`](../feedback/org-container-per-person-mesh.md) §二的前提消失）。
+每个 owner 只治理自己的入站（`ingress.source.*`，admin）与出站（发方存 key 的地方，steward 为 `steward.variable` secret +
+apiprovider 式「approve = 放行一个出站目标」）。主权形状不变：**对端自己决定信不信**。
+
+**边界契约**：frame 保证信封（`request_id` + `data` + `meta`）、幂等、去重、来源盖章、审计；`data` 的 schema 是两个 owner
+之间的事（ingress `dataSchema` 可选声明，违约 422 留人审）。这是 ingress 原本的 dumb pipe 划线，也是论文 frame / payload 的划线。
+§3.5 末「mesh edge 规范是否独立成文」的待拍板项因此**大幅缩水**：同运营者档的 edge 就是 ingress 信封 + `gateway.webhook.send`
+solo 模式，两者都已有文档；独立成文只在跨运营方档才有必要。
 
 ### 3.1 概念
 SOLO_A 的 `bridge` 服务把请求分发到下游 SOLO_{1..n}，形成级联。**每个下游 SOLO 是一个独立网格**
@@ -100,7 +156,11 @@ SOLO_A 的 `bridge` 服务把请求分发到下游 SOLO_{1..n}，形成级联。
 单信任域 + 单机 loopback 可信）。同运营者平行部署主要碰"单机"假设，跨运营方联邦两条全碰。
 属破坏性架构边界外，明确出版。
 
-### 3.3 实现路径：mesh 公钥验签（认证）+ 窄 permit（授权）双层 ✅
+### 3.3 实现路径：mesh 公钥验签（认证）+ 窄 permit（授权）双层 —— 🔒 跨运营方档基线（2026-09-03 收窄，见 §3.0）
+
+> **2026-09-03**：本节至 §3.6 描述的是**下游属于别人**时的 bridge。同运营者 mesh 的首发面已改为 §3.0
+> （gateway solo 模式 → ingress，API key + TLS），本节内容整体后置，重启条件 = 出现跨运营方联邦。文字保留不删。
+
 **认证用签名、授权用 permit——两层分开，对 router 零改动**（验签发生在 bridge / 服务边界，不碰受保护目录）。
 这不是新协议，而是把 SOLO 内部已有的信任模型往网格边界抬了一层：Router 现在就用 Ed25519 私钥签
 `X-Router-Token`、微服务用 `config.routerPublicKey` 验签（CLAUDE.md §7）；mesh 边界照搬这套。
@@ -172,8 +232,10 @@ SOLO_A 的 `bridge` 服务把请求分发到下游 SOLO_{1..n}，形成级联。
 > "多机 TLS（v1.1.x）+ 环路刹车"两块地基，跨运营方联邦才追加 actor-claim + fieldmask 两块条件件。**
 
 ### 3.5 开放设计问题（拍板前要定）
-- **分发语义**：**同步转发为默认**（签好 envelope、等下游返回，失败上抛由调用方决定重试）——2026-07-12 随
-  「完整 at-least-once 搁置」进一步坐实；异步 fire-and-forget 仅考虑给明确幂等的方法，且属可选强化、非首发面。
+- **分发语义**：~~**同步转发为默认**~~ → **2026-09-03 改为「投递为默认」**（§3.0）：跨箱交互的终点是落到某一箱的
+  ingress 存档，发方拿到 `{ok, request_id}` 即完成，执行由收方自己的状态机异步推进；重试安全由 ingress 去重 + gateway
+  `idempotencyKey` 兜住。跨箱调方法不是「分发」，是当对方 Router 的普通客户端（bot token）。原「同步转发」措辞保留作跨运营方档
+  RPC 形态的记录：签好 envelope、等下游返回，失败上抛由调用方决定重试；异步 fire-and-forget 仅考虑给明确幂等的方法。
 - **信任登记 / 密钥轮换的运维面**：B 怎么带外登记 A 的公钥（admin 方法？`deploy/` 配置？），轮换时怎么平滑过渡（key-id + 多活公钥）。
 - **拓扑来源**：下游 SOLO_{n} 清单是静态配置（`deploy/`）还是动态注册 / 发现？
 - **下游故障语义**：某个 SOLO_{n} 挂了，bridge 降级 / 重试 / 熔断？是否要 per-downstream 健康探针。
@@ -335,8 +397,10 @@ nonce 缓存 + method/params/aud 摘要绑定 + 非对称验签，不得字面�
 - 入 v2 的判据：**非破坏性改不动了**（"只加不破"无法平滑落地）。能"只加不破"的，仍走 v1.1.x（runbook §2/§5）。
   - 例：Saga 补偿、幂等键的 best-effort 部分已在 v1.1.3「只加不破」提前落地；durable 补偿也已随 v1.1.10 落地。
   - 例（2026-07-03 拆分）：多机硬化、`_task` 丢投修复、TOTP、SSE/MCP/SDK、metrics、构建时切片等判定只加不破 → 全部拉回 v1.1.x（台账见 §2.3）。
-- **A 线（bridge）**：天然破坏性（跨机器 + 可选跨信任域），整条 v2；兼任原"多租户"需求的落地方式（§3.1 回写）。
-  硬前置多机 TLS 在 v1.1.x 先行，不占 v2。
+- **A 线（bridge）**：~~天然破坏性，整条 v2~~ → **2026-09-03 收敛后，同运营者档整体「只加不破」，走 v1.x**：
+  frame 只加 `gateway.webhook.send` solo 目标模式（§3.0），其余全是既有器官与配置动作。仍留 v2 的只剩**跨运营方档**
+  （mesh 签名 / principal / 预检 / fieldmask，§3.3–§3.6），重启条件 = 出现跨运营方联邦。兼任原"多租户"需求的落地方式（§3.1 回写）；
+  同机多箱不需 TLS，跨机走各栈已有的公网 https。
 - **B 线（部署瘦身）**：构建时切片 + 内核依赖瘦身 v1.1.x 先行（[`BACKLOG.md`](./BACKLOG.md) §4）；多产物 / 动态拉取插件平台进 v2（§4）。
 - **actor-claim 全量 / 完整 at-least-once**：2026-07-12 搁置出主线（§2.3），**不再是 v2 待办**；
   重启条件分别为「出现跨运营方联邦」/「跨网格异步分发成为刚需」，触发时重新立项再议版本归属。
