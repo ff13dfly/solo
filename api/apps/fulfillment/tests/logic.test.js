@@ -63,6 +63,9 @@ const SM_PROFILE = {
         { event: 'cancel_requested', from: 'PROCESSING', to: 'CANCELLED',  condition: null, actions: [] },
         { event: 'confirm',          from: 'PROCESSING', to: 'CONFIRMED',
           condition: { '==': [{ var: 'instance.meta.approved' }, true] }, actions: [] },
+        // 数值闸门：两个字段都从 meta 取。docs/feedback/fulfillment-condition-fail-open.md
+        { event: 'release',          from: 'PROCESSING', to: 'RELEASED',
+          condition: { '>=': [{ var: 'instance.meta.balance' }, { var: 'instance.meta.threshold' }] }, actions: [] },
     ],
 };
 
@@ -150,6 +153,35 @@ describe('fulfillment.instance', () => {
         // confirm requires meta.approved === true (not set) → rejected, state unchanged
         await expect(logic.instance.transition({ id: inst.id, event: 'confirm' }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
         expect((await logic.instance.get({ id: inst.id })).state).toBe('PROCESSING');
+    });
+
+    // 数值比较缺字段必须拦住（fail-closed）。此前 `null >= null` 求值为 true，
+    // 「余额 ≥ 阈值才放行」在没喂数据时无条件放行。docs/feedback/fulfillment-condition-fail-open.md §一
+    test('transition — numeric condition with BOTH operands missing is rejected (fail-closed, was fail-open)', async () => {
+        const inst = await logic.instance.create({ sourceId: 'ORD-FC1', profileId: SM_ID }, MOCK_REQ);
+        await logic.instance.transition({ id: inst.id, event: 'start' }, MOCK_REQ);
+        await expect(logic.instance.transition({ id: inst.id, event: 'release' }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
+        expect((await logic.instance.get({ id: inst.id })).state).toBe('PROCESSING');
+    });
+
+    test('transition — numeric condition with ONE operand missing is rejected', async () => {
+        const inst = await logic.instance.create({ sourceId: 'ORD-FC2', profileId: SM_ID, meta: { balance: 100 } }, MOCK_REQ);
+        await logic.instance.transition({ id: inst.id, event: 'start' }, MOCK_REQ);
+        await expect(logic.instance.transition({ id: inst.id, event: 'release' }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
+    });
+
+    test('transition — numeric condition passes once both fields are supplied (0 counts as present)', async () => {
+        const inst = await logic.instance.create({ sourceId: 'ORD-FC3', profileId: SM_ID }, MOCK_REQ);
+        await logic.instance.transition({ id: inst.id, event: 'start' }, MOCK_REQ);
+        // threshold 0 is a real value, not "missing" — 5 >= 0 → RELEASED
+        const ok = await logic.instance.transition({ id: inst.id, event: 'release', metaUpdate: { balance: 5, threshold: 0 } }, MOCK_REQ);
+        expect(ok.state).toBe('RELEASED');
+    });
+
+    test('transition — numeric condition still rejects when supplied values genuinely fail', async () => {
+        const inst = await logic.instance.create({ sourceId: 'ORD-FC4', profileId: SM_ID, meta: { balance: 1, threshold: 10 } }, MOCK_REQ);
+        await logic.instance.transition({ id: inst.id, event: 'start' }, MOCK_REQ);
+        await expect(logic.instance.transition({ id: inst.id, event: 'release' }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
     });
 
     test('transition — metaUpdate is merged BEFORE the condition is evaluated', async () => {

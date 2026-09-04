@@ -3,11 +3,15 @@
  * 集成测试入口
  *
  * 用法：
- *   node api/simulation/run.js              # 运行所有场景
- *   node api/simulation/run.js storage      # 只跑 storage 相关场景
+ *   node api/autocheck/simulation/run.js              # 运行所有场景
+ *   node api/autocheck/simulation/run.js storage      # 只跑 storage 相关场景
  *
- * 前提：本地 Redis 在 localhost:6379 运行
- *       测试使用 DB 15（隔离），自动 FLUSH，不影响生产数据
+ * 前提：Redis 可达。默认 redis://localhost:6699/15（与 deploy/dev.sh 一致），
+ *       用 TEST_REDIS_URL 覆盖（CI 的 test job 传 redis://localhost:6379/15）。
+ *       只用 DB 15，每个场景前后 FLUSHDB —— 🔴 别指向任何有数据的实例。
+ *
+ * CI：.github/workflows/ci.yml `test` job 每次都跑（2026-09-04 起）。此前只有
+ *     static/simulation-coverage.js 检查「场景文件存在」，从没有人执行过它们。
  */
 
 const testRedis = require('./framework/redis');
@@ -29,10 +33,8 @@ const SCENARIOS = {
         { name: 'core-security', run: require('./scenarios/router/core-security').run },
         { name: 'param-validation', run: require('./scenarios/router/param-validation').run },
     ],
-    authority: [
-        { name: 'bind-concurrency', run: require('./scenarios/authority/bind-concurrency').run },
-    ],
-    // NOTE: scenarios for example/business services (sale/supply/lucky/academy/commodity) were
+    // NOTE: scenarios for example/business services (sale/supply/lucky/academy/commodity, and
+    // authority on 2026-09-04) were
     // removed — SOLO is framework-only (CLAUDE.md §1), those services don't exist. Their dangling
     // require() entries used to crash the whole runner at load; keep this map in sync with
     // scenarios/ on disk.

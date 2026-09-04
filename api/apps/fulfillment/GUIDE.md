@@ -23,6 +23,7 @@
    `metaUpdate` 在**校验条件之前**合并进 meta，JsonLogic 条件通过才切到规则的 `to`，并把规则 `actions`
    解析成 `_tasks` 交 Router 异步派发。同一 `(event, from)` 可有多条不同 `condition` 的规则 = 分支，
    取第一条条件成立的。
+   **数值比较缺字段 = 拦住**（fail-closed）：`<` `<=` `>` `>=` 引用的 `instance.meta.<X>` 任一缺失（undefined / null / 空串；**0 不算缺失**），该条件即为 false，转移报 `Condition not met`。要显式给缺省值写 `{ "var": ["instance.meta.x", 0] }`。`==` / `!=` / `!` 不受影响。
 
 **语义要点**：`cancel` / `hold` 是 transition 的语义包装——分别触发 `cancel_requested` / `hold_requested`，
 这两个事件**必须在 profile 里定义为当前状态出发的转移**，否则报 INVALID_PARAM。`resume` 回到 `prevState`

@@ -14,12 +14,22 @@ name: CI
 #            scanIterator v5 batch bug both went unchecked here for a release
 #            cycle before this was added.
 #   test   — jest against a Redis service. Runs the proven-green hermetic subset
-#            (allow-list in jest.ci.config.js — 61 suites / 790 tests as of
-#            2026-06-11). Excluded suites (external-API agent tests, script-style
-#            "tests", validator's open OOM bug) are tracked in jest.ci.config.js.
+#            (allow-list in jest.ci.config.js — the list IS the count, don't copy a
+#            number here). Excluded suites (external-API agent tests, script-style
+#            "tests") are tracked in jest.ci.config.js. Same job then runs the
+#            autocheck/simulation scenarios (concurrency/TOCTOU against real Redis) —
+#            7 scenarios that a static rule verified EXIST but nothing ever executed
+#            until 2026-09-04.
+#   upgrade-path — scaffold a throwaway consumer with init.sh, plant sentinels in the
+#            [Project]/[Solo]/[Solo→Project] zones, fake an older .solo-version, run
+#            upgrade.sh (dry-run, real, again) and assert the zone contract + doctor.sh
+#            green (deploy/check-upgrade-path.sh). init.sh/upgrade.sh had zero coverage
+#            before; v1.2.8's "upgrade silently erased a project's security decision"
+#            is the class of bug this catches.
 #   e2e    — full-stack black-box regression (e2e/ standalone project): boots the
 #            REAL 15-service mesh + mock-listener chain against redis-stack and
-#            runs all 66 suites. This is the gate that catches "behavior changed,
+#            runs every suite under e2e/suites (the directory is the count — don't
+#            copy a number here). This is the gate that catches "behavior changed,
 #            tests didn't" drift the hermetic subset can't see (toFix §6.x).
 #   portal-tsc — type-check both portals (system + operator). Cheap, no mesh.
 #   frontend-build — build the EXACT artifacts init.sh ships (deploy/build-frontend.sh
@@ -34,7 +44,10 @@ name: CI
 #            surfaced). NON-BLOCKING for now (continue-on-error) while we stabilize;
 #            promote to blocking once it's proven low-flake.
 #
-# static / test / e2e / portal-tsc / frontend-build are blocking; ui-e2e is non-blocking (for now).
+# static / test / e2e / portal-tsc / frontend-build / upgrade-path are blocking; ui-e2e is non-blocking (for now).
+# Security scanning: `npm audit` (prod deps) runs in static — critical blocks, high is report-only
+# until the 6 known highs (2026-09-04: axios, form-data, http-proxy-middleware, nodemailer, sharp,
+# urllib) are cleared; CodeQL lives in codeql.yml; Dependabot in .github/dependabot.yml.
 
 on:
   pull_request:
@@ -111,6 +124,15 @@ jobs:
             echo "$bad"; exit 1
           fi
           echo "lockfile hygiene OK"
+      - name: npm audit — production deps, critical (BLOCKING)
+        # 只看随 bundle 发给下游的生产依赖；dev 依赖（jest 等）不进 bundle。
+        run: npm audit --omit=dev --audit-level=critical
+      - name: npm audit — production deps, high (report only until the known 6 are cleared)
+        # 2026-09-04 基线：axios / form-data / http-proxy-middleware / qs / urllib 有非 major 修复
+        # （`npm audit fix` 即可，随后过 CLAUDE.md §6.1 锁文件门禁）；nodemailer 9 / sharp 0.35 是 major，
+        # 分别要验 gateway SMTP 与 storage 图像路径。清零后把这一步的 continue-on-error 删掉。
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
 
   test:
     name: Unit + Redis-backed tests
@@ -139,9 +161,31 @@ jobs:
       - run: npm ci
       - name: jest (green subset — see jest.ci.config.js)
         run: npx jest -c jest.ci.config.js --ci --runInBand
+      - name: simulation scenarios (autocheck/simulation — concurrency / TOCTOU against real Redis)
+        # DB 15 隔离，每个场景前后 FLUSHDB；这个 Redis 是本 job 专用容器。此前只有
+        # static/simulation-coverage.js 检查「场景文件存在」，场景本身从没在 CI 里执行过。
+        run: TEST_REDIS_URL=redis://localhost:6379/15 node autocheck/simulation/run.js
+
+  upgrade-path:
+    name: Upgrade path (init → tamper → upgrade.sh ×3 → zone contract + doctor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - name: install api deps (init.sh needs api/node_modules/{tweetnacl,bs58}; build.sh bundles from api/)
+        run: npm ci
+      - name: scaffold a throwaway consumer, plant sentinels, upgrade, assert
+        # 顶层 defaults 把 cwd 放在 api/；脚本按自己的位置定位仓库根，这里显式回到根。
+        working-directory: .
+        run: bash deploy/check-upgrade-path.sh
 
   e2e:
-    name: Full-stack e2e (live mesh, 66 suites)
+    name: Full-stack e2e (live mesh, all suites)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:

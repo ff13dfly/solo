@@ -1,0 +1,38 @@
+# Dependabot — 依赖漏洞与版本更新（2026-09-04 起）
+#
+# 为什么现在才有：ci.yml 此前只有供应链「卫生」检查（禁 yarn.lock / 镜像源），没有任何漏洞扫描；
+# 2026-09-04 实扫 api/ 生产依赖有 6 个 high（axios / form-data / http-proxy-middleware /
+# nodemailer / sharp / urllib），其中 nodemailer 9 与 sharp 0.35 是 major。
+#
+# 节奏刻意放低：单人维护，每周一批、每个生态最多 3 个 PR；minor/patch 合并成一个 PR。
+# major 单独成 PR——它会触发 CLAUDE.md §6.1 的锁文件门禁（隔离目录 npm ci）与全量 jest，别自动合。
+# 只盯 api/（真正随 bundle 发给下游的依赖）与 Actions 本身；e2e/ portal/ client/ 是开发期依赖，
+# 需要时再加 directory 条目。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /api
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 3
+    groups:
+      production-minor-patch:
+        dependency-type: production
+        update-types: [minor, patch]
+      development-all:
+        dependency-type: development
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore(ci)"

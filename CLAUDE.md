@@ -112,13 +112,25 @@ REDIS_URL=redis://localhost:$TESTPORT npx jest -c jest.ci.config.js --ci --runIn
 redis-cli -p $TESTPORT shutdown nosave   # 跑完关掉，别在机器上再留一个常驻测试库
 ```
 
-> 白名单子集当前 **128 套 / 2024 测试**，稳定绿 **127 套**（2026-08-20 实跑 20–35s；其中
+> 白名单子集当前 **133 套 / 2175 测试**（2026-09-04 实跑全绿，2170 passed + 5 skipped；列表即计数，
+> `node -p "require('./jest.ci.config.js').testMatch.length"`）；此前 2026-08-20 实跑 128 套，稳定绿 127 套（其中
 > `core/gateway/tests/smtp-live.test.js` 是 LIVE 套，没配 `EMAIL_SMTP_*` 就整套 skip）。唯一红的那套
 > 是 `core/agent` 的 **LIVE Gemini 活体测试**——它真打外部模型，**同一份代码连跑两次分别挂 2 例和
 > 3 例**，逐次波动、与改动无关。判据：只要「失败的套 = 1，且它是 agent 的 LIVE 套」就是这个已知项，
 > 别去追。`--runInBand` 是必需的，防 MockRouter 并发 flaky。**这些数字会旧，以实跑输出为准。**
 
 ⚠️ 仓库里很多 `*.test.js` 不是 hermetic 的：`core/agent/**` 要外部 LLM API；e2e/rbac/integration 要全栈；部分是 `process.exit` 脚本。CI 用 `jest.ci.config.js` 的**白名单**只跑已验证通过的子集（剩余硬化项见 `BACKLOG.md §5`）。
+
+**jest 之外还有三道门，改到对应面时本地先跑**（2026-09-04 起进 CI，BACKLOG §5.7）：
+
+```bash
+# 升级路径（动了 deploy/scaffold/* 或 deploy/build.sh 必跑；建一次性消费者→三区哨兵→upgrade ×3→49 断言，1–3 分钟）
+bash deploy/check-upgrade-path.sh
+# 并发 / TOCTOU 仿真场景（动了 storage/user/administrator/orchestrator/router 的写路径）；指向上面那个专用测试库
+TEST_REDIS_URL=redis://localhost:$TESTPORT/15 node api/autocheck/simulation/run.js
+# WAL / 索引守恒（动了 entity.js 写路径、walarchiver、logger 落盘布局）；lite 档即可
+(cd e2e && REDIS_URL=redis://localhost:$TESTPORT npx jest suites/105-wal-conservation.e2e.test.js --runInBand)
+```
 
 ### 6.1 锁文件门禁：隔离目录跑真 `npm ci`（2026-08-25 定，v1.2.4）
 

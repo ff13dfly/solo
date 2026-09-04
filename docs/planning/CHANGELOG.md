@@ -11,6 +11,41 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+### 可靠性门禁一批（2026-09-04）—— 补「跑久了 / 量大了 / 版本错开了」这三类现有测试看不见的面
+
+起因：盘点 v1.2.8→v1.2.12 十一处修复的来源——五处来自下游生产报告，一处 CI 抓到且红了两天没人看；
+类别上资源生命周期 ×4、契约不一致 ×4、升级路径 ×2、并发 ×1。现有 hermetic 与 e2e 套件都按
+「单次调用对不对」断言，对累计不守恒、升级覆盖、依赖漏洞三类是盲区。
+
+- **fix(library/jsonlogic)**：`evaluateCondition` 的数值比较（`<` `<=` `>` `>=`）对缺失字段 **fail-closed**。
+  此前 `{var:'meta.x'}` 取不到 → null → `null >= null` 为 true，「余额 ≥ 阈值才放行」在没喂数据时无条件放行
+  （colony 派生项目交易闸门实测，[`../feedback/fulfillment-condition-fail-open.md`](../feedback/fulfillment-condition-fail-open.md) §一）。
+  0 / false 不算缺失；`{var:[path, default]}` 走缺省；`==` `!=` `!` 不改；裸 `apply()` 不改（没用 `add_operation`
+  改全局单例——orchestrator runner 直接 require 了 json-logic-js，不该被隐式带走）。影响 fulfillment 转移守卫 +
+  nexus guard；orchestrator step `condition` **未纳入**（BACKLOG §3）。+11 库单测、+4 fulfillment 用例；GUIDE 补语义。
+- **test(deploy)**：新增 `deploy/check-upgrade-path.sh` + CI `upgrade-path` job（阻塞）：init.sh 建一次性消费者 →
+  [Project]/[Solo]/[Solo→Project] 三区各放哨兵 → 伪装成上一 patch 版 → upgrade.sh `--dry-run` / 真跑 / 再跑 →
+  49 条断言：[Project] 逐字节不动（.env / api/apps / .keypair / seed / services.json / docs/README 项目段）、
+  [Solo] 整目录回到 stock 且上游已删的文件消失、[Solo→Project] 分歧脚本不覆盖只暂存 `.solo-v{ver}.new`、
+  新 bundle 与新构建逐字节一致且旧 bundle 被剪、`--dry-run` 树指纹不变、二次升级树指纹不变、doctor/precheck ✗ 0。
+  init.sh / upgrade.sh 此前零测试覆盖，唯一人工验证是 v1.1.1→v1.1.2（runbook/upgrade-patch.md §3）。本机实跑 49/49。
+- **test(e2e)**：新增 `e2e/suites/105-wal-conservation.e2e.test.js`：400 条 `collection.payment.record` 有界并发 →
+  主索引 SET 与游标 ZSET 各恰好 +N 且每个 id 两处都在、热流 N 条 create 行一条不少（v1.2.10 的 reclaim 过冲会在这里现形）
+  且 XLEN 有界、归档追平后消费组 pending=0 且磁盘恰好 N 行（按 ref 去重、与流条目 id 集相等）、ERROR:QUEUE 零增量。
+  lite 档即可，本机 2.4s。98 号钉单行原子性，本套钉 N 条之后的守恒。
+- **test(simulation)**：`api/autocheck/simulation` 的并发 / TOCTOU 场景接进 CI `test` job。此前只有静态规则
+  `simulation-coverage.js` 检查「场景文件存在」，场景本身从没被执行过。顺手修了两处腐烂：orchestrator 场景没给
+  matcher 传 config（`Cannot read properties of undefined (reading 'consumer')`）、建完 workflow 没过 C1 审核就 run
+  （`Workflow cannot run in status: PENDING_REVIEW`）；删掉 authority 场景（服务不存在，框架无业务层）。
+- **ci(security)**：static job 加 `npm audit --omit=dev`——critical 阻塞、high 只报（2026-09-04 基线 6 个 high：
+  axios / form-data / http-proxy-middleware / nodemailer / sharp / urllib，前五个 `npm audit fix` 可修，nodemailer 9 与
+  sharp 0.35 是 major，见 BACKLOG §3）；新增 `.github/dependabot.yml`（api/ npm 每周一批、minor/patch 合并、major 单独 PR）
+  与 `.github/workflows/codeql.yml`（security-extended，排除产物目录，不阻断）。此前 CI 只有供应链卫生检查，零漏洞扫描。
+- **chore(ci)**：三处互相矛盾的白名单计数注释（61/790、105/1690、133）改为「列表即计数」；e2e 的 66 套同理。
+
+下游 action：用 JsonLogic 数值比较做闸门的 fulfillment profile，字段缺失时现在会被拦（`Condition not met`）而不是放行；
+若真有依赖「没喂就放行」的 profile（不应存在——那正是被报的事故），改为显式缺省 `{var:[path, default]}`。其余无。
+
 ---
 
 ## [v1.2.12] — 2026-09-01

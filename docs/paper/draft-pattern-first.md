@@ -1,6 +1,6 @@
 # The Container Model: An Experience Report on Enforcing Standards Across Human–AI Software Units
 
-> **Status: v1.0 candidate (2026-08-30) — final text, not yet peer-reviewed,
+> **Status: v1.0 candidate (2026-09-04) — final text, not yet peer-reviewed,
 > not yet deposited.** Pattern-first restructuring of the earlier v0.1 draft
 > (now in `archive/`). Data freeze: June 14 – August 24, 2026
 > (v1.1.0 → v1.2.2); later releases are deliberately out of scope.
@@ -348,7 +348,7 @@ documented in the repository.
 | R1 enforced frame | `[Solo]`/`[Project]` zones, overwrite-on-upgrade, divergence detection (§3.2); post-edit contract gate (§3.3) |
 | R2 upstream-first evolution | dual feedback channels, human and machine (§3.4) |
 | R3 per-turn governance | root governing document + guardrail skill (§3.5) |
-| R4 mediated interaction | router-only calls within a box; bridge mesh across boxes — designed, not deployed (§3.6, §4.5) |
+| R4 mediated interaction | router-only calls within a box; across boxes, the same router and webhook adapters under per-pair credentials — designed, not deployed (§3.6, §4.5) |
 | R5 proven resource claims | launcher proves Redis ownership and fail-fast port claiming, both fail closed (§3.6) |
 
 *Table 1: each pattern requirement and the SOLO mechanism that realizes it.
@@ -432,12 +432,23 @@ exist at all* — and, as §4.3 shows, the two are not substitutes.
 
 Within a box, services are forbidden to call each other directly — every
 call goes through the signing router, and the §3.3 gate enforces the rule
-statically. Across boxes, the coordination layer is specified as a
-cryptographically authenticated bridge mesh with narrow permits, its
-configuration changes routed through the framework's m-of-n approval chain;
-it is designed and adversarially reviewed but **not deployed** (§4.5). R4 is
-therefore realized today only in its intra-box half; cross-box questions are
-answered by humans.
+statically. Across boxes, the design reuses that boundary instead of adding
+a layer. To read another box's state or hand it work, a box is an ordinary
+client of the other's router, holding a bot session with a narrow permit; to
+deliver data, its outbound webhook adapter posts into the other box's
+inbound webhook adapter under a per-pair API key that reaches one named
+event stream and no method at all. The frame supplies the envelope,
+idempotency, de-duplication, source stamping and audit; the payload schema
+is a matter between the two owners — the §2.1 line again — and each owner
+governs only their own inbound sources and outbound targets, so there is no
+central configuration to protect. No new service, entity or vocabulary is
+introduced; what remains to build is one target mode on the outbound
+adapter, whose dialect today differs from the inbound one's. A heavier tier
+— per-box signing keys, audience binding, a signed capability pre-check —
+is specified and adversarially reviewed as the baseline for federation
+across *different* operators and is deferred until one exists. Both tiers
+are designed but **not deployed** (§4.5). R4 is therefore realized today
+only in its intra-box half; cross-box questions are answered by humans.
 
 R5 is realized in the launcher, and only after the incident that forced it
 (§4.1): before binding, a box proves that the Redis instance on its
@@ -590,16 +601,21 @@ frame.
 
 ### 4.5 What the model has *not* yet demonstrated
 
-Honesty requires listing the unproven half. R4's cross-box half — the
-bridge mesh with narrow permits — is designed and adversarially reviewed but
-not deployed; all cross-box questions today are answered by humans. (As of
-the final revision of this paper, late August 2026, a first same-operator testbed — a loopback bridge between two
-co-located boxes — and a three-channel asynchronous interaction protocol for
-it, downlink archival-acknowledgment plus periodic pull plus doorbell, have
-entered specification; deployment has not begun.) Governance of the
-*coordinator* itself — who may change the upstream's permits, under what
-approval — is designed (routed through the framework's m-of-n approval
-chain) but likewise undeployed. And the model has run under one maintainer;
+Honesty requires listing the unproven half. R4's cross-box half is designed
+and adversarially reviewed but not deployed; all cross-box questions today
+are answered by humans. (As of the final revision of this paper, early
+September 2026, the design has been narrowed to the shape in §3.6 — boxes
+as clients of each other's routers and webhook adapters, no new service —
+prompted by the first real pair of boxes that needed to talk directly; a
+same-operator testbed between two co-located boxes and a three-channel
+asynchronous interaction protocol for it, downlink archival-acknowledgment
+plus periodic pull plus doorbell, are specified; the outbound adapter's
+peer-box target mode is the code still to be written, and deployment has
+not begun.) Governance of the federation's own configuration is
+decentralized by the same decision — each owner controls their inbound
+sources and outbound targets, and the heavier cross-operator tier, with
+m-of-n approval over shared permits, is deferred — but none of it has run
+either. And the model has run under one maintainer;
 we do not know how triage scales when reports arrive from fifty boxes rather
 than seven (§2.4's bottleneck cost, unbounded above our scale).
 
@@ -832,8 +848,8 @@ forks, paying in version lag, a triage bottleneck, provisioning burden, and
 amplified standard errors. Ten weeks and seven boxes into one implementation, the loop
 runs: the standard absorbs its instances' lessons at a cadence of roughly
 two releases a week, divergence is visible instead of silent, and a
-non-programmer can drive a box on day one. The unproven half — federation
-and coordinator governance — is where our work goes next. We offer the
+non-programmer can drive a box on day one. The unproven half — cross-box
+federation and its governance — is where our work goes next. We offer the
 pattern, one implementation, and our ledger of costs as a starting point for
 others building organizations out of human–AI boxes.
 

@@ -4,7 +4,7 @@
 >
 > - [`draft-pattern-first.md`](./draft-pattern-first.md) — **定稿候选 v1.0**（2026-08-29 定夺：模式先行结构胜出）：§2 纯模式（frame/payload 边界 + **五要求 R1–R5** + 利/弊两节账单 + **§2.5 能力门槛** + Figure 1/2 SVG）→ §3 SOLO 作为其一实现（附要求→机制对照表）→ §4 证据（各小节标注回验 §2 哪条主张）。数据冻结窗口 2026-06-14 → 08-24（v1.1.0→v1.2.2），此后的发版刻意不计入。引用已按正文首现顺序重编为 [1]–[26] 并补齐作者/URL（⚠️ 与 v0.1 的旧编号**不再同源**）
 > - [`figures/`](./figures/) — Figure 1（箱子解剖）/ Figure 2（上收环）的 SVG 真身（2026-08-29 起替代文内 ASCII 图）；同名 PNG（2x）是给 PDF 构建用的（本机 pyexpat 损坏致 weasyprint 吃不下 SVG）
-> - [`build-pdf.sh`](./build-pdf.sh) → `container-model-preprint-v1.pdf` — 正式版 PDF 构建脚本与产物（标题块含署名，剥 draft 头注；23 页）
+> - [`build-pdf.sh`](./build-pdf.sh) → `container-model-preprint-v1.pdf` — 正式版 PDF 构建脚本与产物（标题块含署名，剥 draft 头注；19 页，2026-09-04 重出）
 > - [`archive/draft-human-ai-container.md`](./archive/draft-human-ai-container.md) — 初稿 v0.1（实现穿插结构，2026-08-29 落选归档，只留作历史对照，不再维护）
 > - [`publishing-channels.md`](./publishing-channels.md) — 发布渠道对比与推荐路径（中文）
 > - [`feedback/`](./feedback/) — 外部评审意见：`chatgtp.md` · `gemini.md`（2026-08-28 收到，已 triage，见状态清单）· `feedback-history.md`（早期 Gemini 事实核查）
@@ -111,6 +111,13 @@
 - [ ] 你的事实核查（§二、§三 其余项）
 - [x] 署名 + 匿名化 + 正式版 PDF（2026-08-29）：署名 Zhongqiang Fu；codename → Projects A–G
       （映射见 §二.2）；`build-pdf.sh` 产出 `container-model-preprint-v1.pdf`（23 页，图表渲染已目检）
+- [x] **R4 跨箱设计描述对齐 §3.0 收敛（2026-09-04）**：`docs/planning/VERSION.v2.md` §3.0（09-03）把 bridge 收窄为
+      「gateway 出站 → ingress 入站，箱子互为对方 Router 的客户端，不立新服务」，mesh 签名 / 协调层 m-of-n 治理整体收为
+      跨运营方档。论文四处同步：Table 1 R4 行去掉 "bridge mesh"；§3.6 跨箱段重写（复用箱内边界、per-pair 凭证、owner 各管
+      自己入站/出站故无中心配置可守、待写的只是 gateway 一个目标模式、跨运营方档另列为 heavier tier）；§4.5 括号更新到
+      9 月初、"coordinator 治理" 改为去中心化口径；§8 结论 "coordinator governance" → "cross-box federation and its governance"。
+      **口径不变**：designed, not deployed；数据冻结窗口不动；Table 3 / Figure 1 用词本就泛化未动；§2.2 R4 模式层原文未动
+      （「中介层是权限集中点、须至少同等治理」对任何中介拓扑都成立）。头注日期 → 09-04，`build-pdf.sh` date → September 2026，PDF 重出
 - [ ] 定 venue（CFP 现查 preprint 政策）
 - [ ] 预印本发布（发布动作，等你明确说发才发）——🔴 渠道现实（2026-08-29 现查）：TechRxiv 停收
       （2026-08-27 确认）、**OSF 通用服务器 2025-08-25 起也停收**（本轮核实，备胎作废）⇒ 唯一即时

@@ -1,0 +1,42 @@
+name: CodeQL
+
+# 静态安全扫描（2026-09-04 起）。与 ci.yml 的 autocheck 互补：autocheck 查的是 SOLO 自己的契约
+# （声明/注册同步、auth fork、public surface…），CodeQL 查的是通用漏洞类（注入、原型污染、
+# 不安全的正则/反序列化、路径穿越…）。结果进仓库 Security → Code scanning，不阻断 CI。
+# 公开仓库免费。只扫源码：产物目录（api/publish、*/publish、dist）与 node_modules 排除。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '23 3 * * 1'   # 每周一 UTC 03:23 补扫一次（新规则、新 CVE 对旧代码）
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  analyze:
+    name: CodeQL (javascript-typescript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+          config: |
+            paths-ignore:
+              - '**/node_modules'
+              - 'api/publish'
+              - 'portal/publish'
+              - 'client/publish'
+              - '**/dist'
+              - '**/*.min.js'
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:javascript-typescript

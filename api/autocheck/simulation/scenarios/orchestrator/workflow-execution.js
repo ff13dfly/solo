@@ -62,7 +62,21 @@ class MockRouter {
 function loadLogic(redis, routerUrl) {
     const idPath = path.join(__dirname, '../../../../core/orchestrator/logic/index');
     delete require.cache[require.resolve(idPath)];
-    return require(idPath)(redis, { serviceName: 'orchestrator', routerUrl });
+    // logic/index.js wires matcher with context.config (config.consumer / config.redis) — the
+    // real service passes its config (core/orchestrator/index.js), so the scenario must too.
+    const config = require(path.join(__dirname, '../../../../core/orchestrator/config'));
+    return require(idPath)(redis, { serviceName: 'orchestrator', routerUrl, config });
+}
+
+// C1 review gate (2026-07): create() lands in PENDING_REVIEW and runner refuses anything but
+// ACTIVE. Scenarios that RUN a workflow must approve it first — LOW-risk fast lane, distinct
+// approver uid (self-approval is banned). Test 1 (TOCTOU on create) deliberately does not.
+// LOW requires every step method to carry a READ verb (library/risk.js classifyFootprint:
+// any write verb → HIGH → multi-sig via the approval service, which needs relay) — hence
+// the *.get method names below; the MockRouter answers whatever name it is given.
+async function createActive(logic, wf) {
+    await logic.workflow.create(wf);
+    await logic.workflow.approve({ id: wf.id }, 'sim-approver');
 }
 
 function makeWorkflow(id, steps) {
@@ -111,8 +125,8 @@ async function testVariableResolution(redis) {
 
     mock.setHandler((method, params) => {
         captured[method] = params;
-        if (method === 'svc.step1') return { value: 42, label: 'hello' };
-        if (method === 'svc.step2') return { ok: true };
+        if (method === 'svc.step.get') return { value: 42, label: 'hello' };
+        if (method === 'svc.next.get') return { ok: true };
         return {};
     });
 
@@ -120,9 +134,9 @@ async function testVariableResolution(redis) {
     const logic = loadLogic(redis, routerUrl);
 
     const wfId = 'wf_vartest';
-    await logic.workflow.create(makeWorkflow(wfId, [
-        { id: 's1', service: 'svc', method: 'svc.step1', params: { x: '$input.x' } },
-        { id: 's2', service: 'svc', method: 'svc.step2', params: {
+    await createActive(logic, makeWorkflow(wfId, [
+        { id: 's1', service: 'svc', method: 'svc.step.get', params: { x: '$input.x' } },
+        { id: 's2', service: 'svc', method: 'svc.next.get', params: {
             fromInput: '$input.x',
             fromStep:  '$step.s1.result.value',
         }},
@@ -132,8 +146,8 @@ async function testVariableResolution(redis) {
 
     await mock.stop();
 
-    const s1params = captured['svc.step1'];
-    const s2params = captured['svc.step2'];
+    const s1params = captured['svc.step.get'];
+    const s2params = captured['svc.next.get'];
 
     const ok =
         result.status === 'completed' &&
@@ -159,7 +173,7 @@ async function testIgnoreError(redis) {
 
     const mock = new MockRouter();
     mock.setHandler((method) => {
-        if (method === 'svc.fail') throw new Error('intentional_failure');
+        if (method === 'svc.fail.get') throw new Error('intentional_failure');
         return { ok: true };
     });
 
@@ -167,9 +181,9 @@ async function testIgnoreError(redis) {
     const logic = loadLogic(redis, routerUrl);
 
     const wfId = 'wf_ignore_err';
-    await logic.workflow.create(makeWorkflow(wfId, [
-        { id: 's1', service: 'svc', method: 'svc.fail', params: {}, ignore_error: true },
-        { id: 's2', service: 'svc', method: 'svc.ok',   params: {} },
+    await createActive(logic, makeWorkflow(wfId, [
+        { id: 's1', service: 'svc', method: 'svc.fail.get', params: {}, ignore_error: true },
+        { id: 's2', service: 'svc', method: 'svc.ok.get',   params: {} },
     ]));
 
     const result = await logic.runner.run({ workflowId: wfId, input: {} });
@@ -210,8 +224,8 @@ async function testConcurrentContextIsolation(redis) {
 
     // 创建一个 workflow，step 把 $input.id echo 出去
     const wfId = 'wf_context_iso';
-    await logic.workflow.create(makeWorkflow(wfId, [
-        { id: 's1', service: 'svc', method: 'svc.echo', params: { id: '$input.id' } },
+    await createActive(logic, makeWorkflow(wfId, [
+        { id: 's1', service: 'svc', method: 'svc.echo.get', params: { id: '$input.id' } },
     ]));
 
     // N 个不同 input 并发执行

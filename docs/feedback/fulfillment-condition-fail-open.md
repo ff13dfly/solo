@@ -178,4 +178,26 @@ fulfillment 的转移事件是 fire-and-forget（`relay.call` 不阻塞 transiti
 
 ## 处理结论（solo 侧）
 
-待 triage。
+**2026-09-04 triage。§一 复现属实，已修；§二/§三 待做，本篇留顶层。**
+
+- ✅ **§一 fail-open → fail-closed**（按建议 1，落在 `api/library/jsonlogic.js` 的 `evaluateCondition`）。
+  求值前改写规则树：`<` `<=` `>` `>=` 子树里引用的 `{var: path}`（不带缺省值形态）任一缺失
+  （json-logic `missing` 语义：undefined / null / 空串）→ 该比较为 false。值为 0 / false 不算缺失；
+  `{var: [path, default]}` 是显式缺省、照旧取缺省；`==` `!=` `!` 不改（`{'!': {var:'meta.cancelled'}}`
+  「没设过就当 false」是合法惯用法）。裸 `apply()` 不改写，只有守卫带这层语义。
+  **没用 `jsonLogic.add_operation` 覆盖内建算子**——那会改掉进程内 json-logic-js 单例的全局语义，
+  `core/orchestrator/logic/runner.js` 直接 require 了 json-logic-js 做 step condition，不该被隐式带走。
+  **影响面**：fulfillment transition 守卫 + nexus 上下文装配的 guard（都走 `evaluateCondition`）。
+  orchestrator step `condition` 走自己的 jsonLogic.apply，**未纳入**（登记 BACKLOG §3）。
+  测试：`api/library/tests/jsonlogic.test.js` 新增 11 例（含「裸 apply 仍为 true、守卫为 false」的对照钉）；
+  `api/apps/fulfillment/tests/logic.test.js` 新增 `release` 转移 4 例，复现本文 event=b 场景。
+  文档：`api/apps/fulfillment/GUIDE.md` 配方一第 4 步补了缺字段语义（建议 3）。
+- ⏸ **建议 2**（profile 静态校验报 error）：`logic/lint.js:156-160` 已对「condition 引用了未声明 meta_field 的
+  变量」发 **warning**，与建议只差级别。不升级为 error：`metaUpdate` 在转移时补值是文档承认的合法模式
+  （GUIDE 配方一第 3 步），静态无法证明它没被喂。fail-closed 之后这条的风险从「静默放行」降为
+  「转移被拦并报 Condition not met」，warning 级够用。
+- ⏸ **§二 `meta_fields[].source` 无取数器、§三 无时间驱动设施**：属实，都是功能缺口而非 bug，
+  另行排期（与 BACKLOG 「cron-to-service」条相关）。
+
+`下游 action`（随下一 tag 的 CHANGELOG 一起发）：用 JsonLogic 数值比较做闸门、且依赖「字段没喂就放行」
+的 profile（应该没有——那正是本文报的事故）现在会被拦；要缺省值就写 `{var: [path, default]}`。

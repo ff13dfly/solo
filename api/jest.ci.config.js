@@ -9,8 +9,10 @@
  * modules, or on-disk WAL layout. Until those are made hermetic, the gate runs only the
  * proven-green subset so a red build always means a real regression.
  *
- * Verified green 2026-06-30 (105 suites / 1690 tests). To add a suite: make it pass
- * under `npx jest <file>` with Redis up and nothing else, then list it here.
+ * The allow-list below IS the count — don't trust a number written in a comment
+ * (three stale counts coexisted in-tree until 2026-09-04: 61/790 here, 105/1690 there,
+ * 133 in the CHANGELOG). `node -p "require('./jest.ci.config.js').testMatch.length"` prints it.
+ * To add a suite: make it pass under `npx jest <file>` with Redis up and nothing else, then list it here.
  * sample/tests/* are the canonical hermetic examples (see api/sample/README.md#testing).
  *
  * NEXT (tracked in docs/planning/BACKLOG.md §5): triage the remaining excluded suites —

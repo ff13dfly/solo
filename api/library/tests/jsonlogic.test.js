@@ -191,3 +191,82 @@ describe('jsonlogic — resolveParams (per-field template evaluation)', () => {
         expect(() => L.resolveParams({ a: { $weird: 1 } }, {})).toThrow(/Unrecognized operation/);
     });
 });
+
+// 2026-09-04 — docs/feedback/fulfillment-condition-fail-open.md §一。
+// json-logic-js 的比较算子走 JS 松散比较：缺失字段 → null → 0，`null >= null` 为 true，
+// 数值闸门在没喂数据时无条件放行。守卫（evaluateCondition）现在对此 fail-closed；
+// 裸 apply() 保持原语义，这一组测试同时把两者的差别钉住。
+describe('jsonlogic — evaluateCondition fail-closed on missing operands of < <= > >=', () => {
+    test('BOTH operands missing → false (raw JsonLogic says true)', () => {
+        const rule = { '>=': [{ var: 'meta.x' }, { var: 'meta.y' }] };
+        expect(L.apply(rule, {})).toBe(true);             // the bug, preserved in the raw primitive
+        expect(L.evaluateCondition(rule, {})).toBe(false); // the guard
+    });
+
+    test('ONE operand missing → false for every comparison operator', () => {
+        for (const op of ['<', '<=', '>', '>=']) {
+            expect(L.evaluateCondition({ [op]: [{ var: 'meta.x' }, 5] }, { meta: {} })).toBe(false);
+            expect(L.evaluateCondition({ [op]: [5, { var: 'meta.x' }] }, { meta: {} })).toBe(false);
+        }
+    });
+
+    test('null and empty-string values count as missing; 0 and false do NOT', () => {
+        const rule = { '>=': [{ var: 'n' }, 0] };
+        expect(L.evaluateCondition(rule, { n: null })).toBe(false);
+        expect(L.evaluateCondition(rule, { n: '' })).toBe(false);
+        expect(L.evaluateCondition(rule, { n: 0 })).toBe(true);
+        expect(L.evaluateCondition({ '<=': [{ var: 'f' }, 1] }, { f: false })).toBe(true); // false → 0 <= 1
+    });
+
+    test('between form (a < x < b) with the middle missing → false', () => {
+        expect(L.evaluateCondition({ '<': [1, { var: 'x' }, 10] }, {})).toBe(false);
+        expect(L.evaluateCondition({ '<': [1, { var: 'x' }, 10] }, { x: 5 })).toBe(true);
+    });
+
+    test('a var nested inside arithmetic within the comparison is covered too', () => {
+        const rule = { '>=': [{ '+': [{ var: 'a' }, { var: 'b' }] }, 3] };
+        expect(L.apply(rule, { a: 5 })).toBe(false);            // raw: parseFloat(null) = NaN, already false here
+        expect(L.evaluateCondition(rule, { a: 5 })).toBe(false);
+        expect(L.evaluateCondition(rule, { a: 5, b: 1 })).toBe(true);
+    });
+
+    test('an explicit default — {var: [path, default]} — is honoured, not treated as missing', () => {
+        const rule = { '>=': [{ var: ['meta.balance', 0] }, 0] };
+        expect(L.evaluateCondition(rule, {})).toBe(true);
+        expect(L.evaluateCondition({ '>=': [{ var: ['meta.balance', 0] }, 1] }, {})).toBe(false); // 0 >= 1
+    });
+
+    test('comparisons nested under and / or / if / ! are rewritten as well', () => {
+        expect(L.evaluateCondition({ and: [true, { '>': [{ var: 'x' }, 1] }] }, {})).toBe(false);
+        expect(L.evaluateCondition({ or: [false, { '>': [{ var: 'x' }, 1] }] }, {})).toBe(false);
+        expect(L.evaluateCondition({ if: [{ '>': [{ var: 'x' }, 1] }, 'yes', 'no'] }, {})).toBe('no');
+        // `!` of a failed-closed comparison is true — that is the documented boolean algebra, not a leak
+        expect(L.evaluateCondition({ '!': { '>': [{ var: 'x' }, 1] } }, {})).toBe(true);
+    });
+
+    test('equality / negation / truthiness operators are NOT changed (missing stays null there)', () => {
+        expect(L.evaluateCondition({ '==': [{ var: 'x' }, 'A'] }, {})).toBe(false);
+        expect(L.evaluateCondition({ '!=': [{ var: 'x' }, 'A'] }, {})).toBe(true);
+        expect(L.evaluateCondition({ '!': { var: 'cancelled' } }, {})).toBe(true);
+        expect(L.evaluateCondition({ '==': [{ var: 'x' }, { var: 'y' }] }, {})).toBe(true); // null == null, unchanged
+    });
+
+    test('satisfied comparisons still pass; literal-only comparisons untouched', () => {
+        expect(L.evaluateCondition({ '>=': [{ var: 'balance' }, { var: 'threshold' }] }, { balance: 10, threshold: 5 })).toBe(true);
+        expect(L.evaluateCondition({ '>': [2, 1] }, {})).toBe(true);
+        expect(L.evaluateCondition({ '>': [1, 2] }, {})).toBe(false);
+    });
+
+    test('the rewrite is pure — the caller\'s rule object is not mutated', () => {
+        const rule = { '>=': [{ var: 'a' }, 1] };
+        const snapshot = JSON.stringify(rule);
+        L.evaluateCondition(rule, {});
+        expect(JSON.stringify(rule)).toBe(snapshot);
+    });
+
+    test('pass-through behaviours from the original contract are intact', () => {
+        expect(L.evaluateCondition({}, {})).toEqual({});
+        expect(L.evaluateCondition(0, {})).toBe(0);
+        expect(L.evaluateCondition('', {})).toBe('');
+    });
+});
