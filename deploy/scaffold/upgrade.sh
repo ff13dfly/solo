@@ -38,8 +38,8 @@
 #   deploy/services.json  deploy/solo-services.json  deploy/seed.json  e2e/
 #   portal/publish/operator.*.tar.gz  (operator is source-distributed — team's)
 #
-# [Solo->Project] deploy scripts (run.sh precheck.sh admin-up.sh seed-registry.js
-# migrate-cursor-index.js):
+# [Solo->Project] deploy scripts (run.sh precheck.sh admin-up.sh doctor.sh seed-registry.js
+# migrate-cursor-index.js — the loop at §4 below is the executable list; keep this comment in sync):
 #   DETECTED, not blindly overwritten. If the project's copy diverges from stock
 #   (i.e. the team customized it, like wavely's run.sh), the new stock is staged
 #   alongside as <name>.solo-{ver}.new for a manual diff — the live file is left

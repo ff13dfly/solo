@@ -121,6 +121,14 @@ git checkout main
   (不删方法、不缩公开面、library API 只加)。破坏性的一律进 v2。
 - **三者一致**:`package.json.version` = bundle 文件名 `solo.v{ver}.js` = 消费者 `.solo-version` = tag。
   发版后当场核一遍,对不上就是"忘了部署或忘了打 tag"。
+  🔴 **正面规矩(2026-09-04 定,从 solo v1.2.9–11 悬空三版 + colony 0.1.6 无 tag 提炼)**:**版本号只在发版 commit 里动,
+  且那个 commit 当场打 tag**——步进与 tag 是同一个动作的两半,不发版就别碰 `package.json.version`,功能提交里不许
+  顺手步进(`4cac9f3` 就是把 `chore(release): v1.2.11` 混进 feature 提交、步进完收工,三个号至今靠事后补 tag)。
+  已经悬空的号,修法是**在把版本号改成那个值的 commit 上补 tag**(`git log -S'"version": "X.Y.Z"' -- package.json` 找到它,
+  `git tag -a vX.Y.Z <sha>`),不是在今天的 HEAD 上打——tag 要指向「声明这个版本」的那一刻。
+  **为什么值得成规矩**:① `git describe` 能直接答「这个 bug 在哪版之间引入」;② CHANGELOG 每个版本节都对应真实坐标;
+  ③ `upgrade.sh` 的 ACTION REQUIRED 横幅按版本号扫 CHANGELOG 节,默认每个节都真发过;④ 消费者 `.solo-version`
+  指向的 bundle 只有从 tag 才能复现(`release-bundle.sh`),没 tag 的版本号 = 复现不出来的产物。
 - **补丁升级已验证**:`v1.1.1` → `v1.1.2` 用一次性消费者真跑通(8/8 断言),做法见 [`upgrade-patch.md`](./upgrade-patch.md)。同 minor 补丁 = 一条 `deploy/scaffold/upgrade.sh`,零手动步骤。**2026-09-04 起这件事每次 push 都由 CI 做**:`upgrade-path` job 跑 `deploy/check-upgrade-path.sh`(init 一次性消费者 → [Project]/[Solo]/[Solo→Project] 三区放哨兵 → 伪装成上一 patch 版 → upgrade `--dry-run` / 真跑 / 再跑 → 49 条断言 + doctor/precheck ✗ 0),人工那次只剩历史记录价值。
 - **仍待人触发的发布尾步**(§3-4/3-6,需基建/对外权限):从 tag build 的 bundle 归档到 Release/对象存储 + 通知消费者对齐 `.solo-version`。
 - **之后**:阶段一(trunk+tags)继续推 v1.x;真要动破坏性架构时,再切 `release/v1.x` + main 转 v2。
