@@ -56,6 +56,8 @@ module.exports = {
     bindAddress: require('./bind-address'),
     // JsonLogic 求值来源 (必须经 library/jsonlogic.js —— 裸库对缺失操作数 fail-open)
     jsonlogicSource: require('./jsonlogic-source'),
+    // 环境变量整数取值 (parseInt(env)||D 会把显式 0 吃掉)
+    envIntDefault: require('./env-int-default'),
     // 行隔离上下文检查 (walContext.run 是否经 requestContext 注入 $owner，使 Entity Factory 能自动执行行隔离)
     ownerContext: require('./owner-context'),
     // 架构稳定性与防击穿检测

@@ -350,7 +350,7 @@ input_schema:
 > 在阈值没喂进来时变成 `score >= 0`，**闸门恰好在缺数据那一刻无条件放行**。
 > `library/jsonlogic.js` 的 `evaluateCondition` 对 `< <= > >=` fail-closed（`==`/`!=`/`!` 不变，
 > 「没设过就当 false」是合法惯用法）。本文此前只写"必须用 json-logic-js"，runner 照做了、
-> 也就照抄了这个坑（见 `docs/feedback/event-triggered-workflow-lifecycle-drops-events.md` §5.1）。
+> 也就照抄了这个坑（见 `docs/feedback/done/event-triggered-workflow-lifecycle-drops-events.md` §5.1）。
 
 ### Resolver 语义
 

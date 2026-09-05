@@ -20,7 +20,15 @@ id，作为该步的 Saga 回滚（不允许补偿链，补偿步自身不能再
    - 低风险（LOW）：单签（C1 快车道）直接 → `ACTIVE`。
    - 高风险（HIGH，足迹里含敏感/写方法）：走多签。第一次不带 `signature` 调用，拿回
      `{ status:'NEEDS_SIGNATURE', digest, gateId }`；用 `user.key.sign` 签 `digest`，再带 `signature` 重调；
-     每个审批人重复，达阈值才 `ACTIVE`。激活后可能有**冷静期** `effective_at`（默认 24h），到点前不能跑。
+     每个审批人重复，达阈值才 `ACTIVE`。
+   - 🔴 **激活 ≠ 立刻能跑**：高风险档带**冷静期**，`approve` 成功时返回里就有
+     `effective_at`（epoch ms，默认 +24h，`APPROVAL_COOLING_MS_HIGH` 可调）。**看那个字段**，
+     别只看 `ACTIVE`——这段窗口里的触发**会被拒**。
+     - 同步 `workflow.run` 报 `FORBIDDEN: Workflow in cooling period until …`；
+     - **事件触发**的不会报到调用方（事件是异步的）：run 落 `DEFERRED_COOLING`，
+       命令排进重试队列，**到 `effective_at` 自动跑**——不用管，但那之前查不到结果是正常的。
+       （更早以前这类触发是被直接判死进 DLQ 的，v1.2.13 之后不会了。）
+     - 只是想在 dev 里关掉冷却：`APPROVAL_COOLING_MS_HIGH=0`。
 3. 激活后调 `orchestrator.workflow.build` 刷新 AI 能力快照（供 agent 识别 / MCP 映射），否则新模板对 AI 不可见。
 4. 执行见配方二。
 

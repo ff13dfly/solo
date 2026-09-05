@@ -211,28 +211,9 @@ coolingMsHigh: parseInt(process.env.APPROVAL_COOLING_MS_HIGH) || (24 * 60 * 60 *
 
 ### 4.2 没有生产可用的 bot 播种路径，于是每个消费者各挑各的，必漏传递依赖
 
-`deploy/seed-bots.js` 头注明写 **dev-only**，且它**往 Redis 直写一个 `solo-dev-admin` 会话**
-绕过登录——生产上不能用。于是每个下游项目自己写一份，而写的时候的自然做法是
-"按我这条链会用到哪些服务来挑 bot"。
-
-这个做法必然漏掉**传递依赖**。实测：我们挑了 orchestrator / fulfillment / ingress / notification，
-漏了 `system.approval`——因为这条链里**没有任何一步直接调 approval**，
-是 `workflow.approve` 经 relay 调 `approval.gate.sign`，**approval 自己**再去 `user` 服务
-读审批人公钥验签。
-
-失败点极靠后：投稿成功、gate 开了、`user.key.sign` 算出签名了，**提交签名那一刻**才报：
-
-```
-[RPC_FAILED] Could not fetch approver public key: No service token configured for "approval".
-```
-
-**这条报错本身是范例级的好**——点名了是哪个服务、要调哪个方法、去哪看文档。
-问题不在报错，在于"到那一刻才知道"。
-
-建议：给 `deploy/seed-bots.js` 一个**生产形态的同胞**（走 admin 登录 + `<svc>.token.set` RPC，
-不碰 Redis，即 e2e harness 那条路），或者至少在 `events.md §0.5` 写一句判据——
-**给某个服务发 token 时，连它「为了完成这次调用还要再打给谁」一起看**。
-`BOT_PERMITS` 已经是单一真源了，缺的只是"整份播种"这个动作的生产入口。
+> **已拆出为独立一篇**：[`../no-production-bot-seeding-path.md`](../no-production-bot-seeding-path.md)（2026-09-05）。
+> 它与本篇的事件生命周期无关，只是同一条链路上一起撞到的；留在这里，本篇归档时它会跟着消失。
+> 原文（含 steward 的实测报错与失败时机）已整段搬过去，本节只留指针。
 
 ---
 
@@ -406,7 +387,7 @@ FL-20260905-3718  conf=0.95  AWAITING_DESIGN → READY_TO_PUBLISH   ←image_sub
 
 ---
 
-## 八、处理结论（2026-09-05，**建议 0/1/2 + 7/8 已落地；3/4/5/6 未做，逐条说明**）
+## 八、处理结论（2026-09-05，**建议 0~5 + 7/8 全部落地；建议 6 已拆出为独立一篇**）
 
 **逐条核过源码，主张全部成立**（`worker.js` 的 `isRetryable` 只认 `-32603`；`runner.js:53` 的冷却
 闸消息里带 ISO 解除时刻；`matcher.js:202` 的 `xAck` 在 `for (const wf of workflows)` **循环之外**；
@@ -441,21 +422,34 @@ FL-20260905-3718  conf=0.95  AWAITING_DESIGN → READY_TO_PUBLISH   ←image_sub
 而 `revive` 真把它跑成 DONE；`event.replay` 捞回建组前的事件、二次重放被幂等守卫拦住。
 全量 e2e **68 套 / 358 passed** 全绿；api CI 白名单 133 套 / 2220 passed；16 目录 autocheck ERROR=0。
 
-### 未做（**不是漏了，是本轮范围之外**——按用户指示只落地 0~2 对应的那套方案）
+### 收尾批（建议 3 / 4 / 5，2026-09-05）
 
-- **建议 3**（`parseInt(x) || D` 六处）：属实，`config.js:58,59,60,66,67,68`。
-  **顺带校正**：同一文件的 83/98/99/106 用的是安全写法 `parseInt(x || 'default', 10)`，
-  所以这是那六行的局部病、不是全仓风格。零争议，随时可做。
-- **建议 4**（approve 讲清冷却）：**代码那半其实已经有了**——multisig lane 的 `approve` 早就
-  `return { …, effective_at: updated.effective_at, … }`，`introspection.js:327` 的
-  returns_schema 里也已声明。缺的只是**文档没写"这段窗口里的触发会被拒"**。
-  做了建议 0/1 之后紧迫性也降了（触发不再被吃掉），但仍该补。
-- **建议 5**（样例 category）：属实，且**比本篇写的更广——01/02/03 三个样例全是字符串**。
-  ⚠️ 方向只能是「样例与 `workflows.md:49` 改成对象」：`library/validate.js:102-106` 是严格
-  相等比较、**不支持联合类型**，"把自省放宽成 `string|object`"这条路走不通，除非动共享校验库。
-- **建议 6**（生产 bot 播种入口）：属实。**建议拆成独立一篇**——它与事件生命周期无关，
-  只是同一条链上一起撞到的；混在本篇里，等 0~5 结案归档时它会跟着一起消失
-  （`entity-factory-bypasses-clock.md` 的建议 1 至今没做，就是这个形状）。
+- ✅ **建议 3**（`parseInt(x) || D`）：**已做，且比本篇点的范围大**。本篇说 orchestrator 的
+  approval + submission 段共 6 处；实际全仓 **15 处**（orchestrator 6 · user 4 · approval 2 ·
+  gateway 2 · nexus 1）。多出来的那 3 处是 `parseInt(x, 10) || D` **带 radix** 的形状——
+  **手工 grep 找不到，是新加的 autocheck 规则扫出来的**，其中
+  `GATEWAY_ATTACH_MAX_COUNT=0`（本意"禁止附件"）静默变成 10，与本篇报的冷却期是同一个病。
+  做法：抽 `library/env.js` 的 `intFromEnv(name, fallback)`（0 与负数照常生效；写错的值
+  **拒绝并 warn 一句**，而不是悄悄换默认值——用 `Number` 不用 `parseInt`，`'12abc'` 该被拒
+  而不是截成 12），15 处全部替换；新增 autocheck 规则 `[env-int]`（ERROR，全队实扫零命中）。
+  **顺带校正本篇一处**：同文件里 `parseInt(x || 'default', 10)` 是**安全**写法（`||` 作用在
+  字符串上、不吃掉 0），新规则刻意不碰它。
+- ✅ **建议 4**（approve 讲清冷却）：**代码那半本来就有**——multisig lane 的 `approve` 早就
+  `return { …, effective_at, … }`，`introspection.js` 的 returns_schema 里也已声明；
+  缺的只是文档。已补进 `orchestrator/GUIDE.md` 配方一（AI 代理经 `system.guide` 读得到）：
+  **激活 ≠ 立刻能跑，看 `effective_at`**；同步触发报 FORBIDDEN，**事件触发不会报到调用方**
+  （落 `DEFERRED_COOLING`、到点自动跑，这是建议 1 带来的新行为，作者需要知道"那之前查不到
+  结果是正常的"）；dev 里关冷却写 `APPROVAL_COOLING_MS_HIGH=0`——**这一句要靠建议 3 才成立**，
+  两条是配套的。
+- ✅ **建议 5**（样例 category）：**已做**，且比本篇写的更广——**01/02/03 三个样例全是字符串**，
+  照抄都建不出来。方向只能是「样例与文档改成对象」：`library/validate.js:102-106` 是严格相等
+  比较、**不支持联合类型**，本篇给的另一条路（把自省放宽成 `string|object`）走不通，除非动
+  共享校验库。`workflows.md` 的字段表同步改成 object 并写明**为什么不能传字符串**
+  （自省说了算，请求根本到不了服务逻辑）。
+- ➡️ **建议 6**（生产 bot 播种入口）：**已拆出为独立一篇**
+  [`../no-production-bot-seeding-path.md`](../no-production-bot-seeding-path.md)（待 triage）。
+  它与事件生命周期无关，只是同一条链上一起撞到的；混在本篇里，本篇归档时它会跟着消失
+  ——`entity-factory-bypasses-clock.md` 的建议 1 至今没做，就是这个形状。**这次不重蹈。**
 - ✅ **建议 7**（`runner.js` 改用 `library/jsonlogic.js`）：**已落地**（单独一批，见下节）。
 - ✅ **建议 8**（参数面补 `now` + `+`）：**已落地**，与建议 7 同批（见下节）。
 
@@ -518,14 +512,10 @@ orchestrator 的参数面能求值 JsonLogic ——**它不能**：`runner.js` �
 ⚠️ 这是行为变更（唯一键为 `cat`/`+`/`var` 的**字面量**对象会开始被求值），已在 CHANGELOG
 写明下游 action；沿用 v1.2.13 的收窄——只有**唯一键**才算算子，多键业务对象不动。
 
-### 剩余待办（下一轮接手时看这里）
+### 本篇状态：结案，移入 `done/`
 
-- 本篇建议 0~2、7、8 已全部落地；**3 / 4 / 5 / 6 仍未做**，见上面「未做」一节的逐条说明。
-  其中建议 6（生产 bot 播种入口）建议**拆成独立一篇**再 triage，否则本篇归档时它会跟着消失。
-- [ ] 建议 3：六处 `parseInt(x) || D`，顺带被忽略的配置值 warn 一句。
-- [ ] 建议 5：三个样例 + `workflows.md:49` 的 category 改成对象。
-- [ ] 建议 4：文档补"冷却窗口里的触发会被延后"（代码已具备）。
-- [ ] 建议 6：拆成独立一篇再 triage。
-- [ ] `ORCHESTRATOR:RUNQ:DEADLETTER` 那个 list 在 revive 之后会留下**孤儿信封**（run 实体已翻案、
-      list 里那条还在）。本篇说得对——run 实体覆盖了排查所需，list 无人读且有 MAXLEN 上限，
-      所以**不阻断**；但真给它开 API 时要连带清理。
+建议 0~5 与 7/8 全部落地，建议 6 已拆出为独立一篇继续 triage。留一条**不阻断**的观察：
+`ORCHESTRATOR:RUNQ:DEADLETTER` 那个 list 在 revive 之后会留下**孤儿信封**（run 实体已翻案、
+list 里那条还在）。本篇说得对——run 实体覆盖了排查所需，list 无人读且有 MAXLEN 上限，
+所以不单独开 API；真要开时记得连带清理。
+

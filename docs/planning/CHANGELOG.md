@@ -11,6 +11,39 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+### 收尾一批：配置里的显式 0 不再被吃掉 + 下发样例照抄跑不通（2026-09-05）
+
+同一篇反馈剩下的三条（`../feedback/done/event-triggered-workflow-lifecycle-drops-events.md`
+建议 3/4/5）。
+
+- 🔴 **`parseInt(process.env.X) || DEFAULT` 全仓清零**（15 处），改用新的
+  `library/env.js` 的 **`intFromEnv(name, fallback)`**。这个写法把**显式的 0 吃掉**：
+  `parseInt('0')` 得 `0`，而 `0` 在 `||` 里是假值 ⇒ **落回默认值**。于是"把这个开关关掉"
+  这个最自然的动作做不到，而且没有任何提示——配置写了、进程重启了、行为一点没变。
+  实测代价：`APPROVAL_COOLING_MS_HIGH=0` 关不掉 workflow 的 24 小时冷却期（下游只能写 `1`），
+  `GATEWAY_ATTACH_MAX_COUNT=0`（本意"禁止附件"）静默变成 10，
+  `SIGN_RATE_LIMIT=0`（本意"一律拒签"）静默变成 10。
+  `intFromEnv` 里 0 与负数照常生效，写错的值**被拒绝并 warn 一句**——用 `Number` 不用
+  `parseInt`，`'12abc'` 该被拒而不是静默截成 12。
+  **新增 autocheck 规则 `[env-int]`**（ERROR，全队实扫零命中）：它扫出了手工 grep 漏掉的 3 处
+  ——那几处是带 radix 的 `parseInt(x, 10) || D`，形状不同、病相同。
+  ⚠️ `parseInt(x || '600', 10)` 是**安全**写法（`||` 作用在字符串上，不吃 0），规则刻意不碰。
+- **`workflow.approve` 的冷却期写进 `orchestrator/GUIDE.md`**（AI 代理经 `system.guide` 读得到）：
+  **激活 ≠ 立刻能跑，看返回里的 `effective_at`**。同步 `workflow.run` 会报
+  `FORBIDDEN: Workflow in cooling period until …`；**事件触发不会报到调用方**——run 落
+  `DEFERRED_COOLING`、到 `effective_at` 自动跑，"那之前查不到结果是正常的"。
+  代码那半本来就有（`approve` 早就返回并声明了 `effective_at`），缺的一直是这句话。
+- **下发的三个 workflow 样例 `category` 改成对象**（`{"name":"example"}`）。此前
+  `01/02/03` 全写的是字符串，而自省声明 `type:'object'`、Router 按自省校验参数 ⇒
+  **照抄样例直接 `-32602 type mismatch`**，请求根本到不了服务逻辑（服务逻辑其实两种都收）。
+  `workflows.md` 的字段表同步改成 object 并写明为什么不能传字符串。
+  ⚠️ 另一条路（把自省放宽成 `string|object`）走不通：`library/validate.js` 是严格相等比较、
+  **不支持联合类型**，除非动共享校验库。
+
+下游 action：**一件事**。若你的 `.env` 里给上面这些整数配置写过 `0` 并**依赖它落回默认值**
+（不太可能，但它此前确实是这么表现的），升级后 `0` 会真的生效。想要默认值就**把那一行删掉**，
+别写 0。写错的值现在会在启动时 warn 一句而不是静默忽略。
+
 ### 两个声明面认同一套算子（2026-09-05）—— `now` / `cat` / `+` 在 profile 与 workflow 上一致
 
 Solo 有两个**给人写**的声明面：fulfillment profile 的 `action.params` 与 orchestrator workflow 的
@@ -77,7 +110,7 @@ fail-closed 断言，`orchestrator/tests/condition.test.js` 有十条 condition 
 
 ### 事件触发型 workflow 的上线 / 改版窗口不再吃掉事件（2026-09-05）
 
-来源：steward 线上实测（[`../feedback/event-triggered-workflow-lifecycle-drops-events.md`](../feedback/event-triggered-workflow-lifecycle-drops-events.md)）。
+来源：steward 线上实测（[`../feedback/done/event-triggered-workflow-lifecycle-drops-events.md`](../feedback/done/event-triggered-workflow-lifecycle-drops-events.md)）。
 把一条 workflow 上线或改一版，必须依次穿过两个窗口，**两个窗口里的真实触发都被静默吃掉**：
 ① 还没批准时没有 ACTIVE 订阅者 ⇒ 匹配为空、**ack 丢弃**，连 run 都没建过；
 ② 批准后到 `effective_at` 之间 ⇒ 冷却闸抛 FORBIDDEN，而 FORBIDDEN 不可重试 ⇒ 直接 **DEADLETTER**

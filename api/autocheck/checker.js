@@ -177,6 +177,7 @@ async function main() {
     checks.guideCheck.check(resolvedPath, results);
     checks.clockCheck.check(resolvedPath, results);
     checks.jsonlogicSource.check(resolvedPath, results);
+    checks.envIntDefault.check(resolvedPath, results);
 
     // ── 运行时检查（服务已启动才有效，--static 跳过）─────────
     if (!isStatic) {

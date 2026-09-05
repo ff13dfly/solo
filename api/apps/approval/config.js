@@ -1,5 +1,6 @@
 require('dotenv').config();
 const pkg = require('./package.json');
+const { intFromEnv } = require('../../library/env');
 const { portFor, urlFor } = require('../../library/ports');
 
 module.exports = {
@@ -18,8 +19,8 @@ module.exports = {
 
     // VERSION.md §3.1 — multi-signature approval gate (high-risk lane) defaults.
     gate: {
-        defaultExpirySec: parseInt(process.env.APPROVAL_GATE_EXPIRY_SEC) || 259200,   // 72h
-        defaultRequiredSigners: parseInt(process.env.APPROVAL_GATE_REQUIRED_SIGNERS) || 1
+        defaultExpirySec: intFromEnv('APPROVAL_GATE_EXPIRY_SEC', 259200),   // 72h
+        defaultRequiredSigners: intFromEnv('APPROVAL_GATE_REQUIRED_SIGNERS', 1)
     },
 
     description: {

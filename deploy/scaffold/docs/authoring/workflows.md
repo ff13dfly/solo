@@ -46,7 +46,7 @@ redis-cli --raw GET AGENT:CAPABILITY_SNAPSHOT:ZH
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
-| `category` | string | ✅ | 分类（意图匹配用） |
+| `category` | **object** | ✅ | 分类（意图匹配用），如 `{ "name": "example" }`。⚠️ **必须是对象**——自省声明的是 `type: 'object'`，而 Router 按自省校验参数，传字符串会被 `-32602 type mismatch` 挡在服务之外（服务逻辑两种都收，但请求根本到不了它） |
 | `name` | string | ✅ | 人类可读名称 |
 | `desc` | string | ✅ | 描述（语义搜索/审核展示用，写清楚"被什么触发、$input 长什么样"） |
 | `steps` | Step[] | ✅ | 步骤数组，**顺序执行**（见 §3） |

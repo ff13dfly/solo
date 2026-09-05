@@ -2,7 +2,7 @@
   "id": "wf-example-minimal",
   "name": "Example · minimal single sync step",
   "desc": "最简单的可执行模板：同步触发，单步登记一个外部资产占位（storage 是随栈默认启动的核心服务；asset.external 只写元数据、不碰字节、不发外部请求，跑它没有副作用外溢）。把 service/method/params 换成你自己 capability 目录里的方法即可。",
-  "category": "example",
+  "category": { "name": "example" },
   "allowed_triggers": ["sync"],
   "required_inputs": ["url"],
   "input_schema": [

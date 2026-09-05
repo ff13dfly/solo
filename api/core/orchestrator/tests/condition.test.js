@@ -113,7 +113,7 @@ describe('H3 — JsonLogic condition evaluation', () => {
     });
 
     // ── fail-closed on missing operands ──────────────────────────────────────
-    // 2026-09-05 — docs/feedback/event-triggered-workflow-lifecycle-drops-events.md §5.1.
+    // 2026-09-05 — docs/feedback/done/event-triggered-workflow-lifecycle-drops-events.md §5.1.
     //
     // These are the tests this file was MISSING, and their absence is the whole story: the
     // fail-open bug was reported from colony on 2026-08-11 and fixed in library/jsonlogic.js,

@@ -1,5 +1,6 @@
 require('dotenv').config();
 const pkg = require('./package.json');
+const { intFromEnv } = require('../../library/env');
 const { portFor, urlFor } = require('../../library/ports');
 
 /**
@@ -76,8 +77,8 @@ module.exports = {
 
     // Email attachments (storage references, fetched via the system.gateway relay bot).
     attachments: {
-        maxBytes: parseInt(process.env.GATEWAY_ATTACH_MAX_BYTES, 10) || 10 * 1024 * 1024,
-        maxCount: parseInt(process.env.GATEWAY_ATTACH_MAX_COUNT, 10) || 10,
+        maxBytes: intFromEnv('GATEWAY_ATTACH_MAX_BYTES', 10 * 1024 * 1024),
+        maxCount: intFromEnv('GATEWAY_ATTACH_MAX_COUNT', 10),
     },
 
     // Encryption key for sensitive entity fields (SMTP pass, etc.)

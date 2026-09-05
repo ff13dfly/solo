@@ -20,6 +20,7 @@
  *     Sentinel permit，提前 fail（仅在已发证时执行；否则运行时 checkAccess 仍兜底）。
  */
 const { createLogger } = require('../../../library/logger');
+const { intFromEnv } = require('../../../library/env');
 const jsonlogic = require('../../../library/jsonlogic');
 const jsonrpc = require('../handlers/jsonrpc');
 
@@ -32,7 +33,7 @@ const READ_SUFFIXES = new Set(['get', 'list', 'query', 'search', 'count', 'resol
 // generous for a context fetch: nexus consumes events on a SINGLE loop, so a slow upstream
 // would stall the WHOLE consumer for up to ~90s per event. This tighter bound caps that; a
 // timeout is handled by the fetcher's existing on_error policy (skip/fallback/abort).
-const fetcherTimeoutMs = () => parseInt(process.env.NEXUS_FETCHER_TIMEOUT_MS, 10) || 8000;
+const fetcherTimeoutMs = () => intFromEnv('NEXUS_FETCHER_TIMEOUT_MS', 8000);
 
 function withTimeout(promise, ms, label) {
     let timer;

@@ -1,5 +1,6 @@
 require('dotenv').config();
 const pkg = require('./package.json');
+const { intFromEnv } = require('../../library/env');
 const { portFor, urlFor } = require('../../library/ports');
 
 module.exports = {
@@ -69,17 +70,17 @@ module.exports = {
     // gate. Defaults: 1-of-1 (single signature) + a cooling period before the workflow
     // can run + a gate expiry. Submitters cannot weaken these (set by config, not input).
     approval: {
-        requiredSignersHigh: parseInt(process.env.APPROVAL_REQUIRED_SIGNERS_HIGH) || 1,
-        coolingMsHigh:       parseInt(process.env.APPROVAL_COOLING_MS_HIGH) || (24 * 60 * 60 * 1000), // 24h
-        gateExpirySec:       parseInt(process.env.APPROVAL_GATE_EXPIRY_SEC) || 259200,                // 72h
+        requiredSignersHigh: intFromEnv('APPROVAL_REQUIRED_SIGNERS_HIGH', 1),
+        coolingMsHigh:       intFromEnv('APPROVAL_COOLING_MS_HIGH', (24 * 60 * 60 * 1000)), // 24h
+        gateExpirySec:       intFromEnv('APPROVAL_GATE_EXPIRY_SEC', 259200),                // 72h
         // sensitiveServices: undefined → library/risk.js default (write-verb only)
     },
 
     // VERSION.md §3.4 — external submission quota (non-admin workflow.create only).
     submission: {
-        maxPerHourPerUser: parseInt(process.env.WORKFLOW_SUBMIT_MAX_PER_HOUR) || 10,
-        windowSec:         parseInt(process.env.WORKFLOW_SUBMIT_WINDOW_SEC) || 3600,
-        pendingCap:        parseInt(process.env.WORKFLOW_PENDING_CAP) || 100,
+        maxPerHourPerUser: intFromEnv('WORKFLOW_SUBMIT_MAX_PER_HOUR', 10),
+        windowSec:         intFromEnv('WORKFLOW_SUBMIT_WINDOW_SEC', 3600),
+        pendingCap:        intFromEnv('WORKFLOW_PENDING_CAP', 100),
     },
 
     // event.md §6.1 — event matcher consumer. Separate consumer group from nexus

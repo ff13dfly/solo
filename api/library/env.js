@@ -1,5 +1,7 @@
 //
-// library/env.js — `.env` 文本解析（零依赖），给"自己读 .env 的脚本"用。
+// library/env.js — 环境配置的两件事：
+//   ① `.env` **文本解析**（零依赖），给"自己读 .env 的脚本"用 —— 下面大半篇讲的是它；
+//   ② `process.env` 的**类型化读取**（`intFromEnv`），给各服务 config.js 用 —— 见文件末尾。
 //
 // ── 为什么存在 ────────────────────────────────────────────────────────────
 // 一份 `.env` 有三类互不相同的消费者，各自的解析语义**并不一致**：
@@ -92,7 +94,41 @@ function read(filePath, opts = {}) {
     return parse(raw);
 }
 
-module.exports = { parse, read };
+// ─────────────────────────────────────────────────────────────────────────────
+// process.env 的**类型化读取**（与上半部分的 `.env` 文本解析是两件事：那边回答
+// "文件里写了什么"，这边回答"进程该采信什么"）。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 从 `process.env` 读一个整数配置。未设置 / 空串 / 非整数 → 用 `fallback`，且**出声**。
+ *
+ * @why 全仓此前一律写成 `parseInt(process.env.X) || DEFAULT`，它有一个**静默且危险**的坑：
+ *      `parseInt('0')` 得 `0`，而 `0` 在 `||` 里是假值 ⇒ **显式写 0 反而落回默认值**。
+ *      于是"把这个开关关掉"这个最自然的动作做不到，而且没有任何提示——配置写了、
+ *      进程重启了、行为一点没变。
+ *      实测代价：`APPROVAL_COOLING_MS_HIGH=0` 关不掉 workflow 的 24 小时冷却期
+ *      （下游只能改写成 `1` 才生效），`SIGN_RATE_LIMIT=0`（本意"一律拒签"）静默变成 10。
+ *      （docs/feedback/done/event-triggered-workflow-lifecycle-drops-events.md §三）
+ *
+ * @attention 用 `Number` 而不是 `parseInt`：`parseInt('12abc')` 静默得 `12`，
+ *      而一个写错的配置值应当**被拒绝并出声**，不是被截断后当真。
+ * @attention 走 `console.warn` 而非 library/logger：config.js 在模块加载期就求值，
+ *      此时拉起日志子系统既早又容易成环。这一行只在配置真的被忽略时才打。
+ *
+ * @param {string} name      环境变量名
+ * @param {number} fallback  缺省值
+ * @returns {number}
+ */
+function intFromEnv(name, fallback) {
+    const raw = process.env[name];
+    if (raw === undefined || raw === null || String(raw).trim() === '') return fallback;
+    const n = Number(String(raw).trim());
+    if (Number.isInteger(n)) return n;          // 0 与负数都是合法取值，不再被 `||` 吃掉
+    console.warn(`[env] ${name}=${JSON.stringify(raw)} 不是整数，已忽略，仍用默认值 ${fallback}`);
+    return fallback;
+}
+
+module.exports = { parse, read, intFromEnv };
 
 // ── CLI：给 shell 调用方用 ────────────────────────────────────────────────
 //   node api/library/env.js <file> <KEY>   → 打印该键的值（不存在则打印空）

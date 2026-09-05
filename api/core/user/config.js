@@ -1,5 +1,6 @@
 require('dotenv').config();
 const pkg = require('./package.json');
+const { intFromEnv } = require('../../library/env');
 const { portFor, urlFor } = require('../../library/ports');
 const safeJson = (s, d) => { try { return s ? JSON.parse(s) : d; } catch (e) { return d; } };
 
@@ -89,15 +90,15 @@ module.exports = {
 
   // Logic Rules
   defaultLanguage: process.env.DEFAULT_LANG || 'zh',
-  defaultIterations: parseInt(process.env.DEFAULT_ITERATIONS) || 200000,
+  defaultIterations: intFromEnv('DEFAULT_ITERATIONS', 200000),
 
   // VERSION.md §3.2 — per-user Ed25519 signing keys (approval sign-off).
   signing: {
-    rateLimit: parseInt(process.env.SIGN_RATE_LIMIT) || 10,        // signs per window per uid
-    rateLimitWindowSec: parseInt(process.env.SIGN_RATE_WINDOW_SEC) || 60
+    rateLimit: intFromEnv('SIGN_RATE_LIMIT', 10),        // signs per window per uid
+    rateLimitWindowSec: intFromEnv('SIGN_RATE_WINDOW_SEC', 60)
   },
 
-  pageSize: parseInt(process.env.PAGE_SIZE) || 12,
+  pageSize: intFromEnv('PAGE_SIZE', 12),
   description: {
     en: {
         main: [

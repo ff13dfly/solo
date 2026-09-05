@@ -711,7 +711,7 @@ async function runCompensations(trace, workflow, context, opts) {
  *      primitive, so the SAME bug stayed alive here for another three weeks, in the one place
  *      that runs human-approved workflows. Both sides had passing tests; each described its own
  *      implementation and neither knew the other existed. The fix is one evaluator, not one
- *      more test. (docs/feedback/event-triggered-workflow-lifecycle-drops-events.md §5.1)
+ *      more test. (docs/feedback/done/event-triggered-workflow-lifecycle-drops-events.md §5.1)
  * @attention `==` / `!=` / `!` are deliberately NOT touched — `{'!': {var:'x'}}` meaning
  *      "not set counts as false" is a legitimate idiom. Only ordered comparisons fail closed.
  */

@@ -266,3 +266,62 @@ describe('§7 随机语料仍与 dotenv 一致', () => {
         }
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// intFromEnv — process.env 的整数读取
+// 2026-09-05 — docs/feedback/done/event-triggered-workflow-lifecycle-drops-events.md §三
+//
+// 全仓此前一律写 `parseInt(process.env.X) || DEFAULT`，它把**显式的 0 吃掉**：
+// parseInt('0') 得 0，而 0 在 || 里是假值 ⇒ 落回默认值。于是"把这个开关关掉"这个最自然的
+// 动作做不到，且没有任何提示。实测代价：APPROVAL_COOLING_MS_HIGH=0 关不掉 24h 冷却期，
+// GATEWAY_ATTACH_MAX_COUNT=0（本意"禁止附件"）静默变成 10。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('intFromEnv', () => {
+    const KEY = 'SOLO_ENV_TEST_INT';
+    afterEach(() => { delete process.env[KEY]; });
+
+    test('🔴 显式 0 生效（旧写法 `parseInt(x) || D` 在这里落回默认值）', () => {
+        process.env[KEY] = '0';
+        expect(env.intFromEnv(KEY, 999)).toBe(0);
+        // 对照：这就是被替换掉的写法，留在这里说明为什么必须换
+        expect(parseInt(process.env[KEY]) || 999).toBe(999);
+    });
+
+    test('负数生效', () => {
+        process.env[KEY] = '-1';
+        expect(env.intFromEnv(KEY, 999)).toBe(-1);
+    });
+
+    test('未设置 / 空串 / 纯空白 → 默认值，不出声', () => {
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        expect(env.intFromEnv(KEY, 7)).toBe(7);
+        process.env[KEY] = '';
+        expect(env.intFromEnv(KEY, 7)).toBe(7);
+        process.env[KEY] = '   ';
+        expect(env.intFromEnv(KEY, 7)).toBe(7);
+        expect(warn).not.toHaveBeenCalled();          // 没配 ≠ 配错，不该刷屏
+        warn.mockRestore();
+    });
+
+    test('写错的值被拒绝并 warn —— 不是静默截断', () => {
+        // parseInt('12abc') 会静默得 12；一个写错的配置值应当出声，不是被当真。
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        process.env[KEY] = '12abc';
+        expect(env.intFromEnv(KEY, 7)).toBe(7);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0][0])).toMatch(/SOLO_ENV_TEST_INT/);
+        warn.mockRestore();
+    });
+
+    test('小数被拒绝（要的是整数）', () => {
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        process.env[KEY] = '1.5';
+        expect(env.intFromEnv(KEY, 7)).toBe(7);
+        warn.mockRestore();
+    });
+
+    test('两端空白照常解析', () => {
+        process.env[KEY] = '  42  ';
+        expect(env.intFromEnv(KEY, 7)).toBe(42);
+    });
+});
