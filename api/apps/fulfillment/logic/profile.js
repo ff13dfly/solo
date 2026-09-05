@@ -5,6 +5,9 @@ const createEntity = require('../../../library/entity');
 const jsonrpc = require('../handlers/jsonrpc');
 const { buildMethodIndex, lintProfile } = require('./lint');
 const { generateProfile } = require('./generate');
+const { createLogger } = require('../../../library/logger');
+
+const logger = createLogger('fulfillment:profile');
 
 // Canonical (stable key order) serialization → digest of the EXECUTABLE definition only
 // (transitions + meta_fields — what gets reviewed and run). Binds an approval to the exact
@@ -55,6 +58,48 @@ function localMethodIndex() {
  *      validated CANDIDATE is returned for human review — it does NOT auto-create.
  */
 module.exports = (redis, config, relay) => {
+    /**
+     * Read the Router's `_tasks` egress whitelist for lint rule 7 (read-only, best-effort).
+     *
+     * @why Rule 4 proves an action's method EXISTS; it says nothing about whether the state
+     *      machine may REACH it. The Router drops a `_task` to a non-whitelisted target
+     *      **after** the transition already returned 200 — the caller sees a clean success
+     *      and an intact history, and the only trace is a console.warn on the server. The
+     *      default whitelist has exactly two entries (notification, gateway), so any profile
+     *      that drives a real business action hits this on its FIRST run.
+     * @attention Returning null turns rule 7 OFF rather than failing the lint: an unreadable
+     *      key must never block authoring. But a MISSING key is logged — a silent-off gate is
+     *      exactly the failure mode this rule exists to prevent.
+     */
+    async function routerTaskWhitelist() {
+        // A partial config (unit tests construct this logic with just serviceName/idLengths)
+        // simply has no key to read — rule 7 stays off, quietly. That is different from
+        // "the key is declared but absent from Redis", which IS worth a warning below.
+        const key = config && config.redis && config.redis.routerTaskWhitelistKey;
+        if (!key) return null;
+        try {
+            const raw = await redis.get(key);
+            if (!raw) {
+                logger.warn(`Router task whitelist ${key} is absent — profile lint rule 7 (task egress) is OFF for this check. If the Router renamed the key, update config.redis.routerTaskWhitelistKey.`);
+                return null;
+            }
+            const wl = JSON.parse(raw);
+            return wl && typeof wl === 'object' ? wl : null;
+        } catch (e) {
+            logger.warn(`Could not read the Router task whitelist (${key}): ${e.message} — profile lint rule 7 (task egress) is OFF for this check.`);
+            return null;
+        }
+    }
+
+    /** Assemble lintProfile options: the optional action policy + the egress whitelist. */
+    async function lintOptions(allowedActions = null) {
+        const wl = await routerTaskWhitelist();
+        return {
+            ...(allowedActions ? { allowedActions } : {}),
+            ...(wl ? { taskWhitelist: wl } : {})
+        };
+    }
+
     const factory = createEntity(redis, {
         serviceName: config.serviceName,
         entityName:  'profile',
@@ -82,7 +127,7 @@ module.exports = (redis, config, relay) => {
                 ('transitions' in params && canonical(params.transitions) !== canonical(existing.transitions)) ||
                 ('meta_fields' in params && canonical(params.meta_fields) !== canonical(existing.meta_fields));
             if (!execChanged) return factory.update(params);   // metadata-only edit — no re-review
-            const lintReport = lintProfile({ ...existing, ...params }, localMethodIndex());
+            const lintReport = lintProfile({ ...existing, ...params }, localMethodIndex(), await lintOptions());
             if (lintReport.errors.length) {
                 throw jsonrpc.INVALID_PARAM(`Profile edit failed lint (executable fields are re-checked on edit): ${lintReport.errors.join('; ')}`);
             }
@@ -130,7 +175,7 @@ module.exports = (redis, config, relay) => {
                 if (existing.reviewState) {
                     throw jsonrpc.FORBIDDEN(`profile "${profile.id}" is already in the review lane (reviewState: ${existing.reviewState})`);
                 }
-                const lintReport = lintProfile(existing, localMethodIndex(), allowedActions ? { allowedActions } : {});
+                const lintReport = lintProfile(existing, localMethodIndex(), await lintOptions(allowedActions));
                 if (lintReport.errors.length) {
                     // Refused at the gate (reviewer never sees broken ones); the profile STAYS
                     // trusted direct-create and remains usable — nothing changed.
@@ -154,7 +199,7 @@ module.exports = (redis, config, relay) => {
             if (!profile.id) {
                 profile.id = String(profile.name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 32) || `p_${Date.now()}`;
             }
-            const lintReport = lintProfile(profile, localMethodIndex(), allowedActions ? { allowedActions } : {});
+            const lintReport = lintProfile(profile, localMethodIndex(), await lintOptions(allowedActions));
             if (lintReport.errors.length) {
                 return { ok: false, id: profile.id, reviewState: null, lintReport };   // rejected at the gate; nothing stored
             }

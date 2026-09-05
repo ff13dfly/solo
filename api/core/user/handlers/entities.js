@@ -19,7 +19,7 @@ module.exports = {
             "lang": { type: "string", description: "Preferred language (e.g., zh, en)" },
             "status": { type: "enum", options: ["ACTIVE", "DELETED"], description: "Account lifecycle status" },
             "create": { type: "datetime", description: "Registration timestamp" },
-            "last": { type: "datetime", description: "Last login/activity timestamp" },
+            "last": { type: "datetime", format: "iso", description: "Last login/activity timestamp（ISO-8601 字符串 —— logic/user.js 登录路径写的是 new Date().toISOString()，introspection 的 USER_PROFILE_RETURN 也声明为 string）" },
             "categories": { type: "object", description: "User-specific category assignments" }
         }
     },

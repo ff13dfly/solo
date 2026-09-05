@@ -170,11 +170,31 @@ describe('jsonlogic — resolveParams (per-field template evaluation)', () => {
             .toEqual({ content: '页面:{{instance.meta.dom}}' });
     });
 
-    test('non-var JsonLogic operators (e.g. cat) are NOT evaluated in templates', () => {
-        // The heuristic only recognizes `var` / `$`-prefixed keys; a { cat: [...] }
-        // wrapper recurses as a plain object (its inner vars DO resolve).
+    // 2026-09-05 — docs/feedback/done/fulfillment-actions-have-no-business-egress.md §3.1.
+    // `cat` was ADDED to the evaluated set (RESOLVE_OPS). Before this, a profile could not
+    // build a string at all, so a per-instance idempotency key like "fx-<id>-publish" went
+    // downstream as a literal — every instance shared one key, every dispatch after the
+    // first hit the downstream idempotency check and returned the FIRST order. The call
+    // chain looked successful every time while nothing was ever dispatched.
+    test('cat IS evaluated, so a per-instance idempotency key can be built', () => {
         expect(L.resolveParams({ content: { cat: ['URL: ', { var: 'u' }] } }, { u: 'x' }))
-            .toEqual({ content: { cat: ['URL: ', 'x'] } });
+            .toEqual({ content: 'URL: x' });
+        expect(L.resolveParams({ requestId: { cat: ['fx-', { var: 'instance.id' }, '-publish'] } },
+            { instance: { id: 'FL-7' } })).toEqual({ requestId: 'fx-FL-7-publish' });
+    });
+
+    test('cat is only an operator when it is the object\'s SOLE key — a business field named cat is untouched', () => {
+        // The narrowing that keeps this additive: a literal payload field that happens to be
+        // called `cat` must not start evaluating. Inner vars still resolve (plain recursion).
+        expect(L.resolveParams({ content: { cat: ['a', { var: 'u' }], note: 'n' } }, { u: 'x' }))
+            .toEqual({ content: { cat: ['a', 'x'], note: 'n' } });
+    });
+
+    test('operators outside RESOLVE_OPS are still NOT evaluated (only cat was opened up)', () => {
+        // `if` stays a plain object — opening every standard operator would silently start
+        // evaluating literal fields in existing consumer profiles.
+        expect(L.resolveParams({ policy: { if: [true, 'a', 'b'] } }, {}))
+            .toEqual({ policy: { if: [true, 'a', 'b'] } });
     });
 
     test('a falsy var key (empty string) is treated as a nested object, not evaluated', () => {

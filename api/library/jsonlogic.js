@@ -82,10 +82,12 @@ function evaluateCondition(rule, data) {
  * 对参数模板逐字段求值。值若是 JsonLogic 对象（含 `var` 或 `$`-前缀算子）则求值，
  * 普通对象递归，数组保持数组身份逐元素递归，标量原样保留。
  *
- * @attention 只有「顶层带 `var` 键 / `$` 前缀键的对象」会被求值——**字符串不做任何
- *      插值**（`"{{a.b}}"` 这类模板语法不存在，会原样透传给下游），其余 JsonLogic
- *      算子（如 `cat`）也不会被识别。要引用上下文只能整字段写 `{ "var": "path" }`。
- *      详见 docs/feedback/runbook-browser-extension-ai-extraction-not-runnable.md。
+ * @attention **字符串本身不做插值**（`"{{a.b}}"` 这类模板语法不存在，会原样透传给下游）。
+ *      被求值的只有三种形状：顶层带 `var` 键的对象、带 `$` 前缀键的对象，以及
+ *      唯一键落在 `RESOLVE_OPS`（当前只有 `cat`）里的对象。要拼字符串就写
+ *      `{ "cat": ["fx-", {"var":"instance.id"}, "-publish"] }`。
+ *      详见 docs/feedback/runbook-browser-extension-ai-extraction-not-runnable.md
+ *      与 docs/feedback/done/fulfillment-actions-have-no-business-egress.md §3.1。
  */
 function resolveParams(template, data) {
     if (!template || typeof template !== 'object') return template;
@@ -101,10 +103,34 @@ function resolveParams(template, data) {
     return resolved;
 }
 
+/**
+ * 除 `var` / `$` 前缀外，额外按算子求值的白名单。
+ *
+ * @why 只认 `var` 等于把 JsonLogic 砍成「只剩取值」——**拼不出任何字符串**。
+ *      现实代价：profile 想给下游派单写一个每实例唯一的幂等键
+ *      `"fx-{instance.id}-publish"`，字符串不插值会原样当字面量发出去，于是
+ *      **所有实例共用同一个幂等键**——第一张单建成后，后面每一张都命中下游幂等、
+ *      返回那张旧单，调用链看起来次次成功，实际一次都没派。
+ *      （docs/feedback/done/fulfillment-actions-have-no-business-egress.md §3.1）
+ *
+ * @attention 刻意只放 `cat` 一个，不放开全部标准算子：放开是**行为变更**——参数模板里
+ *      任何恰好以算子命名的字面量字段（`{ if: … }`、`{ map: … }` 这类业务字段名）
+ *      会突然被当算子求值。要再放别的算子，往这个集合里加，并同步 CHANGELOG 的
+ *      下游 action（消费者的存量 profile 可能正带着同名字面量字段）。
+ * @attention 只在该算子是**对象唯一键**时才求值（JsonLogic 自身的表达形状），
+ *      `{ cat: [...], note: '…' }` 这种明显是业务对象，照旧递归、不求值。
+ */
+const RESOLVE_OPS = new Set(['cat']);
+
 function resolveValue(value, data) {
     if (value && typeof value === 'object' && !Array.isArray(value)
         && (value.var || Object.keys(value).some(k => k.startsWith('$')))) {
         return jsonLogic.apply(value, data);
+    }
+    // 加在 var/$ 判定之后：上面那条的行为逐字节不变，这里只多接一种形状。
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const keys = Object.keys(value);
+        if (keys.length === 1 && RESOLVE_OPS.has(keys[0])) return jsonLogic.apply(value, data);
     }
     return resolveParams(value, data); // 对象/数组递归；标量由顶部守卫原样返回
 }

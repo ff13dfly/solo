@@ -11,6 +11,12 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+_（空）_
+
+---
+
+## [v1.2.13] — 2026-09-05
+
 ### 可靠性门禁一批（2026-09-04）—— 补「跑久了 / 量大了 / 版本错开了」这三类现有测试看不见的面
 
 起因：盘点 v1.2.8→v1.2.12 十一处修复的来源——五处来自下游生产报告，一处 CI 抓到且红了两天没人看；
@@ -43,9 +49,140 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
   与 `.github/workflows/codeql.yml`（security-extended，排除产物目录，不阻断）。此前 CI 只有供应链卫生检查，零漏洞扫描。
 - **chore(ci)**：三处互相矛盾的白名单计数注释（61/790、105/1690、133）改为「列表即计数」；e2e 的 66 套同理。
 
-下游 action：用 JsonLogic 数值比较做闸门的 fulfillment profile，字段缺失时现在会被拦（`Condition not met`）而不是放行；
-若真有依赖「没喂就放行」的 profile（不应存在——那正是被报的事故），改为显式缺省 `{var:[path, default]}`。其余无。
+### 时间字段形态门禁（2026-09-04）—— 给「时间怎么存」装上唯一缺失的执行面
 
+两条独立的线索同日撞在一起：steward 问「实体里的时间字段存的是时间串不是时间戳，autocheck
+检测不出还是漏掉了」；同时 steward 侧全量排查出**一个仓库里 7 处正在线上发生的静默 bug**
+（[`../feedback/time-field-shape-no-single-source.md`](../feedback/time-field-shape-no-single-source.md)）。
+根因是**根本没有这条规则**：51 个静态规则里没有任何一条碰时间字段；`entities-definition` 只校验
+字段「有没有 `type`」，不校验取值、更不与实现对账；Portal 的 `renderValue` 用 `new Date(val)`，
+两种形态都能渲染——三层同时静默。而「必须 epoch ms」这句话**全仓只出现在 `entity.js:15` 一段
+私有函数的头注里**：`SKILL.md` 只约束了时间**源**（用 clock.js），从未约束**存储形态**。
+
+- **新增 autocheck 规则 `clock-check`**（`api/autocheck/static/clock-check.js`），四条判据。
+  **ERROR 只给可证伪的自相矛盾**：① 对声明为数值时刻的字段调 `Date.parse()`
+  （`Date.parse(1788488514012)` 返回 **NaN** 且不抛错 ⇒ 比较恒 false、`|| 0` 落 0、比较器返回
+  NaN 让 `Array.sort` 退化成不排序）；② 字段声明为数值时刻却写入 ISO 串。**WARN 给不可证伪的**：
+  ③ 写 ISO 但从未声明形态（多是会话/票据这类内部状态，本就不该进 `entities.js`）；
+  ④ 时间字段用裸 `Date.now()`（全队 71 处存量，只提示）。
+  **读侧那条是重点**——steward 那 7 处 bug 全在读侧，只做写侧一处也抓不到。写侧**跟一跳同文件
+  局部变量**：不跟这一跳规则会恰好在最该抓的案子上失灵（steward 写的是
+  `const now = clock.nowDate().toISOString(); … lastSeenAt: now`，直接形态一次没出现过）。
+- **`entities.js` 字段新增可选 `format: 'iso' | 'epoch-ms'`**（缺省 = epoch ms）。`type:'datetime'`
+  是给 Portal 的**渲染**提示，不回答"**存**成什么"——两件事此前被同一个词兼着表达，于是
+  `apps/storage` 自相矛盾：`entities.js` 说 datetime，`introspection.js` 顶部却明写
+  "createdAt is an ISO-8601 STRING, not a number"。**要存 ISO 是合法选择，但必须声明**，
+  从此是被记录的例外而非无人知晓的漂移。已给 `apps/storage.asset.createdAt` 与
+  `core/user.user.last` 标注——**本版不改任何形态，只把既有契约声明出来**。
+- **`api/library/clock.js` 导出 `toMs()` / 新增 `toMsOr(v, fallback)`**，`entity.js` 转发同名两个并让
+  `toSortableMs()` 委托过去。此前这段「number 与 ISO 都要吃」的兜底，框架写对了一份却**锁在模块
+  内部不导出**——于是 steward 一个仓库手写了 **6 份**（服务端 3·前端 1·插件 1·脚本 1），那 7 处
+  bug 就是这么来的。`toMsOr(v, 0)` 用于排序键，`toMsOr(v)` 返回 `number | null` 用于时间差
+  （⚠️ 时间差别用 `|| 0`：`now - 0` 是个巨大正数，「24 小时内」判成 false，缓存永不命中）。
+  顺带补掉 `toSortableMs` 原有的两个窟窿：`NaN` 输入此前原样返回（比较器返 NaN ⇒ `Array.sort`
+  变 no-op，**正是它自己想躲的坑**）、`Date` 对象此前落 0。
+- **标准从代码注释提进两处会随升级下发的文档**：`docs/authoring/modeling.md` §3 新增「★ 时间字段：
+  一律 epoch ms，例外必须声明」（四种错法对照表 + `entities.js` 怎么写 + 读侧该调什么），§6 自查
+  表加一行；`SKILL.md` 补条文并给两条时间红线都标上 `autocheck clock-check`——此前那是整份红线
+  清单里**唯一没有门禁标注**的一条。
+
+实测：solo 15 个 CI 服务 ERROR=0（全部 PASSED WITH WARNINGS）；全队 8 个下游 21 个服务当前工作树
+ERROR=0 / WARN=32。对 **steward 修复前的 HEAD** 实跑 `scout 1 + steward 2 + hive 3 = 6 条 ERROR`，
+反馈 §二表里的服务端三处（#2·#3·#4）全部命中。16 例夹具覆盖真阳性与已知陷阱形态（`uptime`、
+`STARTUP_TIME`、纯计时 `const t0 = Date.now()`、`===` 比较、`typeof x === 'string'` 守卫里的
+`Date.parse`）零误报。
+⚠️ **autocheck 只扫 `api/apps/<svc>/`**：那 7 处里插件与前端的 4 处（#1·#5·#6·#7）规则一处也拦不住，
+别把「门禁绿了」读成「这类 bug 没有了」。
+
+下游 action：**两件事**。
+① 用 JsonLogic 数值比较做闸门的 fulfillment profile，字段缺失时现在会被拦（`Condition not met`）而不是放行；
+若真有依赖「没喂就放行」的 profile（不应存在——那正是被报的事故），改为显式缺省 `{var:[path, default]}`。
+② 新门禁 `clock-check` 随 `api/autocheck/` 整目录覆盖到位。**2026-09-04 全队实扫 0 个 ERROR，升级本身
+不会让任何现有服务变红**；此后若某字段在 `handlers/entities.js` 声明为 `datetime` 而代码写入 ISO 串、
+或对这类字段调 `Date.parse()`，静态门会**红**（PostToolUse 钩子当场回你）。两条修法任选：改用
+`clock.now()` 存 epoch ms，或在该字段上标注 `format: 'iso'` 把它变成被声明的例外。读混合形态的时间
+字段别再手写兜底，改调 `clock.toMs(v)` / `clock.toMsOr(v, 0)`（`entity.js` 也转发了同名两个）——
+已经手写了的（steward 有 6 份）升级后可以删。
+
+
+### 状态机的业务出口 + Router 自己的监听网卡（2026-09-05）—— 两篇下游反馈，同一个形状：门禁覆盖了除要害以外的一切
+
+两篇来自派生项目的实测反馈，独立发生，根因同形：**一套加固铺开了，唯独漏掉最要紧的那一处**，
+而漏掉的那处恰好没有任何门禁看着。
+
+**① `_tasks` 出口：状态机推不动任何业务动作，且全链路静默**
+（[`../feedback/done/fulfillment-actions-have-no-business-egress.md`](../feedback/done/fulfillment-actions-have-no-business-egress.md)，steward 线上实测）。
+Router 的 task 白名单出厂只有 `notification` 与 `gateway`，于是「让状态机驱动业务动作」——
+fulfillment 的**主要用途**——开箱即不可用，且第一次尝试就静默失败：白名单是在
+`res.json()` **之后**才查的（`index.js` 先响应、再异步 `processTasks`），调用方拿到 200 +
+新状态 + 干净 history，响应里连 `_tasks` 字段都被 Router 删掉了，被挡下只在服务器留一行
+`console.warn`。**这不是"错误没被传播"，是结构上不可能传播。**
+
+- **profile lint 新增规则 7「出口可达」**（`apps/fulfillment/logic/lint.js`）：每个 task action
+  能否通过 Router 的 `_tasks` 白名单（目标在表内 / `fulfillment` 在 `allowFrom` / 方法在
+  `allowMethods`，两处 `*` 通配与运行时逐条同义）。**与规则 4 是两道无关的闸**：4 问"方法存不存在"，
+  7 问"状态机够不够得着"。`profile.submit` / `profile.update` 自动读取当前白名单供给（只读，
+  key 在 `config.redis.routerTaskWhitelistKey`）；读不到就关掉这条规则，**不阻断创作**。
+  ⇒ 把运行时的静默丢活提前成**激活前的明确 error**。
+- **`buildLogicData` 补 `now`**（epoch ms，走 `clock.now()` 故测试可冻结）。此前求值上下文里
+  没有时钟，profile **无法表达任何时间判定**：`{var:'now'}` 恒为 null（`now > X` 永远 false，
+  与"守卫拒了我"无从区分），action 的 `expireAt` 只能烤成绝对时刻——而状态机要跑几周。
+- **`library/jsonlogic.js` 的 `resolveParams` 放开 `cat`**（新增 `RESOLVE_OPS` 白名单）。此前只认
+  `var` / `$` 前缀 = 把 JsonLogic 砍成只剩取值，**拼不出任何字符串**：下游若把去重字段叫别的
+  名字（`requestId` 之类），profile 想写 `"fx-{instance.id}-publish"` 会原样当字面量发出去，
+  于是**所有实例共用一个幂等键**——第一张单之后每一张都命中下游幂等返回旧单，
+  **调用链看起来次次成功，实际一次都没派**。
+- **被白名单挡下的 task 写 `ERROR:QUEUE:router`**（新 code `TASK_BLOCKED`，带 `gate`（target /
+  source / method / resolution）+ `sourceService` / `targetService` / `method` / 怎么修）。
+  此前是**同一个 `dispatchOne` 里的两种处置**：参数校验失败写队列，而三处安全拒绝只
+  `console.warn` 就 return——恰恰反了，投递失败是运维问题，被策略挡下是**配置与设计不匹配**，
+  后者不留痕就永远不会被发现。顺带收了本篇没提的第四处（`Target service not found`：白名单里
+  写着、但这个部署根本没跑那个服务）。纯增量，不改任何 task 的执行与否；Redis 不可用时静默跳过。
+- **文档**：`apps/fulfillment/GUIDE.md`（新增「actions 的出口有白名单」一节 + `cat` 幂等键写法 +
+  `now`）与 `protocol/zh/fulfillment.md`（§3.2 上下文补 `now`、params 求值面说明；§7.1 规则 7；
+  §7.1 三层防线补默认白名单与升级语义）。
+
+**② Router 是全仓唯一没接 `bindAddr()` 的 `app.listen`**
+（[`../feedback/done/router-alone-skips-bindaddr.md`](../feedback/done/router-alone-skips-bindaddr.md)，finance 生产自查）。
+九个 core + 六个 apps 全接上了，**漏的正是入口进程**——它持有全部方法路由、鉴权与 session 发放，
+就防护价值而言那十五个加起来也不如它一个。项目在 `.env` 设了 `BIND_ADDR=127.0.0.1`，九成服务
+照做，唯一对外的那个没照做，且无任何提示。
+
+- **`api/router/index.js` 接 `bindAddr('router')`**。「锁住全部、只开入口」
+  （`BIND_ADDR=127.0.0.1` + `ROUTER_BIND_ADDR=0.0.0.0`）从此表达得出来。
+- **autocheck 新增 `--rules=<a,b>` 与 `--strict`**。**这才是防复发的那一半**：把整套 checker 指向
+  `api/router/` 会报 12 个纯形状错误（没有 `serviceName`、没有 handshake 路由…），所以它从来
+  没进过 per-service 循环，而这正是它成为唯一漏网处的原因——**一道覆盖了除入口以外所有东西的
+  门禁，覆盖的是错误的集合**。CI 新增一步 `checker.js router --rules=bind-address --strict`
+  （`--strict` 让 WARN 也阻断：bind-address 对存量服务刻意是 WARN，但对已清干净的路径，
+  回退必须炸）。实测模拟回退，门确实红。
+- **`core/mcp` 补进 CI 的 per-service 循环**（15 → 16 个目录）。顺带发现的同类疏漏：它一直不在
+  列表里，它的 `bindAddr` 是手工加的、不是被门禁逼出来的。
+- **scaffold `.env.example` 补 `BIND_ADDR` 段**：说明它管**全部**进程（含 Router）、
+  以及跨主机反代时别锁。此前四处文档都讲了这个开关，唯独消费者最先打开的那个文件没有。
+
+**实测**：CI 白名单 133 套 / 2187 passed + 5 skipped 全绿（新增 6 例 `TASK_BLOCKED` 断言 + 10 例
+lint 规则 7 + 3 例 `cat` 求值面）；16 个目录 autocheck ERROR=0 + router 单规则门绿；
+`autocheck/simulation` 七场景通过；`check-upgrade-path.sh` 49 断言通过。
+
+下游 action：**四件事**。
+① 🔴 **`BIND_ADDR` 现在也管 Router 了**。不设这个变量的部署**逐字节无变化**
+（`bindAddr()` 返回 `undefined`，`listen(port, undefined, cb)` ≡ `listen(port, cb)`）。
+但**已经设了 `BIND_ADDR=127.0.0.1` 的部署，Router 会从绑全网卡收敛到 loopback**——
+如果你的反代 / LB / 容器网络是从**另一台主机**打进 Router 的，升级前先加
+`ROUTER_BIND_ADDR=0.0.0.0`。同机 `proxy_pass http://127.0.0.1:<port>` 不受影响。
+② `resolveParams` 现在会对**唯一键是 `cat`** 的对象求值。既有 profile 的 action params 里
+若有恰好叫 `cat` 的**字面量**字段（且它是该对象唯一的键），它会开始被当算子执行——
+改个字段名，或多带一个键。其余标准算子仍不求值。
+③ profile 的 lint 多了一道出口校验：如果你的 profile 派单给 notification/gateway 以外的服务，
+`profile.submit` / `profile.update` 现在会**在激活前报错**（以前是运行时静默丢活）。
+修法是把目标加进 Router 白名单：`setting.task.get` 读出整张表 → 合并 → `setting.task.update`
+写回（**整体替换语义**，直接写一项会把原有两家一起抹掉）。⚠️ 另注意 Router 只在该配置键
+**不存在**时播种，**升级不会把新的默认白名单带给存量部署**。
+④ `ERROR:QUEUE:router` 会**多出以前没有的条目**（`code: 'TASK_BLOCKED'`）。两类消费者要留意：
+按队列长度告警的运维面板可能开始报警——**那正是它该报的**，队列里每一条都对应一次真的没发生的
+业务动作；以及断言 `ERROR:QUEUE` 增量的测试（本仓 e2e 的 `assertNoErrors` 即是），
+若某个用例本就在触发被挡的 task，它会开始红。
 ---
 
 ## [v1.2.12] — 2026-09-01

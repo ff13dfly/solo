@@ -32,6 +32,37 @@
 **幂等**：transition 本身不幂等，但重复调用通常因当前态已变、事件不再匹配而报 INVALID_PARAM（不会静默重复推进）。
 真正的重投保护在 `_tasks`：每个 task 带 `idempotency_key`（`{transition_id}:A{idx}`，`transition_id`
 按实例单调递增），Router at-least-once 重投时由下游据此去重——所以别在下游自己再记账。
+⚠️ 下游若把去重字段叫**别的名字**（`requestId` 之类），引擎注入的 `idempotency_key` 接不上，要自己在
+`action.params` 里拼一个每实例唯一的键：`{ "requestId": { "cat": ["fx-", {"var":"instance.id"}, "-publish"] } }`。
+**别写成字符串** `"fx-{instance.id}"`——参数模板不做字符串插值，会原样发出去，于是所有实例共用一个键、
+第一张单之后每一张都命中下游幂等返回旧单，**看起来次次成功，实际一次都没派**。
+
+### 🔴 actions 的出口有白名单，默认只有两家
+
+Router 只把 `_tasks` 派给它 task 白名单里的目标，**出厂默认只有 `notification` 与 `gateway`**。
+派给别的服务（业务派单、`agent.chat` 等）会被丢弃，而且——
+
+- **看不出来**：白名单是在 `res.json()` **之后**才查的。transition 返回 200、新状态、history 干净，
+  响应里连 `_tasks` 字段都没有（Router 发送前删掉了）。被挡下只在服务器上留一行 `console.warn`。
+- **判据**：拿 action 里那个幂等键**自己复派一次**下游方法，看回来的是原单还是新单——新单 = 从没派出去过。
+
+要派给别的服务，先改白名单（admin）：
+
+```js
+const wl = await call('setting.task.get');            // ← 必须先读
+wl.hive = { allowFrom: ['fulfillment'], allowMethods: ['hive.job.create'] };
+await call('setting.task.update', { whitelist: wl }); // ← 整体替换，不是合并
+```
+
+**`setting.task.update` 是整体替换**：直接写一项会把 notification/gateway 一起抹掉。
+`profile.submit` / `profile.update` 的 lint 会**在激活前**把这类不可达的 action 报成 error（规则 7），
+所以正常路径下你会先看到明确报错，而不是线上静默丢活。
+
+⚠️ **升级不会带来新的默认白名单**：Router 只在这个 key **不存在**时播种一次。好处是运维改过的白名单
+不会被重启/升级覆盖；代价是框架将来往默认值里加一家，**存量部署一个都拿不到，且没有任何提示**。
+
+**条件里可以用 `now`**（epoch ms，与 factory 时间字段同形态）：`{ ">": [{"var":"now"}, {"var":"instance.meta.deadline"}] }`
+写停留超时 / 相对死期。action 的 `params` 里同样可用，别把死期烤成绝对时刻。
 
 ## 配方二：外部投稿模板 → 人审激活（投稿闸）
 

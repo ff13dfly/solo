@@ -24,6 +24,10 @@
  *   6. action policy (opt-in via options.allowedActions): every TASK action is within the
  *      caller-supplied allow-list (mirrors the workflow H6 footprint pre-check) — lets an
  *      AI-submission lane reject out-of-policy profiles before activation.
+ *   7. task egress (opt-in via options.taskWhitelist): every TASK action can actually pass
+ *      the Router's `_tasks` whitelist. Rule 4 proves the method EXISTS; this proves the
+ *      state machine is ALLOWED TO REACH IT — the two are unrelated gates, and the second
+ *      one fails silently at runtime (see below).
  *
  * Pure, never throws. The caller supplies the introspection arrays (require()'d) — this
  * module does NO file I/O, so it is equally usable from a CI test or a dev script.
@@ -228,6 +232,48 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
                 if (!a || a.type === 'workflow') continue;
                 if (typeof a.method === 'string' && a.method && !allowSet.has(a.method)) {
                     errors.push(`${pname}: transition '${t.event || '?'}' action '${a.method}' is not in the allowed-action policy`);
+                }
+            }
+        }
+    }
+
+    // 7 — task egress (optional). The Router dispatches a transition's `_tasks` ONLY to
+    //     targets in its task whitelist, and the default whitelist ships with exactly two
+    //     entries (notification, gateway). Everything else is dropped — **after** the
+    //     transition already returned 200 with a clean history, with only a console.warn
+    //     on the server. So "the state machine drives a business action" fails silently
+    //     on the very first attempt, and the caller cannot even see what was dispatched
+    //     (the Router deletes `_tasks` from the response before sending it).
+    //     Moving that into an activation-time error is the whole point of this rule.
+    //     Mirrors handlers/tasks.js dispatchOne EXACTLY, including both '*' wildcards —
+    //     drift here would either wave through a task the Router drops, or block a
+    //     profile that actually works. No whitelist supplied ⇒ no check (back-compat,
+    //     and the caller cannot always read it — see profile.js).
+    //     (docs/feedback/done/fulfillment-actions-have-no-business-egress.md §五.2)
+    const wl = options && options.taskWhitelist;
+    if (wl && typeof wl === 'object') {
+        const SOURCE = 'fulfillment';   // _tasks are dispatched with sourceService = this service
+        for (const t of transitions) {
+            for (const a of (Array.isArray(t && t.actions) ? t.actions : [])) {
+                if (!a || a.type === 'workflow') continue;
+                if (typeof a.method !== 'string' || !a.method) continue;   // rule 4 already errored
+                // Same derivation the runtime uses (instance.js): explicit service, else the
+                // method's namespace.
+                const target = a.service || a.method.split('.')[0];
+                const where = `${pname}: transition '${t.event || '?'}' action '${a.method}'`;
+                const rule = wl[target];
+                if (!rule) {
+                    errors.push(`${where} dispatches to service '${target}', which is not in the Router task whitelist — the _task is dropped at runtime AFTER the transition returns 200 (silently). Add it via setting.task.update (read-modify-write: setting.task.get replaces the WHOLE map).`);
+                    continue;
+                }
+                const allowFrom = Array.isArray(rule.allowFrom) ? rule.allowFrom : [];
+                if (!allowFrom.includes('*') && !allowFrom.includes(SOURCE)) {
+                    errors.push(`${where} targets '${target}', but the Router task whitelist does not allow '${SOURCE}' as a source for it (allowFrom: ${JSON.stringify(allowFrom)}) — the _task is dropped silently at runtime.`);
+                    continue;
+                }
+                const allowMethods = Array.isArray(rule.allowMethods) ? rule.allowMethods : [];
+                if (!allowMethods.includes('*') && !allowMethods.includes(a.method)) {
+                    errors.push(`${where} is not in the Router task whitelist's allowMethods for '${target}' (${JSON.stringify(allowMethods)}) — the _task is dropped silently at runtime.`);
                 }
             }
         }

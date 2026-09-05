@@ -152,3 +152,60 @@ finance 的生产机跑 UTC，一开始担心财务数据算错。查下来结�
 那个 commit 的 message 一个字没提它;之后 8-26 转 steward、8-27~29 转论文,再没人回看。
 `docs/feedback/` 的积压队列**没有任何机制会主动捞出来**（会话开头的 hook 只推 overview 的
 捕获队列）。同批积压的还有 8 篇,最老的 8-16。
+
+---
+
+## 部分落地（v1.2.13，2026-09-04）—— **建议 2 已做，建议 1 仍未做**
+
+触发者不是这篇本身，是 steward 的一个新问题：「实体里的时间字段存的是时间串不是时间戳，
+autocheck 检测不出还是漏掉了？」——问的是**存储形态**，而本篇讲的是**时间源**。
+两条独立的病，共用本篇 §三点出的那一个缺口：`SKILL.md` 的红线里，时间那一块没有执行面。
+
+📎 姊妹篇：[`time-field-shape-no-single-source.md`](./time-field-shape-no-single-source.md)
+（steward，同日）。那篇给出了「形态」这条线的代价实测——**一个仓库 7 处线上静默 bug**，
+并促成了本版**读侧**判据（`Date.parse()` 打在数值时刻字段上）；本篇则是「时间源」那条线。
+两篇的建议 2/3 由 v1.2.13 一并结案，两篇各自的建议 1 / 建议 4 都仍未做。
+
+### 做了什么
+
+1. **补上本篇「建议 2」的检查器**：`api/autocheck/static/clock-check.js`，已注册进
+   `static/index.js` 与 `checker.js`，随 `api/autocheck/` 整目录下发给所有消费项目。
+   同时给 `SKILL.md` 的两条时间红线都标上 `(autocheck clock-check)`——本篇 §三说的
+   「这份清单里唯一没有 autocheck 标注的一条」，从此不再是。
+   ⚠️ 检查器覆盖的是**时间字段**上的裸 `Date.now()`（WARN 级），**不覆盖** `entity.js` 自己——
+   `api/library/` 不在 per-service 循环里（CI 只对它跑 `--lib` 的 redis 子集）。
+   本篇 §二那 7 处仍然一个都没有门禁看着。
+2. **`clock.js` 导出 `toMs()` / 新增 `toMsOr(v, fallback)`**，`entity.js:toSortableMs()` 委托过去。
+   这回应的是 §四「三套时间表示并存」的**读侧**代价：那段兜底此前被独立写了两遍
+   （`entity.js` 一次、steward `hive/logic/node.js:lastSeenMs()` 一次），没有共同原语，
+   踩过的坑不会传播。顺带补掉 `toSortableMs` 的两个原有窟窿（`NaN` 输入原样返回、
+   `Date` 对象落 0）。
+3. **`entities.js` 字段新增可选 `format: 'iso' | 'epoch-ms'`**（缺省 = epoch ms）。
+   这是对 §五「建议 3」的**机制性**回应，不是存量收敛：`type:'datetime'` 只是 Portal 的渲染
+   提示，从来没说过存什么；`format` 把「存什么」单独说清。已给 `apps/storage.asset.createdAt`
+   与 `core/user.user.last` 标注——**形态一个字没改，只是把既有契约声明出来**。
+
+### 明确**没**做的（边界，别误判）
+
+- **建议 1（`entity.js` 引入 clock，7 处 `Date.now()` → `clock.now()`）原样保留未做。**
+  2026-08-30 triage 的暂缓理由（v1.2.9 刚重写 `createMany`/`deleteMany` + WAL 落盘面，
+  不该把两件不相关的风险叠进同一个未发布版本）在 v1.2.13 依然成立。
+  ⚠️ v1.2.13 给 `entity.js` 加了一行 `require('./clock')`——**那是读侧归一（`toMsOr`），
+  不是写侧时间源**。文件里已就地留注说明这一点，别看见这个 require 就以为建议 1 做完了。
+- **建议 3 的存量收敛（core/user · core/administrator · apps/storage 的 ISO 字段改 epoch ms）没做。**
+  本轮查清了为什么它比本篇原文估的贵：这些字段**在 introspection 字段表里被显式声明成
+  `type:'string'` 并注了 `// ISO string`**（`core/user/handlers/introspection.js:45,84,96,108`、
+  `apps/storage/handlers/introspection.js:18,42`），`core/administrator/GUIDE.md:42` 也明写
+  「时间字段都是 ISO-8601 字符串」。那不是漂移，是**已发布的 RPC 契约**——改它要动
+  introspection 类型、GUIDE、以及每个既有部署里的存量数据，远超 patch 的量级。
+  ⇒ 建议把本篇 §五建议 3 的措辞从「可选，低优先」改判为「**需要单独一版 + 迁移脚本**」。
+- **本轮实测校正一处数字**：§四说 ISO 只有 4 处，实际在 CI 扫描面内有 ~14 处
+  （core/user 9 · core/administrator 4 · apps/storage 2，另有 router/report 3 处不在 per-service 循环里）。
+
+### 剩余待办（下一轮接手时看这里）
+
+- [ ] 建议 1：`entity.js` 7 处 `Date.now()` → `clock.now()`（含 v1.2.9 新增的 399/591）。
+      动手前先全量扫断言，见上一节「处理时该做什么」。
+- [ ] `library/` 的时间源没有门禁：`--lib` 模式只跑 redis 子集，考虑把 `clock-check` 的
+      时间源那一档也纳入 `--lib`（做了这条，建议 1 才有防复发的闸）。
+- [ ] 建议 3 存量收敛：单独一版 + 数据迁移，先定 introspection 契约怎么变。

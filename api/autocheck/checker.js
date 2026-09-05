@@ -7,6 +7,11 @@
  *   静态检测（无需服务运行）：
  *     node api/autocheck/checker.js api/apps/storage [--static]
  *
+ *   单规则检测（任意路径，跳过服务形状脚手架校验）：
+ *     node api/autocheck/checker.js api/router --rules=bind-address [--strict]
+ *
+ * --strict 把 WARNING 也算失败（用于已清干净、不许回退的路径）。
+ *
  *   运行时模拟（需要本地 Redis）：
  *     node api/autocheck/simulation/run.js [service]
  *
@@ -19,6 +24,12 @@ const path = require('path');
 const checks = require('./static/index');
 
 const results = { passed: [], warnings: [], errors: [] };
+
+// --strict：把 WARNING 也算作失败。
+// @why 多数规则刻意定成 WARN（存量服务普遍是老写法，设 ERROR 会一次炸一片）。但对一条
+//   **已经清干净的路径**，同一条 WARN 就该是阻断级——否则"加进 CI"只是多打一行字，
+//   回退时照样绿。典型用法：CI 用 `--rules=bind-address --strict` 钉住 api/router。
+let STRICT = false;
 
 function printReport() {
     console.log('\n' + '='.repeat(60));
@@ -43,6 +54,10 @@ function printReport() {
         console.log('❌ RESULT: FAILED - Please fix errors before deployment.');
         process.exit(1);
     } else if (results.warnings.length > 0) {
+        if (STRICT) {
+            console.log('❌ RESULT: FAILED (--strict) - warnings are blocking on this path.');
+            process.exit(1);
+        }
         console.log('⚠️  RESULT: PASSED WITH WARNINGS');
         process.exit(0);
     } else {
@@ -55,6 +70,19 @@ async function main() {
     const args = process.argv.slice(2);
     const isStatic = args.includes('--static');
     const isLib = args.includes('--lib');
+    // --rules=a,b — run ONLY the named rules against any path, skipping the service-shape
+    // scaffolding checks. Generalizes what --lib does for api/library/.
+    //
+    // @why Some processes are real, load-bearing, and NOT service-shaped, so the per-service
+    //   loop cannot cover them — most of all api/router/ (pointing checker.js at it yields 12
+    //   errors: no serviceName, no handshake routes, system methods unlisted, …). The Router
+    //   was therefore the ONE process no rule ever looked at, which is exactly how it stayed
+    //   the only `app.listen` in the tree without bindAddr() while all nine core services got
+    //   it — a gate that covers everything except the entry point covers the wrong set.
+    //   (docs/feedback/done/router-alone-skips-bindaddr.md)
+    STRICT = args.includes('--strict');
+    const rulesArg = args.find(a => a.startsWith('--rules='));
+    const onlyRules = rulesArg ? rulesArg.slice('--rules='.length).split(',').map(r => r.trim()).filter(Boolean) : null;
     const targetPath = args.find(a => !a.startsWith('--')) || '.';
     const resolvedPath = path.resolve(targetPath);
 
@@ -63,6 +91,22 @@ async function main() {
     if (isLib) console.log('📚 Mode: lib (flat api/library/-style dir — redis 反模式规则子集，不套服务脚手架校验)\n');
     else if (isStatic) console.log('⚡ Mode: static (runtime checks skipped)\n');
     else console.log('');
+
+    if (onlyRules) {
+        // Accept both the index key (bindAddress) and the file name (bind-address).
+        const byFileName = (n) => n.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        const unknown = [];
+        for (const name of onlyRules) {
+            const key = checks[name] ? name : (checks[byFileName(name)] ? byFileName(name) : null);
+            if (!key) { unknown.push(name); continue; }
+            checks[key].check(resolvedPath, results);
+        }
+        if (unknown.length) {
+            results.errors.push(`❌ [checker] --rules 指定了不存在的规则: ${unknown.join(', ')}（可用名见 autocheck/static/index.js 的导出键）`);
+        }
+        printReport();
+        return;
+    }
 
     if (isLib) {
         // api/library/ 等共享库没有 index.js/handlers/logic/ 服务脚手架，structure.check
@@ -131,6 +175,7 @@ async function main() {
     checks.authForkCheck.check(resolvedPath, results);
     checks.publicSurfaceCheck.check(resolvedPath, results);
     checks.guideCheck.check(resolvedPath, results);
+    checks.clockCheck.check(resolvedPath, results);
 
     // ── 运行时检查（服务已启动才有效，--static 跳过）─────────
     if (!isStatic) {

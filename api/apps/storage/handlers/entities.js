@@ -23,7 +23,7 @@ module.exports = {
             "thumbnails": { type: "object", description: "Map of size (sm/md/lg) → thumbnail URL, for images" },
             "owner": { type: "string", description: "Uploader UID (per-asset authorization; null = legacy/unowned)" },
             "visibility": { type: "string", description: "Access tier: public | internal (any authenticated) | private (owner/admin only)" },
-            "createdAt": { type: "datetime", description: "Upload timestamp" }
+            "createdAt": { type: "datetime", format: "iso", description: "Upload timestamp（ISO-8601 字符串，非 epoch ms —— 见 handlers/introspection.js 顶部说明；format 标注让 Portal 仍按时刻渲染，同时把\"存什么\"说清楚）" }
         }
     }
 };

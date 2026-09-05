@@ -83,6 +83,62 @@ describe('Tasks Handler', () => {
          expect(axios.post).not.toHaveBeenCalled();
     });
 
+    // 2026-09-05 — docs/feedback/done/fulfillment-actions-have-no-business-egress.md §五.1.
+    // A blocked task used to leave NOTHING behind: `_tasks` is stripped from the response
+    // before the client sees it, processTasks is not awaited, and the whitelist is consulted
+    // AFTER res.json() already returned 200. So "the state machine drove a business action"
+    // failed silently on the first try, while a schema failure two lines below WAS persisted.
+    describe('blocked tasks are persisted to ERROR:QUEUE:router (they used to vanish)', () => {
+        const queued = () => mockRedis.store.map((v) => JSON.parse(v));
+
+        test('target gate: a service outside the whitelist leaves a TASK_BLOCKED record', async () => {
+            await processTasks([{ service: 'finance', method: 'pay', params: {} }],
+                'user1', true, SERVICES, keypair, mockRedis, 'fulfillment');
+            const rows = queued();
+            expect(rows).toHaveLength(1);
+            expect(rows[0]).toMatchObject({
+                code: 'TASK_BLOCKED', gate: 'target',
+                service: 'finance', targetService: 'finance', sourceService: 'fulfillment', method: 'pay'
+            });
+            expect(rows[0].error).toMatch(/setting\.task\.update/);   // says how to fix it
+            expect(typeof rows[0].stamp).toBe('string');
+        });
+
+        test('source gate: a disallowed producer is recorded as gate=source', async () => {
+            await processTasks([{ service: 'notification', method: 'notification.send', params: {} }],
+                'user1', false, SERVICES, keypair, mockRedis, 'collection');
+            expect(queued()[0]).toMatchObject({ code: 'TASK_BLOCKED', gate: 'source', sourceService: 'collection' });
+        });
+
+        test('method gate: an unlisted method is recorded as gate=method', async () => {
+            await processTasks([{ service: 'gateway', method: 'gateway.smtp.delete', params: {} }],
+                'user1', false, SERVICES, keypair, mockRedis, 'fulfillment');
+            expect(queued()[0]).toMatchObject({ code: 'TASK_BLOCKED', gate: 'method', method: 'gateway.smtp.delete' });
+        });
+
+        test('resolution gate: whitelisted but not deployed is recorded too', async () => {
+            delete SERVICES.notification;   // whitelisted in config, absent from this deployment
+            await processTasks([{ service: 'notification', method: 'notification.send', params: {} }],
+                'user1', false, SERVICES, keypair, mockRedis, 'fulfillment');
+            expect(queued()[0]).toMatchObject({ code: 'TASK_BLOCKED', gate: 'resolution' });
+        });
+
+        test('a task that IS allowed still dispatches and records nothing', async () => {
+            axios.post.mockResolvedValue({ data: { result: 'ok' } });
+            await processTasks([{ service: 'notification', method: 'notification.send', params: {} }],
+                'user1', false, SERVICES, keypair, mockRedis, 'fulfillment');
+            expect(axios.post).toHaveBeenCalled();
+            expect(mockRedis.store).toHaveLength(0);
+        });
+
+        test('a closed Redis client cannot break dispatch (bookkeeping is best-effort)', async () => {
+            mockRedis.isOpen = false;
+            await expect(processTasks([{ service: 'finance', method: 'pay', params: {} }],
+                'user1', true, SERVICES, keypair, mockRedis, 'fulfillment')).resolves.not.toThrow();
+            expect(mockRedis.store).toHaveLength(0);
+        });
+    });
+
     test('carries the trace context into the signed task token meta', async () => {
          const bs58 = require('bs58').default || require('bs58');
          const tasks = [

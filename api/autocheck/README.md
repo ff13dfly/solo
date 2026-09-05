@@ -32,11 +32,33 @@ node api/autocheck/checker.js . --static
 node api/autocheck/checker.js api/apps/lucky
 ```
 
+### 3. 单规则模式 `--rules`（任意路径）
+
+只跑点名的规则，**跳过服务形状脚手架校验**——用于那些真实、要紧、但不长成标准微服务的路径。
+
+```bash
+# 只查监听网卡这一条；--strict 让 WARNING 也算失败
+node api/autocheck/checker.js api/router --rules=bind-address --strict
+
+# 多条用逗号；索引键名（bindAddress）与文件名（bind-address）都认
+node api/autocheck/checker.js api/router --rules=bind-address,floating-promise
+```
+
+**为什么需要它**：把整套 checker 指向 `api/router/` 会报 12 个纯形状错误（没有
+`serviceName`、没有 `/auth/seed|verify` 路由、系统方法未白名单…），于是它从来没被任何规则
+扫过——而 Solo 的 Router 是唯一入口、持有全部方法路由与鉴权面。结果就是：`bindAddr()` 铺
+到了九个 core 服务，**唯独漏了最该锁的那一个**，一年多没人发现。
+**一道覆盖了除入口以外所有东西的门禁，覆盖的是错误的集合。**
+
+`--strict` 的用处：多数规则刻意定成 WARN（存量服务普遍是老写法，设 ERROR 会一次炸一片）。
+但对一条**已经清干净的路径**，同一条 WARN 就该是阻断级，否则"加进 CI"只是多打一行字、
+回退时照样绿。
+
 ---
 
 ## 审计项概览
 
-`autocheck` 目前包含超过 40 项审计规则，涵盖以下领域：
+`autocheck` 目前包含 50 余项审计规则，涵盖以下领域：
 
 | 领域 | 核心规则示例 |
 | :--- | :--- |
@@ -46,6 +68,7 @@ node api/autocheck/checker.js api/apps/lucky
 | **数据一致性** | 强制使用 Entity Factory 模式，必须实现逻辑软删除 (`is_deleted`) |
 | **性能与稳定** | 检测未清理的定时器、内存泄漏风险、浮动 Promise、未限制的并发 |
 | **可观测性** | 禁止使用 `console.log`（必须使用内置 Logger），必须补全 `returns` 描述 |
+| **时间字段** | 时刻一律 epoch ms（例外须在 `entities.js` 标 `format: 'iso'`）；禁止对数值时刻字段调 `Date.parse()`；时间字段应走 `clock.now()` |
 | **AI 友好性** | 检查 `ai: true` 标记的方法是否具备准确的语义描述和 Schema |
 
 ---

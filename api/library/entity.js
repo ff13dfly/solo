@@ -4,6 +4,7 @@ const jsonrpc = require('./jsonrpc');
 const { STATUS, WAL } = require('./constants');
 const logger = require('./logger');
 const { optimisticUpdate } = require('./optimistic');
+const clock = require('./clock');
 
 const STATUS_ACTIVE = STATUS.ACTIVE;
 const STATUS_DELETED = STATUS.DELETED;
@@ -23,14 +24,17 @@ const walContext = new AsyncLocalStorage();
  *      and even across a collection that mixes the two. Non-throwing (unlike
  *      clock.toMs): an unparseable/absent value sorts last (treated as 0).
  *      This does NOT normalize what gets stored/returned — only the sort key.
+ *
+ * @note Delegates to clock.toMsOr() (v1.2.13) so the fleet has ONE home for this
+ *       coercion — steward had independently re-written the same six lines as
+ *       `hive/logic/node.js:lastSeenMs()`. This is the READ side only: the write
+ *       side of this file still calls Date.now() directly rather than clock.now(),
+ *       which is a separate open item (docs/feedback/entity-factory-bypasses-clock.md
+ *       建议 1, deferred by triage 2026-08-30). Do not read this require() as that
+ *       item being done.
  */
 function toSortableMs(v) {
-    if (typeof v === 'number') return v;
-    if (typeof v === 'string') {
-        const ms = Date.parse(v);
-        return Number.isNaN(ms) ? 0 : ms;
-    }
-    return 0;
+    return clock.toMsOr(v, 0);
 }
 
 /**
@@ -1004,3 +1008,23 @@ module.exports.requestContext = (req) => ({
     depth: req?.meta?.depth ?? 0,
     owner: (req?.constraints && req.constraints.$owner) || null,
 });
+
+/**
+ * 时刻归一，两种形态都吃。**转发自 `api/library/clock.js`，那里是正主。**
+ *
+ * @why 在这里再导出一次，纯粹是为了**被找到**。标准（"factory standard 是 epoch ms"）
+ *      只写在本文件 `toSortableMs` 的头注里，服务作者读到它、需要自己处理混合形态时，
+ *      第一反应是 `require('.../library/entity')`——而不是去猜 clock.js 也管这个。
+ *      不转发的代价实测过：steward 一个仓库里手写了 **6 份**同样的 `toMs`
+ *      （服务端 3 · 前端 1 · 插件 1 · 运维脚本 1），并因此在 3 个服务、2 个客户端、
+ *      1 个脚本里留下 7 处静默 bug——每一处单看都是合理的 `Date.parse(a) || Date.parse(b) || 0`，
+ *      作者只是不知道 a 和 b 是两种类型。
+ *      （docs/feedback/time-field-shape-no-single-source.md §一、§二）
+ *
+ * - `toMs(v)`      严格档：解析不了就抛，用于"这里绝不该拿到坏值"的边界。
+ * - `toMsOr(v, f)` 容错档：解析不了返回 f（缺省 null）。**排序键传 0**，
+ *   做时间差/新鲜度判断传 `null` 再显式判空——传 0 会让"24 小时内"判成 false，
+ *   那正是 steward bug #1 的形状。
+ */
+module.exports.toMs = clock.toMs;
+module.exports.toMsOr = clock.toMsOr;

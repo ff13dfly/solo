@@ -77,7 +77,7 @@ jobs:
           fail=0
           for d in apps/collection apps/planner apps/fulfillment apps/storage apps/market apps/approval \
                    core/ingress core/notification core/user core/agent core/nexus core/orchestrator \
-                   core/administrator core/gateway sample; do
+                   core/administrator core/gateway core/mcp sample; do
             echo "::group::autocheck $d"
             if ! node autocheck/checker.js "$d" --static; then
               echo "::error::autocheck failed for $d"
@@ -86,6 +86,17 @@ jobs:
             echo "::endgroup::"
           done
           exit $fail
+      - name: autocheck --rules (api/router — not service-shaped, so the loop above cannot cover it)
+        run: |
+          # The Router is the sole entry point and holds the whole routing + auth surface,
+          # but pointing the full checker at it yields 12 errors purely from shape (no
+          # serviceName, no /auth/seed|verify routes, system methods unlisted, …) — so it
+          # was never in the loop, and that is exactly how it ended up the ONLY app.listen
+          # in the tree without bindAddr() while all nine core services had it.
+          # --strict because bind-address is WARN-level for legacy services; on a path we
+          # have already brought to green, a regression must break the build, not print a
+          # warning nobody reads. (docs/feedback/done/router-alone-skips-bindaddr.md)
+          node autocheck/checker.js router --rules=bind-address --strict
       - name: autocheck --lib (api/library — flat dir, no service scaffolding)
         run: |
           # 服务侧的 logic/ 只是各服务自己的代码；api/library/ 是被所有服务共用的

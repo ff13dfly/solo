@@ -145,6 +145,50 @@ storage.asset.external { url, filename, mimeType, size, visibility }
 有了这张表，`service.md` 的每一节都变成机械操作：一个服务一套文件（§1）、一个实体改三处（§3）、
 命名照 `{service}.{entity}.{action}`（§5）。
 
+
+### ★ 时间字段：一律 epoch ms，例外必须声明
+
+**存的是数字**（`Date.now()` 那种毫秒整数），不是 `"2026-09-04T00:00:00Z"` 这种 ISO 字符串。
+Entity Factory 自己盖的 `createdAt` / `updatedAt` 就是数字，你自己加的时刻字段跟着它走。
+
+为什么值得单列一条：**混形态不会报错，只会静默算错**。三种形状都实测过——
+
+| 写法 | 拿到 ISO 串时 | 拿到数字时 |
+|---|---|---|
+| `now - rec.createdAt` | `NaN` | 正常 |
+| `arr.sort((a,b) => b.createdAt - a.createdAt)` | 比较器返回 `NaN` ⇒ **`Array.sort` 变 no-op**，「最新在前」退化成无序 | 正常 |
+| `Date.parse(rec.createdAt)` | 正常 | **`NaN`**（`Date.parse` 只吃字符串） |
+| `zAdd({ score: rec.createdAt })` | score 落 `NaN` / 0 | 正常 |
+
+四种都不抛异常、不进日志、单测也照样绿——只在真数据上错。
+
+**`handlers/entities.js` 里怎么写**：
+
+```js
+"createdAt": { type: "datetime", description: "创建时间" },              // 默认 = epoch ms
+"capturedAt": { type: "datetime", format: "iso", description: "…" },    // 例外，必须显式声明
+```
+
+`type: "datetime"` 是给 Portal 的**渲染**提示（"按时刻显示"），它不回答"**存**成什么"；
+`format` 才是。缺省即 epoch ms。**确实需要 ISO 是合法的**（对接外部契约、迁不动的存量数据），
+但必须写出来——写出来它就是被记录的例外，不写就是没人知道的漂移，下一个读它的人照样踩。
+
+**读一个可能是两种形态的字段，别自己写兜底**：
+
+```js
+const { toMs, toMsOr } = require('../../library/clock');   // 或 require('../../library/entity')
+toMs(v)          // 严格：解析不了就抛，用于「这里绝不该拿到坏值」的边界
+toMsOr(v, 0)     // 排序键：解析不了落 0，排最后
+toMsOr(v)        // 时间差/新鲜度：解析不了给 null，再显式判空
+```
+
+⚠️ 做**时间差**时别用 `|| 0` 兜底：`now - 0` 是个巨大的正数，「24 小时内」会判成 false，
+缓存永不命中之类的 bug 就是这么来的。要么 `toMsOr(v)` 拿 null 显式判，要么让它抛。
+
+> 门禁：`autocheck clock-check`。声明成数值时刻却写入 ISO 串、或对数值时刻字段调
+> `Date.parse()` ⇒ **ERROR**；时间字段用裸 `Date.now()`（应走 `clock.now()`，可注入、
+> 测试可冻结）、或写 ISO 但没声明形态 ⇒ WARN。
+
 ---
 
 ## 4. 体检信号（数字是「停下来看一眼」，不是规则）
@@ -206,5 +250,6 @@ git log -1 --format=%ad --date=short -- <file>   # 最后一次改动
 - [ ] §0 的表格扫过了，没有重造 core 已有的能力
 - [ ] 没有实体数 > 4 的服务（有的话，能说清为什么）
 - [ ] 「服务 × 实体」表已经落到项目 `docs/` 里，不只在脑子里
+- [ ] 时刻字段都是 epoch ms（§3 ★）；确实要存 ISO 的，已在 `entities.js` 上标了 `format: "iso"`
 
 全部打勾 ⇒ 去 [`service.md`](./service.md) 开写。

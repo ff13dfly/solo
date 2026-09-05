@@ -152,6 +152,22 @@ Router capability catalog in Redis — you don't guess it. These docs supply the
   them — wiring it is pure upside. Only custom data paths that bypass the Entity Factory
   still need manual filtering (`getConstraints(req).$owner`). (autocheck `owner-context`, WARN)
 - **No scattered `Date.now()`** — use `api/library/clock.js` (injectable, freezable in tests).
+  (autocheck `clock-check`, WARN)
+- **Time fields are stored as epoch ms**, not ISO-8601 strings — the Entity Factory standard
+  (`createdAt`/`updatedAt` are numbers). This is about the *shape you store*, which is a
+  different rule from the *time source* above: writing `new Date(clock.now()).toISOString()`
+  satisfies that one and violates this one. Mixing shapes in a collection is silent, not loud:
+  a bare subtraction on an ISO string yields `NaN`, and **a comparator returning `NaN` makes
+  `Array.sort` a no-op** — "newest first" degrades to unordered Redis SET order with no error
+  anywhere; a `zAdd` score goes `NaN` the same way. When you genuinely need ISO (an external
+  contract, or legacy data you cannot migrate), that is allowed — but **declare it**, so it is
+  a known exception rather than drift: `{ type: 'datetime', format: 'iso' }` in
+  `handlers/entities.js` (the `type` still tells the Portal to render it as a moment; `format`
+  says what is actually stored), or `{ name: 'xxxAt', type: 'string' }` in the
+  `handlers/introspection.js` field table. Reading a field that may be either shape: use
+  `clock.toMs()` (strict) or `clock.toMsOr(v, 0)` (tolerant, for sort keys) — don't hand-roll
+  the coercion, that is how the same six lines ended up written three times across the fleet.
+  (autocheck `clock-check`, ERROR when the declaration says numeric and the code writes ISO)
 - **No `console.log`** — use the built-in logger from `api/library/logger.js`. (autocheck `logging`)
 - **Trust the X-Router-Token, parsed correctly.** The Router signs a *compressed* identity payload;
   take exactly three fields (use `api/library/router-auth.js`'s `parseRouterToken`, don't hand-roll):

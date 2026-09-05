@@ -206,6 +206,68 @@ describe('lintProfile — action policy (rule 6: opt-in allow-list, mirrors work
     });
 });
 
+// 2026-09-05 — docs/feedback/done/fulfillment-actions-have-no-business-egress.md §五.2.
+// Rule 4 proves the method exists; this proves the state machine may REACH it. The gap
+// between the two is where the reported failure lived: `transition` returned 200 with a
+// clean history while the _task was dropped, because the Router checks its whitelist
+// asynchronously AFTER the response was already sent.
+describe('lintProfile — task egress (rule 7: can the action actually leave the state machine)', () => {
+    // The framework default, verbatim from router/config.js — the whitelist a fresh
+    // deployment actually runs with.
+    const DEFAULT_WL = {
+        notification: { allowFrom: ['fulfillment'], allowMethods: ['notification.send'] },
+        gateway:      { allowFrom: ['fulfillment'], allowMethods: ['gateway.email.send', 'gateway.sms.send', 'gateway.webhook.send'] },
+    };
+    const notify = { event: 'notify', from: 'DRAFT', to: 'SENT', actions: [{ type: 'task', method: 'notification.send' }] };
+    const pay    = { event: 'pay',    from: 'DRAFT', to: 'PAID', actions: [{ type: 'task', method: 'market.order.pay' }] };
+
+    test('no whitelist supplied → no egress check (back-compat; an unreadable key must not block authoring)', () => {
+        expect(lintProfile({ id: 'e0', transitions: [pay] }, methodIndex).errors).toEqual([]);
+    });
+
+    test('ERROR: the reported case — a real method the default whitelist cannot reach', () => {
+        const r = lintProfile({ id: 'e1', transitions: [pay] }, methodIndex, { taskWhitelist: DEFAULT_WL });
+        expect(r.errors.join('\n')).toMatch(/dispatches to service 'market', which is not in the Router task whitelist/);
+    });
+
+    test('an action the default whitelist DOES allow stays clean', () => {
+        expect(lintProfile({ id: 'e2', transitions: [notify] }, methodIndex, { taskWhitelist: DEFAULT_WL }).errors).toEqual([]);
+    });
+
+    test('ERROR: target is whitelisted but fulfillment is not an allowed source', () => {
+        const wl = { notification: { allowFrom: ['orchestrator'], allowMethods: ['notification.send'] } };
+        expect(lintProfile({ id: 'e3', transitions: [notify] }, methodIndex, { taskWhitelist: wl }).errors.join('\n'))
+            .toMatch(/does not allow 'fulfillment' as a source/);
+    });
+
+    test('ERROR: target + source allowed, but the METHOD is not in allowMethods', () => {
+        const wl = { notification: { allowFrom: ['fulfillment'], allowMethods: ['notification.inbox.list'] } };
+        expect(lintProfile({ id: 'e4', transitions: [notify] }, methodIndex, { taskWhitelist: wl }).errors.join('\n'))
+            .toMatch(/is not in the Router task whitelist's allowMethods/);
+    });
+
+    test("both '*' wildcards are honored exactly as the Router honors them", () => {
+        const wl = { market: { allowFrom: ['*'], allowMethods: ['*'] } };
+        expect(lintProfile({ id: 'e5', transitions: [pay] }, methodIndex, { taskWhitelist: wl }).errors).toEqual([]);
+    });
+
+    test('an explicit action.service overrides the method namespace (same derivation as instance.js)', () => {
+        const t = { event: 'go', from: 'DRAFT', to: 'X', actions: [{ type: 'task', service: 'notification', method: 'notification.send' }] };
+        expect(lintProfile({ id: 'e6', transitions: [t] }, methodIndex, { taskWhitelist: DEFAULT_WL }).errors).toEqual([]);
+    });
+
+    test('workflow actions are out of scope (they run through orchestrator, not _tasks)', () => {
+        const t = { event: 'go', from: 'DRAFT', to: 'X', actions: [{ type: 'workflow', workflow_id: 'wf-1' }] };
+        expect(lintProfile({ id: 'e7', transitions: [t] }, methodIndex, { taskWhitelist: DEFAULT_WL }).errors).toEqual([]);
+    });
+
+    test('a malformed whitelist entry does not throw and does not wave the action through', () => {
+        const wl = { market: { allowFrom: 'fulfillment', allowMethods: null } };   // wrong types
+        const r = lintProfile({ id: 'e8', transitions: [pay] }, methodIndex, { taskWhitelist: wl });
+        expect(r.errors.length).toBe(1);
+    });
+});
+
 describe('lintProfile — robustness', () => {
     test('empty / malformed profiles never throw', () => {
         expect(() => lintProfile(null, methodIndex)).not.toThrow();

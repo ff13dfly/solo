@@ -3,6 +3,7 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const config = require('./config');
 const { mountHealth } = require('../library/health');
+const { bindAddr } = require('../library/ports');
 
 // --- HANDLER MODULES ---
 const handlers = {
@@ -437,7 +438,16 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
         // would 404. Same handler, just an additional accepted path.
         app.post('/jsonrpc', rpcHandler);
 
-        app.listen(PORT, () => {
+        // bindAddr(): <ROUTER_BIND_ADDR> > <BIND_ADDR> > undefined (library/ports.js).
+        // The Router was the ONE process that ignored this switch while all nine core
+        // services honored it — and it is the one that most needs locking: it is the sole
+        // entry point and holds the full method routing + auth surface. Behind a reverse
+        // proxy it needs no external NIC at all. Opt-IN: with neither env set bindAddr()
+        // returns undefined and `listen(port, undefined, cb)` is byte-for-byte equivalent
+        // to `listen(port, cb)`, so deployments that set nothing are unchanged.
+        // "Expose only the entry point" is now expressible: BIND_ADDR=127.0.0.1 +
+        // ROUTER_BIND_ADDR=0.0.0.0. (docs/feedback/done/router-alone-skips-bindaddr.md)
+        app.listen(PORT, bindAddr('router'), () => {
             logger.info(`Solo·AI Router active on port ${PORT}`);
         });
 

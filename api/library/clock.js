@@ -58,6 +58,49 @@ function toMs(input) {
 
 module.exports = {
     /**
+     * Coerce number | Date | ISO-8601 string → epoch ms. Throws on anything
+     * unparseable, so a bad value fails loudly at the boundary.
+     *
+     * @why  Solo's storage standard is epoch ms, but ISO strings exist in the
+     *       fleet by deliberate, DECLARED exception (core/user profiles,
+     *       apps/storage assets). Any code that READS a time field therefore has
+     *       to tolerate both shapes — and without a shared primitive, everyone
+     *       hand-rolls the same six lines: `api/library/entity.js:toSortableMs()`
+     *       wrote them once for sort keys, and steward's
+     *       `api/apps/hive/logic/node.js:lastSeenMs()` wrote them again,
+     *       independently, for staleness. Same logic, no shared home, so the
+     *       lesson never propagated. This is that home.
+     *
+     * @param {number|string|Date} input
+     * @returns {number} epoch ms
+     */
+    toMs,
+
+    /**
+     * Tolerant sibling of toMs: returns `fallback` instead of throwing when the
+     * value is absent or unparseable.
+     *
+     * @why  Sort comparators MUST NOT throw — and must not return NaN either: a
+     *       comparator returning NaN makes Array.sort a silent no-op, degrading
+     *       "newest first" into Redis SET order with no error anywhere. That is
+     *       the exact trap entity.js:toSortableMs was written to dodge. Pass
+     *       fallback = 0 to sort unparseable values last.
+     *
+     * @param {*} input
+     * @param {number|null} [fallback=null]
+     * @returns {number|null}
+     */
+    toMsOr(input, fallback = null) {
+        if (input === null || input === undefined) return fallback;
+        try {
+            const ms = toMs(input);
+            return Number.isFinite(ms) ? ms : fallback;
+        } catch {
+            return fallback;
+        }
+    },
+
+    /**
      * Current epoch ms. Drop-in replacement for Date.now() across services.
      */
     now() {

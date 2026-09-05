@@ -2,6 +2,7 @@ const jsonrpc = require('../../../library/jsonrpc');
 const rules = require('./rules');
 const { createLogger } = require('../../../library/logger');
 const { walContext } = require('../../../library/entity');
+const clock = require('../../../library/clock');
 
 const logger = createLogger('fulfillment:instance');
 
@@ -29,8 +30,16 @@ module.exports = (redis, config, relay = null) => {
         return JSON.parse(raw);
     }
 
+    // `now` = epoch ms, the same shape every factory timestamp uses. Without it a profile
+    // could express NO time predicate at all: a condition on `{var:'now'}` resolved to null
+    // (so `now > X` was false forever — indistinguishable from "the guard rejected me"), and
+    // an action's expireAt could only be baked as an absolute instant at authoring time,
+    // which expires the same day on a machine meant to run for weeks.
+    // Via clock.now() (not Date.now()) so a frozen test clock reaches profile conditions too.
+    // (docs/feedback/done/fulfillment-actions-have-no-business-egress.md §3.2)
     const buildLogicData = (instance, mergedMeta, req) => ({
         instance:    { ...instance, meta: mergedMeta },
+        now:         clock.now(),
         user:        req?.user        || null,
         permit:      req?.permit      || null,
         constraints: req?.constraints || null

@@ -224,11 +224,16 @@ TTL:   无（持久化）
 ```json
 {
   "instance": { },
+  "now": 1788488514012,
   "user": "uid-xxx",
   "permit": "admin",
   "constraints": { }
 }
 ```
+
+`now` = 求值时刻的 epoch ms（与 Factory 时间字段同形态，经 `library/clock.js`，测试可冻结）。
+没有它就**无法表达任何时间判定**：停留超时（§3.4 的 `max_stay_duration`）、`now > expireAt` 跃迁到
+催办状态，以及 action 里的**相对**死期——只能把死期烤成绝对时刻，而状态机要跑几周。
 
 引用方式均使用 JsonLogic 标准 `{ "var": "path.to.field" }` 语法：
 
@@ -239,6 +244,17 @@ TTL:   无（持久化）
 ```
 
 > **注意**：文档中描述变量路径时使用点路径表示法（如 `instance.meta.payment_status`），不加任何前缀符号。
+
+**`actions.params` 的求值面比 `condition` 窄**：只有整字段写成 `{"var": …}`、`$` 前缀键、
+或**唯一键是 `cat`** 的对象才求值。**字符串不做插值**——`"fx-{instance.id}"` 会原样发给下游。
+要拼字符串（典型是下游自带名字的幂等键）用 `cat`：
+
+```json
+{ "requestId": { "cat": ["fx-", { "var": "instance.id" }, "-publish"] } }
+```
+
+其余标准算子（`if` / `+` / `map` …）在 params 里**不**求值，刻意如此：放开会让参数模板里
+任何以算子命名的**字面量字段**突然被当算子执行。要放开就改 `library/jsonlogic.js` 的 `RESOLVE_OPS`。
 
 ### 3.3 长周期协同模型
 
@@ -545,10 +561,12 @@ Profile（§2.2）既可人工编写，也可由 AI 从自然语言生成。为�
 4. **action 方法存在**：每个 `task` action 的 `method` 是已注册方法（幻觉/改名方法会在运行时被 Router 拒）。
 5. **状态图良构**：实例创建即处于初始态 `DRAFT`，故必须有转移**离开 DRAFT**；从「DRAFT 不可达态」出发的转移是**死分支**（warning）。
 6. **动作策略（可选，`options.allowedActions`）**：给定允许集时，每个 `task` action ∈ 允许集——镜像 workflow 的 **H6 footprint 预审**，让投稿面在激活前拒掉越权 Profile。
+7. **出口可达（可选，`options.taskWhitelist`）**：每个 `task` action 能通过 Router 的 `_tasks` 白名单（目标服务在表内、`fulfillment` 在其 `allowFrom`、方法在其 `allowMethods`，两处 `*` 通配与运行时同义）。**与规则 4 是两道互不相干的闸**：4 问"这个方法存不存在"，7 问"状态机够不够得着它"。7 之所以必须提前到激活前，是因为它在运行时**结构上不可能被观察到**——白名单是在响应发出**之后**才查的（Router 先 `res.json()`、再异步 `processTasks`），调用方拿到的是 200 + 干净 history，响应里连 `_tasks` 字段都被删了，被挡下只留一行服务器 `console.warn`。服务侧由 `profile.submit` / `profile.update` 自动读取当前白名单供给；读不到则该规则关闭（不阻断创作）。
 
 **机器不保证（必须人审 / 真 LLM eval）：**
 - **业务意图**：lint 证明"接线对、图能通"，**不证明"这条流程符合需求"**。阈值写反（`≤` 写成 `≥`）、状态语义错配、把"放行"接到"冻结"——lint 一律看不出来。
-- **运行时副作用边界**：action 方法存在 ≠ 该 Profile 有权调它。运行时仍由 **§6.3 三层防线**（Profile actions 白名单 → Router `_tasks` 白名单 → RPC permit）兜底；`allowedActions` 只是激活前的镜像预审，**不替代**运行时校验。
+- **运行时副作用边界**：action 方法存在 ≠ 该 Profile 有权调它。运行时仍由 **§6.3 三层防线**（Profile actions 白名单 → Router `_tasks` 白名单 → RPC permit）兜底；`allowedActions` 与规则 7 都只是激活前的镜像预审，**不替代**运行时校验（白名单可被运维随时改窄）。
+  > 🔴 **Router `_tasks` 白名单出厂只有 `notification` 与 `gateway` 两家**，即「状态机推进业务动作」**开箱即不可用**。要派给别的服务，先 `setting.task.get` 读出整张表、合并后 `setting.task.update` 写回（**整体替换语义**，直接写一项会把原有两家一起抹掉）。另注意 Router 只在该配置键**不存在**时播种一次——运维改过的白名单不会被升级覆盖，代价是**框架往默认值里加一家时，存量部署一个都拿不到，且没有提示**。
 - 结论：**人审是本协议的一部分，不是可选项**——lint 把"机器能判的"判到位，"机器判不了的意图"留给人签名背书。
 
 ### 7.2 生成路径（NL → 候选）

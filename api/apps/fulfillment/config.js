@@ -19,7 +19,18 @@ module.exports = {
         instancePrefix: 'FULFILLMENT:INSTANCE:',
         instanceIndex:  'FULFILLMENT:INSTANCE:INDEX',
         profilePrefix:  'FULFILLMENT:PROFILE:',
-        profileIndex:   'FULFILLMENT:PROFILE:INDEX'
+        profileIndex:   'FULFILLMENT:PROFILE:INDEX',
+
+        // READ-ONLY mirror of the Router's own key (router/config.js `redis.taskWhitelistKey`,
+        // seeded at Router boot, edited via the admin RPC setting.task.update). The profile
+        // linter reads it to answer "can this profile's actions actually leave the state
+        // machine" — see logic/lint.js rule 7. Named for what it is (`router*`) so nobody
+        // mistakes it for a key this service owns; fulfillment never writes it.
+        // @attention If the Router ever renames its key, this read returns null and rule 7
+        //   silently turns OFF (it is opt-in). That is the same failure class the rule
+        //   exists to catch, so profile.js logs a warning when the key is missing rather
+        //   than failing quiet.
+        routerTaskWhitelistKey: 'SYSTEM:CONFIG:TASK_WHITELIST'
     },
 
     description: {

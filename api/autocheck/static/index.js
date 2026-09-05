@@ -84,6 +84,8 @@ module.exports = {
     authForkCheck: require('./auth-fork-check'),
     // public 面白名单守门（toFix.md 二.router — checkAccess public 面无 Router 侧白名单 ceiling 的服务侧缓解）
     publicSurfaceCheck: require('./public-surface-check'),
+    // 时间字段形态与时间源检查（epoch ms 是 factory standard；声明↔实现对账 — SKILL.md 红线唯一没有门禁的一条）
+    clockCheck: require('./clock-check'),
     // fleet-standard guide 覆盖检查（'guide' 方法接线 + GUIDE.md 存在，WARN 级 — AI 自描述 API）
     guideCheck: require('./guide-check'),
 };

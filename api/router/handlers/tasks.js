@@ -112,6 +112,45 @@ async function processTasks(tasks, username, isAdmin, SERVICES, keypair, redisCl
 
     console.log(`[Tasks] Dispatching ${tasks.length} background operations from ${sourceService}...`);
 
+    /**
+     * Persist a "this task will never run" verdict to ERROR:QUEUE:router.
+     *
+     * @why Everything below that stops a task used to fall into one of two camps, in the
+     *   SAME function: a schema-validation failure was written to ERROR:QUEUE, while every
+     *   security/whitelist rejection got a bare console.warn and vanished. That asymmetry
+     *   had it exactly backwards — a delivery failure is an ops problem, but a task blocked
+     *   by policy is a **配置与设计不匹配**, and nobody can discover it: `_tasks` is deleted
+     *   from the response before the client sees it (forward.js), processTasks is not
+     *   awaited, and the whitelist is consulted AFTER res.json() has already returned 200.
+     *   So the caller sees a clean success, the state machine advances, and the business
+     *   action simply never happens. Reported twice from downstream (fulfillment dispatch,
+     *   browser-extension AI extraction) — both times only found by reading router source.
+     *   (docs/feedback/done/fulfillment-actions-have-no-business-egress.md §五.1)
+     *
+     * Purely additive: same queue, same envelope shape as TASK_VALIDATION_ERROR (`stamp`
+     * stays ISO to keep one readable shape per queue), never throws, never changes whether
+     * a task runs. `gate` says which of the three checks fired, so an operator can go
+     * straight to the right half of setting.task.update.
+     */
+    async function recordBlocked({ gate, targetService, method, error }) {
+        if (!redisClient || !redisClient.isOpen) return;
+        try {
+            await redisClient.rPush(`${config.redis.errorQueuePrefix}router`, JSON.stringify({
+                code: 'TASK_BLOCKED',
+                gate,
+                service: targetService,   // keep `service` — TASK_VALIDATION_ERROR consumers read it
+                sourceService,
+                targetService,
+                method,
+                error,
+                stamp: new Date().toISOString()
+            }));
+        } catch (e) {
+            // Never let bookkeeping break dispatch; the console.warn above already fired.
+            console.warn('[Tasks] Could not persist TASK_BLOCKED to the error queue:', e.message);
+        }
+    }
+
     async function dispatchOne(task) {
         try {
             const { service: targetService, method, params } = task;
@@ -122,6 +161,10 @@ async function processTasks(tasks, username, isAdmin, SERVICES, keypair, redisCl
 
             if (!rule) {
                 console.warn(`[Security] BLOCKED task: Target '${targetService}' is not in the task whitelist.`);
+                await recordBlocked({
+                    gate: 'target', targetService, method,
+                    error: `Target '${targetService}' is not in the task whitelist. Add it with setting.task.update (read setting.task.get first — it replaces the WHOLE map).`
+                });
                 return;
             }
 
@@ -129,6 +172,10 @@ async function processTasks(tasks, username, isAdmin, SERVICES, keypair, redisCl
             const allowedSources = rule.allowFrom || [];
             if (!allowedSources.includes('*') && !allowedSources.includes(sourceService)) {
                 console.warn(`[Security] BLOCKED task: Source '${sourceService}' is not allowed to trigger '${targetService}'.`);
+                await recordBlocked({
+                    gate: 'source', targetService, method,
+                    error: `Source '${sourceService}' is not in allowFrom for '${targetService}' (${JSON.stringify(allowedSources)}).`
+                });
                 return;
             }
 
@@ -136,6 +183,10 @@ async function processTasks(tasks, username, isAdmin, SERVICES, keypair, redisCl
             const allowedMethods = rule.allowMethods || [];
             if (!allowedMethods.includes('*') && !allowedMethods.includes(method)) {
                 console.warn(`[Security] BLOCKED task: Method '${method}' is not allowed for '${targetService}'.`);
+                await recordBlocked({
+                    gate: 'method', targetService, method,
+                    error: `Method '${method}' is not in allowMethods for '${targetService}' (${JSON.stringify(allowedMethods)}).`
+                });
                 return;
             }
 
@@ -143,6 +194,13 @@ async function processTasks(tasks, username, isAdmin, SERVICES, keypair, redisCl
             const targetSvcConfig = SERVICES[targetService];
             if (!targetSvcConfig) {
                 console.warn(`[Tasks] Target service not found: ${targetService}`);
+                // Same silence, different cause: the target passed the whitelist but is not
+                // in SERVICES — a whitelist entry naming a service this deployment does not
+                // run. Left un-persisted this looks identical to "it worked".
+                await recordBlocked({
+                    gate: 'resolution', targetService, method,
+                    error: `Target service '${targetService}' is whitelisted but not registered in this deployment (deploy/services.json).`
+                });
                 return;
             }
 
