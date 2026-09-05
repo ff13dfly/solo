@@ -112,6 +112,57 @@ describe('H3 — JsonLogic condition evaluation', () => {
         expect(res.trace.find(t => t.id === 's2').status).toBe('skipped');
     });
 
+    // ── fail-closed on missing operands ──────────────────────────────────────
+    // 2026-09-05 — docs/feedback/event-triggered-workflow-lifecycle-drops-events.md §5.1.
+    //
+    // These are the tests this file was MISSING, and their absence is the whole story: the
+    // fail-open bug was reported from colony on 2026-08-11 and fixed in library/jsonlogic.js,
+    // but runner.js called json-logic-js directly, so workflow step conditions kept the bug
+    // for another three weeks. Both suites were green the entire time — library/tests asserted
+    // fail-closed against the library, this file asserted operators against the raw primitive,
+    // and neither knew the other existed. Two implementations of one contract, two passing
+    // test suites, one live bug.
+    //
+    // Shape that bites: the THRESHOLD side is the one that goes missing. `var` → null → 0,
+    // so "score >= threshold" becomes "score >= 0" — a gate that means "only if it clears the
+    // bar" turns into "always", precisely when the bar failed to arrive.
+    test('numeric gate with BOTH operands missing → step skipped (raw JsonLogic would run it)', async () => {
+        const wf = makeWorkflow({ '>=': [{ var: 'step.s1.result.score' }, { var: 'step.s1.result.threshold' }] });
+        await h.seedWorkflow(wf);
+        const res = await h.run(wf.id);
+        expect(res.trace.find(t => t.id === 's2').status).toBe('skipped');
+    });
+
+    test('numeric gate with only the THRESHOLD missing → step skipped (the colony shape)', async () => {
+        // s1 returns count:3 but no `limit` — pre-fix this evaluated 3 >= 0 → ran.
+        const wf = makeWorkflow({ '>=': [{ var: 'step.s1.result.count' }, { var: 'step.s1.result.limit' }] });
+        await h.seedWorkflow(wf);
+        const res = await h.run(wf.id);
+        expect(res.trace.find(t => t.id === 's2').status).toBe('skipped');
+    });
+
+    test('an explicit default is honored — fail-closed does not break intentional fallbacks', async () => {
+        const wf = makeWorkflow({ '>=': [{ var: 'step.s1.result.count' }, { var: ['step.s1.result.limit', 0] }] });
+        await h.seedWorkflow(wf);
+        const res = await h.run(wf.id);
+        expect(res.trace.find(t => t.id === 's2').status).toBe('success');   // 3 >= 0
+    });
+
+    test('0 is a VALUE, not "missing" — a zero threshold still evaluates', async () => {
+        const wf = makeWorkflow({ '>=': [{ var: 'step.s1.result.count' }, { var: 'step.s1.result.zero' }] });
+        await h.seedWorkflow(wf);
+        const res = await h.run(wf.id);
+        expect(res.trace.find(t => t.id === 's2').status).toBe('success');   // 3 >= 0
+    });
+
+    test('equality operators are NOT touched — "not set counts as false" stays a legal idiom', async () => {
+        // `{'!': {var:'…cancelled'}}` on an absent field must still mean "not cancelled".
+        const wf = makeWorkflow({ '!': { var: 'step.s1.result.cancelled' } });
+        await h.seedWorkflow(wf);
+        const res = await h.run(wf.id);
+        expect(res.trace.find(t => t.id === 's2').status).toBe('success');
+    });
+
     test('no condition (undefined) → step always runs', async () => {
         const wf = makeWorkflow(undefined);
         // strip the condition key entirely

@@ -278,8 +278,21 @@ footprint = ∪ steps[].{service.method}  ∪  resolvers[].method
 | `$context.actor` | 当前触发者标识（只读，供日志拼接，**不可作鉴权决策依据**） | step 执行前 |
 | `$context.trigger_actor` | 引发触发事件的 principal（事件信封 `actor`，同步触发为 null；只读溯源，**不可作鉴权决策依据**——鉴权走 `require_actor_permit` 预审，§5.2） | step 执行前 |
 | `$context.trigger_id` | 本次触发的全局 ID（trace 关联键） | step 执行前 |
+| `$now` | 求值时刻的 epoch ms（经 `library/clock.js`，测试可冻结）。condition 里写 `{"var":"now"}` | step 执行前 |
 
 **移除/禁止访问**：`$env.*`（服务器环境变量），防止泄露。
+
+**除 `$` 语法外，params 也认 JsonLogic 节点**（与 fulfillment profile 的 `action.params` 同一套算子，
+判据出自 `library/jsonlogic.js` 的 `RESOLVE_OPS`，改一处两个面同时生效）：
+
+| 写法 | 用途 |
+|---|---|
+| `{"var": "input.x"}` | 取值（等价于 `"$input.x"`） |
+| `{"cat": ["fx-", {"var":"input.id"}, "-publish"]}` | **拼字符串**——`$` 语法只能整值引用，`"fx-$input.id"` 会原样透传 |
+| `{"+": [{"var":"now"}, 7200000]}` | **相对死期**（此刻 +2h）。没有它只能把死期烤成绝对时刻，而 workflow 要跑几周 |
+
+⚠️ 只有**唯一键**是这些算子（或带 `var`）的对象才求值；`{"cat": […], "note": "…"}` 这种业务对象照旧原样传。
+其余标准算子（`if` / `map` …）**不**求值——放开会让恰好以算子命名的字面量字段突然被执行。
 
 ### 解析规则（硬约束，不可放宽）
 
@@ -328,7 +341,16 @@ input_schema:
 
 **不允许**：算术运算（`+ - * /`）、字符串拼接、函数调用、对象字面量、属性赋值、任何 identifier 类 token。
 
-**实现要求**：必须用 `json-logic-js`（library 已依赖），**禁止 `new Function()` eval**。这是硬性技术选型，保护整个 workflow 安全模型。
+**实现要求**：必须经 **`api/library/jsonlogic.js`** 求值（它内部才是 `json-logic-js`），
+**禁止 `new Function()` eval**，也**禁止直接 `require('json-logic-js')`**。这是硬性技术选型，
+保护整个 workflow 安全模型；autocheck 的 `[jsonlogic]` 规则会挡住绕过。
+
+> 为什么必须经 library 而不是裸库：裸 json-logic-js 对**缺失操作数的数值比较是 fail-open**
+> ——取不到的 `var` 得 null，JS 再把 null 转成 0，于是 `{">=": [{var:'score'}, {var:'threshold'}]}`
+> 在阈值没喂进来时变成 `score >= 0`，**闸门恰好在缺数据那一刻无条件放行**。
+> `library/jsonlogic.js` 的 `evaluateCondition` 对 `< <= > >=` fail-closed（`==`/`!=`/`!` 不变，
+> 「没设过就当 false」是合法惯用法）。本文此前只写"必须用 json-logic-js"，runner 照做了、
+> 也就照抄了这个坑（见 `docs/feedback/event-triggered-workflow-lifecycle-drops-events.md` §5.1）。
 
 ### Resolver 语义
 

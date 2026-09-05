@@ -42,6 +42,78 @@ describe('orchestrator engine (fixture-driven, MockRouter)', () => {
         expect(h.events('EVENT:WORKFLOW:RESULT')).toHaveLength(1);
     });
 
+    // ── 声明面对称性 ────────────────────────────────────────────────────────
+    // 2026-09-05 — docs/feedback/…/event-triggered-workflow-lifecycle-drops-events.md §5.2.
+    //
+    // Solo 有两个给人写的声明面（fulfillment profile 的 action.params、workflow 的 step.params）。
+    // v1.2.13 只给 fulfillment 补了 `now` 与 `cat`，于是缺口从"两边一样缺"变成"两边不一样"
+    // ——更坏：作者把在 profile 里刚学会的写法搬进 step，对象原样当字面量发下去，不报错。
+    // 这组用例钉住"两个面认同一套算子"。
+    describe('declarative parity with fulfillment: now / cat / +', () => {
+        const wfWith = (params) => ({
+            id: 'wf_parity_' + Math.random().toString(36).slice(2),
+            category: 'test', name: 'parity', desc: 'x', required_inputs: [],
+            steps: [{ id: 's1', service: 'data', method: 'data.action', params }],
+        });
+
+        async function sent(params, input = {}) {
+            h.mock.on('data.action', () => ({ ok: true }));
+            const wf = wfWith(params);
+            await h.seedWorkflow(wf);
+            const res = await h.run(wf.id, input);
+            expect(res.status).toBe('completed');
+            return h.mock.lastParams('data.action');
+        }
+
+        test('$now resolves in params (this face\'s own idiom)', async () => {
+            const before = Date.now();
+            const p = await sent({ at: '$now' });
+            expect(typeof p.at).toBe('number');
+            expect(p.at).toBeGreaterThanOrEqual(before - 1000);
+        });
+
+        test('{"var":"now"} resolves in a step CONDITION (same spelling fulfillment uses)', async () => {
+            h.mock.on('data.get', () => ({}));
+            h.mock.on('data.action', () => ({ ok: true }));
+            const wf = {
+                id: 'wf_parity_cond', category: 'test', name: 'parity-cond', desc: 'x', required_inputs: [],
+                steps: [
+                    { id: 's1', service: 'data', method: 'data.get', params: {} },
+                    { id: 's2', service: 'data', method: 'data.action', params: {},
+                      condition: { '>': [{ var: 'now' }, 0] } },
+                ],
+            };
+            await h.seedWorkflow(wf);
+            const res = await h.run(wf.id);
+            expect(res.trace.find(t => t.id === 's2').status).toBe('success');
+        });
+
+        test('cat builds a per-run string — $-syntax alone cannot concatenate', async () => {
+            const p = await sent({ requestId: { cat: ['fx-', { var: 'input.orderId' }, '-publish'] } },
+                { orderId: 'o-7' });
+            expect(p.requestId).toBe('fx-o-7-publish');
+        });
+
+        test('+ expresses a RELATIVE deadline (the point of adding it)', async () => {
+            // Without `+` an author can only bake an absolute instant at authoring time,
+            // which expires the same day on a machine meant to run for weeks.
+            const before = Date.now();
+            const p = await sent({ expireAt: { '+': [{ var: 'now' }, 7200000] } });
+            expect(p.expireAt).toBeGreaterThanOrEqual(before + 7200000 - 1000);
+        });
+
+        test('a literal field merely NAMED like an operator is left alone', async () => {
+            // Narrowing that keeps this additive: only a SOLE-key operator object evaluates.
+            const p = await sent({ payload: { cat: ['a', 'b'], note: 'n' } });
+            expect(p.payload).toEqual({ cat: ['a', 'b'], note: 'n' });
+        });
+
+        test('operators outside RESOLVE_OPS still pass through as literals', async () => {
+            const p = await sent({ policy: { if: [true, 'a', 'b'] } });
+            expect(p.policy).toEqual({ if: [true, 'a', 'b'] });
+        });
+    });
+
     test('missing required input → rejected before any downstream call', async () => {
         h.mock.onAny(() => ({}));
         await h.seedWorkflow(linearFlow);   // seed as ACTIVE

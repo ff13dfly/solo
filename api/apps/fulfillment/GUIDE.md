@@ -62,7 +62,14 @@ await call('setting.task.update', { whitelist: wl }); // ← 整体替换，不�
 不会被重启/升级覆盖；代价是框架将来往默认值里加一家，**存量部署一个都拿不到，且没有任何提示**。
 
 **条件里可以用 `now`**（epoch ms，与 factory 时间字段同形态）：`{ ">": [{"var":"now"}, {"var":"instance.meta.deadline"}] }`
-写停留超时 / 相对死期。action 的 `params` 里同样可用，别把死期烤成绝对时刻。
+写停留超时。action 的 `params` 里同样可用——**相对死期用 `+`**，别烤成绝对时刻：
+
+```json
+{ "expireAt": { "+": [{ "var": "now" }, 7200000] } }
+```
+
+`cat` 与 `+` 是 params 里仅有的两个算子（`library/jsonlogic.js` 的 `RESOLVE_OPS`），
+**orchestrator 的 workflow step params 认同一套**——两个声明面不会再一边能写一边静默失效。
 
 ## 配方二：外部投稿模板 → 人审激活（投稿闸）
 

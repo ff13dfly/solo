@@ -11,6 +11,70 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+### 两个声明面认同一套算子（2026-09-05）—— `now` / `cat` / `+` 在 profile 与 workflow 上一致
+
+Solo 有两个**给人写**的声明面：fulfillment profile 的 `action.params` 与 orchestrator workflow 的
+`step.params`（条件面同理）。同一个人、同一天、为同一条业务链路写这两样东西，但它们此前
+**不共享原语**——而且 v1.2.13 只给 fulfillment 补了 `now` 与 `cat`，
+**于是缺口从"两边一样缺"变成了"两边不一样"，这更坏**：作者把在 profile 里刚学会的
+`{"cat": […]}` / `{"var":"now"}` 搬进 workflow step，对象**原样当字面量发给下游**，不报错。
+缺口对称时人还能记住"这里不行"，不对称时只能靠踩。
+
+- **`library/jsonlogic.js` 的 `RESOLVE_OPS` 加 `+`**，并导出 `resolveValue` / `isLogicNode` /
+  `RESOLVE_OPS`。`cat` 与 `+` 是"给人写的声明面"的最小可用集：`cat` 让每实例唯一的幂等键拼得
+  出来，`+` 让**相对**死期写得出来（`{"+": [{"var":"now"}, 7200000]}` = 此刻 +2h）。
+  少了 `+`，作者只能烤一个绝对时刻——而状态机/工作流要跑几周，烤死的值当天就过期，
+  那件事于是被挪回代码里，"配置即数据"被悄悄拆掉。
+- **workflow 执行上下文补顶层 `now`**（`clock.now()`，测试可冻结）：条件里 `{"var":"now"}`、
+  参数里 `$now`，两种写法分别对齐两个面各自的惯用法。
+- **workflow 的 `step.params` 现在也认 JsonLogic 节点**：此前它的 `$` 语法**只能整值引用**
+  ——`"fx-$input.id"` 原样透传（拼不出字符串）、"此刻 +2h"根本无法表达。现在
+  `{"cat": […]}` / `{"+": […]}` / `{"var": …}` 与 fulfillment 同义。判据用的是从
+  `library/jsonlogic.js` 导出的 `isLogicNode`，**不是各抄一份**——加一个算子永远只改一处、
+  两个面同时生效。
+- 文档三处同步：`orchestrator/README.md` 变量表加 `$now` + 新增算子表；
+  `fulfillment/GUIDE.md` 与 `protocol/zh/fulfillment.md` 补 `+` 的相对死期写法，并点明两面共用。
+
+下游 action：**一件事**。workflow 的 `step.params` 里，**唯一键**是 `cat` / `+` / `var` 的对象
+现在会被求值（此前原样透传）。存量 workflow 若有恰好长这样的**字面量**字段会改变行为——
+多带一个键或改个字段名即可（`{"cat": […], "note": "…"}` 这种多键对象不受影响）。
+其余标准算子（`if` / `map` …）仍不求值。
+
+### workflow step condition 的数值闸门改为 fail-closed（2026-09-05）—— 一个修过的 bug，在另一个服务里原样活了三周
+
+来源同上篇反馈的 §5.1。**2026-08-11 colony 报的那个 fail-open**
+（`docs/feedback/fulfillment-condition-fail-open.md`：交易闸门「带宽 ≥ 门槛才开仓」变成无条件
+开仓）当时的修法是给 `api/library/jsonlogic.js` 加 `failClosedOnMissing`。
+**但 `orchestrator/logic/runner.js:6` 直接 `require('json-logic-js')`**，于是同一个 bug 在
+workflow 的 step condition 里原封不动地又活了三周——而 workflow 是**审批过的**，带着"这条链路
+有人签过字"的信任跑在关键路径上。
+
+- **`runner.js` 的 `evaluateCondition` 改经 `library/jsonlogic.js`**。危险形状很具体：
+  **阈值那一侧缺失**时，`var` 取不到得 `null`，JS 在 `< <= > >=` 里把 `null` 转成 `0`，
+  于是 `{">=": [{var:'input.score'}, {var:'input.threshold'}]}` 变成 `score >= 0`——
+  一个「够格才放行」的闸门，**恰好在阈值没喂进来那一刻变成无条件放行**。
+  `==` / `!=` / `!` **不受影响**（`{'!': {var:'x'}}`「没设过就当 false」是合法惯用法），
+  `{"var": [path, 缺省值]}` 的显式缺省照旧生效，`0` 是值不是缺失。
+- **新增 autocheck 规则 `[jsonlogic]`**（ERROR）：服务代码直接 `require('json-logic-js')` 即报错。
+  **这才是防复发的那一半**——上一次只修了 library，没有任何东西阻止别处再开一个求值器。
+  全队实扫零命中（6 个下游项目里的 json-logic-js 引用**全部**是 bundle 自带的
+  `api/library/jsonlogic.js` 本身，不在 per-service 扫描面内），**升级不会让任何现有服务变红**；
+  确有非闸门用途在该行标 `// SAFE:` 豁免（已实测正反两向）。
+- **`orchestrator/README.md` 的技术选型条订正**：此前写的是"必须用 `json-logic-js`"——
+  runner 照做了，也就照抄了这个坑。改成"必须经 `api/library/jsonlogic.js`，禁止直接 require 裸库"。
+
+**为什么两边都有测试却没人发现**（值得记住的部分）：`library/tests/jsonlogic.test.js` 有一整段
+fail-closed 断言，`orchestrator/tests/condition.test.js` 有十条 condition 用例——**但没有一条喂
+缺失操作数**。两份测试各自描述各自的实现，谁也不知道对方存在，**两边都是绿的**。
+⇒ 这类分叉靠加测试防不住，只能靠"**只有一个求值器**"。本版补了那五条缺失的用例
+（实测：对修复前的实现跑，其中 2 条红），同时用新规则钉住"不许再开第二个"。
+
+下游 action：**一件事，属于行为变更**。step condition 里形如
+`{">=": [{var:'…'}, {var:'…'}]}` 的数值比较，**引用字段缺失时现在会拦住该步骤**（此前放行）。
+靠这个"缺数据也放行"才走得通的分支会开始被跳过——**那些分支本来就是错的**，但会表现为
+"升级后某个 step 不跑了"。要显式保留旧行为，把缺省写出来：`{"var": ["path.to.field", 0]}`。
+`==` / `!=` / `!` 与字面量比较不受影响。
+
 ### 事件触发型 workflow 的上线 / 改版窗口不再吃掉事件（2026-09-05）
 
 来源：steward 线上实测（[`../feedback/event-triggered-workflow-lifecycle-drops-events.md`](../feedback/event-triggered-workflow-lifecycle-drops-events.md)）。

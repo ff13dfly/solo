@@ -137,6 +137,19 @@ if (isActive && (steps !== undefined || resolvers !== undefined || require_actor
 
 ⇒ **今天没有办法在不丢事件的前提下修改一个已上线的事件触发型 workflow。**
 
+**顶层等值过滤的第二笔账（2026-09-05 实测数字）**：`matchesFilter` 只比信封顶层字段，
+`payload.toState` 这类条件表达不了 ⇒ 订阅 `EVENT:FULFILLMENT:TRANSITIONED` 的 workflow
+**会被每一次履约跃迁唤起**，真正的分流只能靠 step 的 `condition`。一轮双工单演示实测：
+
+```
+run 按 workflow: { wf-publish-dispatch: 10, wf-designer-submit: 7 }
+其中 wf-publish-dispatch 真正派单只有 3 次 ⇒ 7 次空转（70%）
+```
+
+空转的 run 是完整的实体（写 `ORCHESTRATOR:RUN:*`、占 `FIRED` 守卫、进 run 索引），
+**随履约实例数线性增长**。建议 filter 支持一层 payload 路径（如 `{"payload.toState": "X"}`），
+把分流提前到"要不要建 run"，而不是"建了再跳过"。
+
 ⚠️ 还有一处不确定性：`knownStreams` 这个进程内缓存**只增不减**
 （只在 NOGROUP 时 `clear()`）。所以同一个窗口里，**进程期间没重启过**就照读照 ack（事件丢失）；
 **中间重启过**则该流不再被 discover、压根不读，事件留在流里等复活后再投（然后撞冷却进 DLQ）。
@@ -283,6 +296,32 @@ profile 写法不一样"时撞出来的。
 **"现在"**与**"把两个值接起来"**。这两样任缺其一，用的人就会去别处兑现——
 写死一个绝对时刻、或者干脆把该声明的东西挪回代码里，两条都在悄悄拆掉"配置即数据"这个前提。
 
+### 5.3 补一句：字符串模板**代码已经写好了**，只是没开给参数面
+
+`runner.js` 里有个 `interpolate(template, context)`，注释写着
+"handles templates like `comp-$context.trigger_id-rollback`"，但下一句是
+**"Used only for idempotency_key, so general param-resolution semantics are unchanged"**。
+
+⇒ 建议 8 里"参数面能拼串"这一半**不用新写函数**，是把已有的 `interpolate` 从
+`idempotency_key` 一处放宽到 `params`（是否放宽、怎么控爆炸半径由维护者定；
+这里只是指出成本比看上去低）。
+
+### 5.4 履约实例没有地方记"每一跳的产物"，于是重试会抹掉上一次的失败原因
+
+`instance` 只有两个容器：`history[]`（追加式，但只记 `state / event / user / stamp`，
+**不记产物与原因**）与 `meta{}`（可写，**浅合并覆盖**）。跨层产物只能落 `meta`。
+
+实测（一张工单：派剧本失败 → 人工换剧本 → 重试成功）：写第二轮结局时把
+`publishError` / `publishJobId` 覆盖了 ⇒ **失败原因和失败工单号在实例上彻底查不到**，
+`history` 只剩一条"曾经进过 PUBLISH_FAILED"。证据其实还在 hive 与 `steward.run` 里，
+但**没有回指字段**能从实例找过去（本项目侧的 `sourceRef` 至今是提案）。
+
+绕法是使用方自己按 attempt 编号（`publishOutcome_1` / `_2`），我们已经这么改了。
+但这属于**每个消费者各自发明一遍**的东西：状态机天生就会重试，
+"这一跳产出了什么"是通用需求。⇒ 建议给 `history[]` 一个可选的 `outcome` 字段
+（转移时随 `metaUpdate` 一起收，只进 history 不进 meta），或明确在文档里写
+"meta 是当前快照、不是台账，产物要自己编号"——**两者选一，别让人以为 meta 是台账**。
+
 **建议见 §六 的 7 / 8。**
 
 ---
@@ -367,7 +406,7 @@ FL-20260905-3718  conf=0.95  AWAITING_DESIGN → READY_TO_PUBLISH   ←image_sub
 
 ---
 
-## 八、处理结论（2026-09-05，**建议 0/1/2 已落地；3~8 未做，逐条说明**）
+## 八、处理结论（2026-09-05，**建议 0/1/2 + 7/8 已落地；3/4/5/6 未做，逐条说明**）
 
 **逐条核过源码，主张全部成立**（`worker.js` 的 `isRetryable` 只认 `-32603`；`runner.js:53` 的冷却
 闸消息里带 ISO 解除时刻；`matcher.js:202` 的 `xAck` 在 `for (const wf of workflows)` **循环之外**；
@@ -417,20 +456,72 @@ FL-20260905-3718  conf=0.95  AWAITING_DESIGN → READY_TO_PUBLISH   ←image_sub
 - **建议 6**（生产 bot 播种入口）：属实。**建议拆成独立一篇**——它与事件生命周期无关，
   只是同一条链上一起撞到的；混在本篇里，等 0~5 结案归档时它会跟着一起消失
   （`entity-factory-bypasses-clock.md` 的建议 1 至今没做，就是这个形状）。
-- 🔴 **建议 7**（`runner.js` 改用 `library/jsonlogic.js`）：**已核实属实，是剩余项里最该优先做的**。
-  `runner.js:6` 直接 `require('json-logic-js')`，`evaluateCondition`（673-680）裸调
-  `jsonLogic.apply` —— 于是 [`fulfillment-condition-fail-open.md`](./fulfillment-condition-fail-open.md)
-  在 v1.2.13 修掉的 fail-open **在 orchestrator 的 step condition 里原样活着**。
-  ⚠️ 它是**行为变更**（靠 fail-open 才走得通的现存分支会开始被拦），所以刻意没塞进本轮：
-  本轮四项都是"只加不破"，混入一个会拦住存量 workflow 的改动，这批就没法作为纯增量发布。
-  **单独一版 + CHANGELOG 点名。**
-- **建议 8**（参数面补 `now` + `+`）：属实，且 §5.2 那句「v1.2.13 只修了 fulfillment 一侧，
-  缺口从对称变成不对称、更坏」的判断成立。与建议 7 同批做最合适（都在 runner 的求值面）。
+- ✅ **建议 7**（`runner.js` 改用 `library/jsonlogic.js`）：**已落地**（单独一批，见下节）。
+- ✅ **建议 8**（参数面补 `now` + `+`）：**已落地**，与建议 7 同批（见下节）。
+
+### 建议 7 的落地（2026-09-05，单独一批 —— 它是行为变更，不能混进上面那批纯增量）
+
+`runner.js:6` 的裸 `require('json-logic-js')` 换成 `library/jsonlogic.js` 的 `evaluateCondition`。
+危险形状比"fail-open"三个字更具体：**出事的是阈值那一侧缺失**——`var` 取不到得 `null`，
+JS 在 `< <= > >=` 里把 `null` 转成 `0`，于是「够格才放行」变成「恒放行」，**恰好在阈值没送到
+那一刻**。缺失方在左边、或右边是字面量（`> 0`）时反而恰好是 false，所以它不是随机乱放，
+是专挑最该拦的那一种情况放行。
+
+**另一半是防复发**：新增 autocheck 规则 `[jsonlogic]`（ERROR），服务代码直接
+`require('json-logic-js')` 即报错。上一次（colony 那轮）只修了 library，**没有任何东西阻止
+别处再开一个求值器**——本篇就是那个"别处"。全队实扫零命中（6 个下游项目的 json-logic-js
+引用**全部**是 bundle 自带的 `library/jsonlogic.js` 本身，不在 per-service 扫描面内），
+所以升级不会让任何现有服务变红；非闸门用途可在该行标 `// SAFE:` 豁免（正反两向已实测）。
+
+顺带订正 `orchestrator/README.md` 的技术选型条：此前写的是「必须用 `json-logic-js`」，
+**runner 照做了，也就照抄了这个坑**；改成「必须经 `api/library/jsonlogic.js`，禁止直接 require 裸库」。
+
+### 📌 关于"为什么没被测出来"——这条值得单独记住
+
+问过一次「是不是 jsonlogic 在代码里没法测」。**恰恰相反：它极好测，而且两边都测了。**
+
+- `api/library/tests/jsonlogic.test.js:219` 有一整段 `describe('evaluateCondition fail-closed
+  on missing operands …')`，把 fail-closed 钉得很死；
+- `api/core/orchestrator/tests/condition.test.js` 有十条 condition 用例，覆盖 `===` / `>` /
+  `and` / 字符串条件拒收 / 数组条件拒收 —— **但没有一条喂缺失操作数**。
+  （它里面那两条名字带 "fail closed" 的，说的是"字符串/数组条件被拒收"，是另一件事。）
+
+**两份测试都是绿的，各自描述各自的实现，谁也不知道对方存在。** 所以这不是"测试没写全"能概括
+的——即使当时给 orchestrator 补了缺失操作数的用例，它也只会**如实记录裸库的 fail-open 行为**
+并变成绿的（测试描述现状，不描述意图）。真正的成因是**同一份契约有两个实现**。
+
+⇒ **修法是"只有一个求值器"，不是"多写一条测试"。** 本版两样都做了：换实现（消除分叉）+
+autocheck 规则（阻止再分叉）；那五条缺失用例也补了——但它们的作用是**锁住已经统一的语义**，
+不是当初能发现问题的手段。实测：对修复前的实现跑这五条，红 2 条。
+
+**这条判据可复用**：凡是"同一个 bug 在另一个服务里又出现一次"，先问**是不是有第二个实现**，
+再问测试。（同期还有一例同形：`entity.js:toSortableMs` 与 steward 手写的 `lastSeenMs()`，
+v1.2.13 已收敛成 `clock.toMsOr`。）
+
+### 建议 8 的落地（2026-09-05，与建议 7 同批）
+
+§5.2 的判断成立且是本篇提炼里最有复用价值的一条：**v1.2.13 只修了 fulfillment 一侧，
+缺口从"两边一样缺"变成"两边不一样"——这更坏。**
+
+做法比本篇提的多一步。本篇说「`now` 进 context、`RESOLVE_OPS` 加个 `+`」，但那默认
+orchestrator 的参数面能求值 JsonLogic ——**它不能**：`runner.js` 的 `resolveVariables` 只认
+`$` 前缀的**整值引用**（`"$input.x"`），`"fx-$input.id"` 原样透传，算术根本无从表达。
+所以真正落地的是三件：
+
+1. `RESOLVE_OPS` 加 `+`（`cat` + `+` = 给人写的声明面的最小可用集：一个拼幂等键，一个写相对死期）；
+2. workflow 执行上下文补顶层 `now`（条件 `{"var":"now"}`、参数 `$now`，各自对齐两个面的惯用法）；
+3. **workflow 的 `step.params` 接上 JsonLogic 节点求值**——判据用 `library/jsonlogic.js` 导出的
+   `isLogicNode`，**不是各抄一份**。这一点是刻意的：本篇整节讲的就是"两个面各写各的"，
+   如果修法本身又在第二个面抄一份判据，加下一个算子时不对称会立刻长回来。
+   ⇒ **加算子永远只改 `RESOLVE_OPS` 一处，两个面同时生效。**
+
+⚠️ 这是行为变更（唯一键为 `cat`/`+`/`var` 的**字面量**对象会开始被求值），已在 CHANGELOG
+写明下游 action；沿用 v1.2.13 的收窄——只有**唯一键**才算算子，多键业务对象不动。
 
 ### 剩余待办（下一轮接手时看这里）
 
-- [ ] 🔴 建议 7 + 8：`runner.js` 走 `library/jsonlogic.js`（fail-closed）+ condition context 补 `now`
-      + `RESOLVE_OPS` 加 `+`。**单独一版**，CHANGELOG 点名行为变更。
+- 本篇建议 0~2、7、8 已全部落地；**3 / 4 / 5 / 6 仍未做**，见上面「未做」一节的逐条说明。
+  其中建议 6（生产 bot 播种入口）建议**拆成独立一篇**再 triage，否则本篇归档时它会跟着消失。
 - [ ] 建议 3：六处 `parseInt(x) || D`，顺带被忽略的配置值 warn 一句。
 - [ ] 建议 5：三个样例 + `workflows.md:49` 的 category 改成对象。
 - [ ] 建议 4：文档补"冷却窗口里的触发会被延后"（代码已具备）。

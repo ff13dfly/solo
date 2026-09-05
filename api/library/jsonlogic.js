@@ -113,14 +113,18 @@ function resolveParams(template, data) {
  *      返回那张旧单，调用链看起来次次成功，实际一次都没派。
  *      （docs/feedback/done/fulfillment-actions-have-no-business-egress.md §3.1）
  *
- * @attention 刻意只放 `cat` 一个，不放开全部标准算子：放开是**行为变更**——参数模板里
+ * @attention 刻意只放 `cat` 与 `+`，不放开全部标准算子：放开是**行为变更**——参数模板里
  *      任何恰好以算子命名的字面量字段（`{ if: … }`、`{ map: … }` 这类业务字段名）
  *      会突然被当算子求值。要再放别的算子，往这个集合里加，并同步 CHANGELOG 的
  *      下游 action（消费者的存量 profile 可能正带着同名字面量字段）。
+ * @why 这两个算子是「给人写的声明面」的最小可用集：`cat` 让每实例唯一的幂等键拼得出来，
+ *      `+` 让**相对**死期写得出来（`{"+": [{"var":"now"}, 7200000]}` = 此刻 +2h）。
+ *      少了 `+`，作者只能把死期烤成一个绝对时刻——而状态机/工作流要跑几周，
+ *      烤死的值当天就过期了，于是那件事被挪回代码里，"配置即数据"这个前提被悄悄拆掉。
  * @attention 只在该算子是**对象唯一键**时才求值（JsonLogic 自身的表达形状），
  *      `{ cat: [...], note: '…' }` 这种明显是业务对象，照旧递归、不求值。
  */
-const RESOLVE_OPS = new Set(['cat']);
+const RESOLVE_OPS = new Set(['cat', '+']);
 
 function resolveValue(value, data) {
     if (value && typeof value === 'object' && !Array.isArray(value)
@@ -135,4 +139,23 @@ function resolveValue(value, data) {
     return resolveParams(value, data); // 对象/数组递归；标量由顶部守卫原样返回
 }
 
-module.exports = { apply, evaluateCondition, resolveParams };
+/**
+ * 这个值是不是一个「该被求值的 JsonLogic 节点」——`resolveValue` 的判据本身，导出给
+ * **另一个声明面**（orchestrator 的 `$` 参数解析）复用。
+ *
+ * @why Solo 有两个给人写的声明面（fulfillment profile 的 `action.params`、orchestrator
+ *      workflow 的 `step.params`），它们语法不同（前者整字段写 JsonLogic，后者 `$input.x`），
+ *      但**必须认同一套算子**。此前只有 fulfillment 认 `cat`/`now`，于是作者把在 profile 里
+ *      刚学会的写法搬进 workflow step 就**静默失效**——对象原样当字面量发给下游，不报错。
+ *      缺口对称时人还能记住"这里不行"，不对称时只能靠踩。导出判据而不是让第二个面自己
+ *      抄一份，是为了让"加一个算子"永远只需要改 RESOLVE_OPS 一处。
+ */
+function isLogicNode(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    if (value.var) return true;
+    const keys = Object.keys(value);
+    if (keys.some(k => k.startsWith('$'))) return true;
+    return keys.length === 1 && RESOLVE_OPS.has(keys[0]);
+}
+
+module.exports = { apply, evaluateCondition, resolveParams, resolveValue, isLogicNode, RESOLVE_OPS };

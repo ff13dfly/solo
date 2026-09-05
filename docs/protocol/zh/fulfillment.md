@@ -253,8 +253,12 @@ TTL:   无（持久化）
 { "requestId": { "cat": ["fx-", { "var": "instance.id" }, "-publish"] } }
 ```
 
-其余标准算子（`if` / `+` / `map` …）在 params 里**不**求值，刻意如此：放开会让参数模板里
-任何以算子命名的**字面量字段**突然被当算子执行。要放开就改 `library/jsonlogic.js` 的 `RESOLVE_OPS`。
+**相对时刻用 `+`**（`RESOLVE_OPS` 的另一个成员）：`{"expireAt": {"+": [{"var":"now"}, 7200000]}}`
+= 此刻 +2h。没有它只能把死期烤成绝对时刻，而状态机要跑几周。
+
+其余标准算子（`if` / `map` …）在 params 里**不**求值，刻意如此：放开会让参数模板里
+任何以算子命名的**字面量字段**突然被当算子执行。要放开就改 `library/jsonlogic.js` 的 `RESOLVE_OPS`
+——那是**两个声明面共用的单一真源**（orchestrator 的 workflow step params 认同一套算子）。
 
 ### 3.3 长周期协同模型
 

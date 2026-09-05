@@ -190,11 +190,35 @@ describe('jsonlogic — resolveParams (per-field template evaluation)', () => {
             .toEqual({ content: { cat: ['a', 'x'], note: 'n' } });
     });
 
-    test('operators outside RESOLVE_OPS are still NOT evaluated (only cat was opened up)', () => {
+    test('operators outside RESOLVE_OPS are still NOT evaluated (only cat/+ are opened up)', () => {
         // `if` stays a plain object — opening every standard operator would silently start
         // evaluating literal fields in existing consumer profiles.
         expect(L.resolveParams({ policy: { if: [true, 'a', 'b'] } }, {}))
             .toEqual({ policy: { if: [true, 'a', 'b'] } });
+    });
+
+    // 2026-09-05 — …/event-triggered-workflow-lifecycle-drops-events.md §5.2.
+    // `+` is the other half of the minimum usable set for a human-authored declarative face:
+    // `cat` makes an idempotency key expressible, `+` makes a RELATIVE deadline expressible.
+    // Without it an author can only bake an absolute instant, which expires the same day on
+    // a machine meant to run for weeks — so the deadline moves back into code and
+    // "configuration as data" is quietly given up.
+    test('+ evaluates, so a relative deadline is expressible', () => {
+        expect(L.resolveParams({ expireAt: { '+': [{ var: 'now' }, 7200000] } }, { now: 1_000_000 }))
+            .toEqual({ expireAt: 8_200_000 });
+    });
+
+    test('isLogicNode is the shared predicate both declarative faces use', () => {
+        // Exported so orchestrator's `$`-syntax param face recognises exactly the same
+        // operator set — adding an operator must stay a one-line change in ONE place.
+        expect(L.isLogicNode({ '+': [1, 2] })).toBe(true);
+        expect(L.isLogicNode({ cat: ['a'] })).toBe(true);
+        expect(L.isLogicNode({ var: 'now' })).toBe(true);
+        expect(L.isLogicNode({ cat: ['a'], note: 'n' })).toBe(false);   // sole-key rule
+        expect(L.isLogicNode({ if: [true, 1, 2] })).toBe(false);
+        expect(L.isLogicNode('$input.x')).toBe(false);
+        expect(L.isLogicNode([1, 2])).toBe(false);
+        expect(L.isLogicNode(null)).toBe(false);
     });
 
     test('a falsy var key (empty string) is treated as a nested object, not evaluated', () => {

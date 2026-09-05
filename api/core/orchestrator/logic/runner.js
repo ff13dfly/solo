@@ -3,7 +3,11 @@ const https = require('https');
 const { URL } = require('url');
 const crypto = require('crypto');
 
-const jsonLogic = require('json-logic-js');
+// The SHARED guard, not the raw primitive. Going straight to json-logic-js is how this
+// service kept its own copy of a bug the framework had already fixed — see evaluateCondition().
+const { evaluateCondition: evaluateGuard, resolveValue: resolveLogic, isLogicNode }
+    = require('../../../library/jsonlogic');
+const clock = require('../../../library/clock');
 
 const jsonrpc = require('../handlers/jsonrpc');
 const config = require('../config');
@@ -190,6 +194,16 @@ module.exports = (redis, { serviceName, routerUrl, traceAudit }) => ({
             input: { ...input },
             config: { ...workflow.defaults, ...input },
             step: {},
+            // Evaluation instant — the same shape and the same spelling fulfillment uses
+            // (`{"var":"now"}` / epoch ms via clock.now(), so a frozen test clock reaches here).
+            // @why Without it a workflow could express NO time predicate at all: a step
+            //   condition on `now` read undefined, and a param could only bake an ABSOLUTE
+            //   instant at authoring time — which expires the same day on a machine meant to
+            //   run for weeks. v1.2.13 gave fulfillment `now`; leaving workflow without it
+            //   made the gap ASYMMETRIC, which is worse than both lacking it: an author
+            //   carries the idiom they just learned in a profile over to a step, and it
+            //   silently reads undefined. (feedback: event-triggered-workflow-…-drops-events §5.2)
+            now: clock.now(),
             context: {
                 actor: callerUid || null,
                 // Trigger provenance (actor-claim thread): who CAUSED the triggering
@@ -490,6 +504,21 @@ function resolveVariables(params, context) {
     }
     
     if (typeof params === 'object') {
+        // A JsonLogic node ({var}, {cat}, {+}) is EVALUATED, not recursed into — the same
+        // operators the fulfillment param face accepts, via the same shared predicate.
+        // @why This face's `$input.x` syntax only does WHOLE-VALUE reference: it cannot
+        //   concatenate ("fx-$input.id" is passed through literally) and cannot do
+        //   arithmetic ("now + 2h" is inexpressible). Authors who learned `{"cat": […]}` /
+        //   `{"+": […]}` on a fulfillment profile used to have them silently pass through
+        //   here as literal objects — no error, wrong payload downstream.
+        //   isLogicNode/resolveLogic come from library/jsonlogic.js so adding an operator
+        //   stays a one-line change in ONE place, for both faces at once.
+        // @attention Narrow on purpose (sole-key operator from RESOLVE_OPS, or a `var`):
+        //   a literal params field that merely happens to be named `cat`/`+` alongside
+        //   other keys is left alone.
+        if (!Array.isArray(params) && isLogicNode(params)) {
+            return resolveLogic(params, context);
+        }
         const resolved = {};
         for (const [key, value] of Object.entries(params)) {
             const resolvedValue = resolveVariables(value, context);
@@ -514,7 +543,8 @@ function resolveVariable(variable, context) {
     const path = variable.substring(1).split('.');
     const source = path[0];
 
-    if (!['input', 'config', 'step', 'context'].includes(source)) {
+    // 'now' mirrors the condition-side `{"var":"now"}` in this face's own `$` idiom.
+    if (!['input', 'config', 'step', 'context', 'now'].includes(source)) {
         // Fallback for direct property access if source is not one of the main ones
         return undefined;
     }
@@ -669,6 +699,21 @@ async function runCompensations(trace, workflow, context, opts) {
  * condition must be a JsonLogic object, e.g. {"===": [{"var": "step.s1.result.tier"}, "gold"]}.
  * Variables resolve against the execution context ({input, step, config, context}).
  * String conditions are rejected — they cannot be safely evaluated.
+ *
+ * 🔴 Goes through library/jsonlogic.js (NOT json-logic-js directly) so a numeric comparison
+ *    whose operands are missing FAILS CLOSED.
+ * @why json-logic-js resolves a missing `var` to null, and JS coerces null to 0 in `< <= > >=`.
+ *      So `{">=": [{var:'input.score'}, {var:'input.threshold'}]}` with no threshold fed in
+ *      becomes `x >= 0` — a gate that means "only proceed if score clears the bar" silently
+ *      becomes "always proceed", exactly when the bar failed to arrive. Reported from colony
+ *      as a trading gate that opened unconditionally (docs/feedback/fulfillment-condition-fail-open.md,
+ *      2026-08-11) and fixed then in library/jsonlogic.js — but this function called the raw
+ *      primitive, so the SAME bug stayed alive here for another three weeks, in the one place
+ *      that runs human-approved workflows. Both sides had passing tests; each described its own
+ *      implementation and neither knew the other existed. The fix is one evaluator, not one
+ *      more test. (docs/feedback/event-triggered-workflow-lifecycle-drops-events.md §5.1)
+ * @attention `==` / `!=` / `!` are deliberately NOT touched — `{'!': {var:'x'}}` meaning
+ *      "not set counts as false" is a legitimate idiom. Only ordered comparisons fail closed.
  */
 function evaluateCondition(condition, context) {
     if (condition === undefined || condition === null) return true;
@@ -677,7 +722,7 @@ function evaluateCondition(condition, context) {
         return false;
     }
     try {
-        return !!jsonLogic.apply(condition, context);
+        return !!evaluateGuard(condition, context);
     } catch (e) {
         logger.warn('Condition evaluation failed:', e.message);
         return false;
