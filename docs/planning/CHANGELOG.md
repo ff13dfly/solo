@@ -11,6 +11,12 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+_（空）_
+
+---
+
+## [v1.2.14] — 2026-09-05
+
 ### `EVENT:*` 流终于会修剪 + scaffold 下发项目根 `CLAUDE.md`（2026-09-05）
 
 清掉两篇积压反馈（`../feedback/done/event-bus-xadd-unbounded-dead-config.md` 建议 1/2、
@@ -212,7 +218,6 @@ fail-closed 断言，`orchestrator/tests/condition.test.js` 有十条 condition 
 里，按 DLQ 深度告警的会看到这类条目消失（那正是它们本不该在的地方）。
 ③ 想改一条 ACTIVE workflow 的 `steps`，现在传 `revise:true` 即可，不必再 delete→create；
 旧的 delete→create 仍然可用，但**会经历一段没有订阅者的真空**（停车机制救不了那一瞬）。
-
 ---
 
 ## [v1.2.13] — 2026-09-05
