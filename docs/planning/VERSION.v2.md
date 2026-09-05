@@ -62,11 +62,34 @@ server-attested 执行）。2026-07-03 拆分把能「只加不破」的项全�
 
 | 项 | 裁决 | 理由 / 重启条件 |
 |----|------|-----------------|
-| **actor-claim 全量**（执行面用户签名/服务凭证，旧 A 线） | **搁置**（2026-07-12） | 单信任域内 server 代签 + 事件信封 actor/source 透传（v1.1.9 最小档）已满足审计；平行网格 = 同一运营者同信任域，mesh 签名的**网格级**归因已够。它实质是 bridge 跨信任域档的**子依赖**（§3.4-②），非独立需求。**重启条件：出现跨运营方联邦（下游网格属于别人）。** |
+| **actor-claim 全量**（执行面用户签名/服务凭证，旧 A 线） | **搁置**（2026-07-12） | 单信任域内 server 代签 + 事件信封 actor/source 透传（v1.1.9 最小档）已满足审计；平行网格 = 同一运营者同信任域，mesh 签名的**网格级**归因已够。它实质是 bridge 跨信任域档的**子依赖**（§3.4-②），非独立需求。**重启条件：出现跨运营方联邦（下游网格属于别人）**，**或同一运营者内出现部门级信息隔离需求**（2026-09-05 补，见下）。 |
 | **完整 at-least-once 重投 + 全网统一幂等键**（旧 B 线） | **搁置**（2026-07-12，此前 2026-07-03 已降级为可选/非阻塞） | 真 bug 那半（`_task` fire-and-forget 丢投）已拆出并于 v1.1.x 修复（router 有限重试退避，2026-07-05）；bridge 分发语义以**同步转发为默认**（§3.5），异步仅给明确幂等的方法——完整语义没有兑现场景，且会静默重复调用未做幂等的下游 handler（行为破坏）。**重启条件：跨网格异步 fire-and-forget 分发成为刚需。** |
 | **独立 bridge 服务 + mesh Ed25519 签名信任模型 + 外网格 principal + capability 预检**（A 线首发面） | **收窄为跨运营方档条件依赖**（2026-09-03，用户拍板） | 同运营者 mesh 内 API key + TLS 足够：ingress 按构造已解 §3.6 #2/#4/#8，#1 在 per-pair 秘密下隐式成立；签名买到的不可抵赖 / 边界无共享秘密 / 一箱一钥，只在**下游属于别人**时值钱。判据：SOLO 作为支持层必须简洁——bridge 以「owner 要学的新名词数」计，收敛后为零。A 线首发面改为 `gateway.webhook.send` solo 目标模式（§3.0）。**重启条件：出现跨运营方联邦**（与 actor-claim、fieldmask 同一条）。 |
 | **多租户开放档**（同库 tenant scoping，旧 A 线） | **取消**（2026-07-03） | 由 A 线 bridge 的联邦隔离替代——每租户一套独立网格，物理隔离强于逻辑 scoping，不动现有实体/permit 形状。若未来租户量大、需共享基础设施摊薄成本，同库 scoping 可作为独立课题重议（§3.1 回写）。 |
 | **多机部署硬化 · `_task` 丢投修复 · Saga durable 补偿 · autorun 置信判据 · passport TOTP · SSE/MCP/SDK · metrics 正式档 · 构建时切片 + 内核瘦身**（旧 A/B/C/D/F 线的「只加不破」部分） | **拉回 v1.1.x**（2026-07-03，详见 [`VERSION.md`](./VERSION.md) §4 回写） | 均判定纯增量。部分已落地：`_task` 丢投修复（2026-07-05）、Saga durable 补偿与 MCP adapter（v1.1.10）、OTP（2026-06-30）。 |
+
+> **🔴 2026-09-05 补两个场景**（来源：`../feedback/done/org-container-per-person-mesh.md`，
+> 把 SOLO 当**一家公司的组织底座**用——每个职能岗位配一个人 + 各自的 AI，各一套网格）：
+>
+> 1. **「同一运营者 ⇒ 同信任域」在部门场景下不成立。** 财务与推广之间存在真实的信息隔离
+>    需求，这**不是跨运营方**，但网格级归因（只知道请求来自 `SOLO_财务`）可能不够——
+>    尤其当上游那个协同 AI 可以代表任意下游发起调用时。这个场景此前**两头不靠**：既不是
+>    "平行处理分担负载"，也不是"跨运营方联邦"，措辞会让人直接跳过它。
+>    是否真的触发 actor-claim 重启可以再议，但它必须是个**被显式列出的判断点**。
+> 2. **B 线（部署瘦身）在这个用法下是可行性前提，不是优化。** §2.2/§4.3 现在把它论述成
+>    "告别固定全量 bundle"的部署优化；而在「每个员工 + AI 一套」的用法里 **N 就是员工数，
+>    且这些人不是运维**。实测参照：给一个无终端使用经验的岗位铺一套栈，门槛落在
+>    Homebrew / node / redis / Claude Code 四样依赖，外加 redis 归属校验、端口分配、密钥生成
+>    ——最后的解法是由已有环境的机器生成整包交付，该岗位本机不跑 `init.sh`。这条路能走通，
+>    但**不 scale**：每加一个人就要有人替他做一次。⇒ 它决定的是**一个非技术岗能不能自己
+>    拥有一套网格**，这是可行性，不是优化。
+>
+> **另一条已被 2026-09-03 收敛推翻、但问题本身仍在**：那篇 §2 提的是「谁有权改 SOLO_A 上
+> 那份 bridge permit / 路由配置」。**"bridge 服务"这个对象已经不存在了**（§3.0）。但治理问题
+> 换了形态活着——现在是**谁有权改 gateway 的 solo 目标配置、以及对方 ingress 的 API key**：
+> 它同样是权限汇聚点，一次变更同样同时影响多个下游，而现在它和普通服务配置**走同一套机制、
+> 没有任何区分**。建议不变、落点变了：把这类跨网格配置变更接到 **approval（多签）+
+> orchestrator 分层审批**上（两样 v1.1 已落地，只差接线）。
 
 ---
 
@@ -111,7 +134,7 @@ ingress 收 JSON-RPC + ApiKey），两个 SOLO 箱子今天不能直插。
 这次把 §3 拉齐。需要跨箱**调方法**的场景不另立「RPC 档」，就是当对方 Router 的普通客户端。
 
 **治理面顺带简化**：没有中心协调层，就没有「协调层配置变更谁有权改」的问题
-（[`../feedback/org-container-per-person-mesh.md`](../feedback/org-container-per-person-mesh.md) §二的前提消失）。
+（[`../feedback/done/org-container-per-person-mesh.md`](../feedback/done/org-container-per-person-mesh.md) §二的前提消失）。
 每个 owner 只治理自己的入站（`ingress.source.*`，admin）与出站（发方存 key 的地方，steward 为 `steward.variable` secret +
 apiprovider 式「approve = 放行一个出站目标」）。主权形状不变：**对端自己决定信不信**。
 
@@ -142,7 +165,7 @@ SOLO_A 的 `bridge` 服务把请求分发到下游 SOLO_{1..n}，形成级联。
 > 下游为 runner / colony / steward / finance / trend 等既有 SOLO 网格，全部同信任域，正好落在本节
 > 「最轻档」上（§3.4-②④ 条件件均不触发）；第一条航线 overview → runner（捕获条目派发为任务），
 > 两网格同机（见 §3.4-④ 的 loopback bridge 里程碑）。场景输入与规格建议见
-> [`../feedback/v2-bridge-first-testbed-own-mesh.md`](../feedback/v2-bridge-first-testbed-own-mesh.md)。
+> [`../feedback/done/v2-bridge-first-testbed-own-mesh.md`](../feedback/done/v2-bridge-first-testbed-own-mesh.md)。
 
 ```
        ┌─────────── SOLO_A ───────────┐         ┌──── SOLO_B ────┐

@@ -9,7 +9,7 @@
  * because no real JsonLogic operator starts with `$`). Arrays used to collapse
  * to index-keyed objects in resolveParams — fixed 2026-08-22 (they now keep
  * array identity and resolve per-element), see
- * docs/feedback/runbook-browser-extension-ai-extraction-not-runnable.md §二.
+ * docs/feedback/done/runbook-browser-extension-ai-extraction-not-runnable.md §二.
  */
 const L = require('../jsonlogic');
 

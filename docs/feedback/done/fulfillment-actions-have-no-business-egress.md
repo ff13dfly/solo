@@ -226,7 +226,7 @@ runbook:50 那条记录）。本篇最有价值的是 §一那张时序表——
    **「加个 `now` 就能写出来」不成立**：那节缺的不止时钟。`now` 真正解锁的是**用户自己写的**
    时间守卫与相对死期——价值仍然成立，只是别按"补回一个已声明的能力"来定级。
 2. **`resolveValue` 这个坑已经被记过两次了**，本篇是第三次：`jsonlogic.js` 的 `@attention`
-   注释里就写着，并直接指向 `docs/feedback/runbook-browser-extension-ai-extraction-not-runnable.md`
+   注释里就写着，并直接指向 `docs/feedback/done/runbook-browser-extension-ai-extraction-not-runnable.md`
    （那篇**至今还在待办队列里**）。记了三次都没修，正是本篇 §四那句"没有回到机制上"的实例。
 3. **本篇漏了一处同款静默**：`tasks.js:145` 的 `[Tasks] Target service not found` 也是
    `console.warn` + return。归进建议 1 一起收。
@@ -274,5 +274,5 @@ runbook:50 那条记录）。本篇最有价值的是 §一那张时序表——
 - [ ] `bootstrap.js:68` 的升级陷阱本轮只写进了文档，**机制没动**。它今天不咬人，但意味着
       **将来任何一次改 `config.taskWhitelist` 默认值的动作，存量部署全都拿不到且无提示**——
       真要改默认值就必须配一个迁移动作，别指望升级带过去。
-- [ ] `docs/feedback/runbook-browser-extension-ai-extraction-not-runnable.md` 仍在队列里未 triage，
+- [ ] `docs/feedback/done/runbook-browser-extension-ai-extraction-not-runnable.md` 仍在队列里未 triage，
       本篇 §四引的就是它。同一个缺口第三次现形，那篇该一并了结。

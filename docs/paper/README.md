@@ -38,7 +38,7 @@
 | guide 机制 ← wavely 反馈 → v1.1.11 | `done/ai-agent-self-describing-api.md`；feedback README 明写 | 读那篇的「处理结论」 |
 | redis 端口归属静默失败 → v1.1.14 修 | `done/redis-port-ownership.md`；CHANGELOG v1.1.14 节（L545） | 对读两处 |
 | v1.1.16 收口六篇 / v1.1.17 收口五篇（colony） | CHANGELOG L386 / L321 | 已核对版本头归属无误 |
-| 5/5 派生项目自补 CLAUDE.md | `docs/feedback/org-container-per-person-mesh.md` §一 | 该篇标注为自查实测 |
+| 5/5 派生项目自补 CLAUDE.md | `docs/feedback/done/org-container-per-person-mesh.md` §一 | 该篇标注为自查实测 |
 | 「Router 如实返回 blocked 计数、ingress 丢弃」二手依据纠偏案例 | `done/inherited-router-url-silent-misdelivery.md` (L72-74)；CHANGELOG v1.1.15 (L502-506) | 已定位核实（原 ⚠️ 已解） |
 | bundle 版本跨度 v1.0.0–v1.1.15（08-15 快照） | 全局 CLAUDE.md 实扫记录 | 各项目 `cat .solo-version` 现扫一遍更稳 |
 | 非程序员铺栈案例（promo） | org-container feedback §四 | 该篇标注为本轮实测 |

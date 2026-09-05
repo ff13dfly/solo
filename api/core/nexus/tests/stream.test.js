@@ -48,7 +48,7 @@ describe('nexus stream.discoverStreams', () => {
     });
 });
 
-describe('nexus stream — DLQ parking is bounded (docs/feedback/event-bus-xadd-unbounded-dead-config.md §二.4)', () => {
+describe('nexus stream — DLQ parking is bounded (docs/feedback/done/event-bus-xadd-unbounded-dead-config.md §二.4)', () => {
     // notification (DLQ_MAXLEN) and orchestrator (RUNQ_DLQ_MAXLEN) list-DLQs are capped;
     // the stream-flavored NEXUS:DLQ was the one without a lid. Drive one entry past
     // maxDeliveries through consumeOnce and assert the parking xAdd carries MAXLEN ~.

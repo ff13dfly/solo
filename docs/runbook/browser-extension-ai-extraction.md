@@ -8,7 +8,7 @@
 > dev 栈（solo v1.2.1 + `resolveParams` 数组修复，`AI_PROVIDER=mock`）端到端跑通，
 > 文中 JSON/代码即实跑版本。§6 的内容策略数字来自 steward 派生项目在 1688 详情页的实测（非本仓库）。
 > 本文替代 2026-08-22 之前的旧版——旧版示例未经实测且有五处跑不通，
-> 逐条分析见 [`docs/feedback/runbook-browser-extension-ai-extraction-not-runnable.md`](../feedback/runbook-browser-extension-ai-extraction-not-runnable.md)。
+> 逐条分析见 [`docs/feedback/done/runbook-browser-extension-ai-extraction-not-runnable.md`](../feedback/done/runbook-browser-extension-ai-extraction-not-runnable.md)。
 
 ---
 

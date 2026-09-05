@@ -86,7 +86,7 @@ function evaluateCondition(rule, data) {
  *      被求值的只有三种形状：顶层带 `var` 键的对象、带 `$` 前缀键的对象，以及
  *      唯一键落在 `RESOLVE_OPS`（当前只有 `cat`）里的对象。要拼字符串就写
  *      `{ "cat": ["fx-", {"var":"instance.id"}, "-publish"] }`。
- *      详见 docs/feedback/runbook-browser-extension-ai-extraction-not-runnable.md
+ *      详见 docs/feedback/done/runbook-browser-extension-ai-extraction-not-runnable.md
  *      与 docs/feedback/done/fulfillment-actions-have-no-business-egress.md §3.1。
  */
 function resolveParams(template, data) {

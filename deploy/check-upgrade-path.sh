@@ -71,6 +71,10 @@ assert_same "$PROJ/deploy/run.sh" "$SOLO_DIR/deploy/scaffold/run.sh" "deploy/run
 assert_eq "$(ls -A "$PROJ/api/apps" | wc -l | tr -d ' ')" "0" "api/apps starts empty"
 assert_grep '<!-- solo:begin -->' "$PROJ/docs/README.md" "docs/README.md carries the solo:begin marker"
 assert_grep '<!-- solo:end -->'   "$PROJ/docs/README.md" "docs/README.md carries the solo:end marker"
+# 项目根 CLAUDE.md —— 每轮会话自动加载的那份约束（feedback/done/org-container-per-person-mesh.md §1）
+assert_file "$PROJ/CLAUDE.md"
+assert_grep '<!-- solo:begin -->' "$PROJ/CLAUDE.md" "CLAUDE.md carries the solo:begin marker"
+assert_grep '<!-- solo:end -->'   "$PROJ/CLAUDE.md" "CLAUDE.md carries the solo:end marker"
 
 # ── 2. plant sentinels in each ownership zone ──────────────────────────────────
 echo "▶ 2/6 planting sentinels"
@@ -78,6 +82,7 @@ echo "▶ 2/6 planting sentinels"
 printf "\n# probe\nPROBE_SENTINEL='keep-me'\n" >> "$PROJ/.env"
 mkdir -p "$PROJ/api/apps/probe" && echo "module.exports = 'probe-project-zone';" > "$PROJ/api/apps/probe/index.js"
 printf "\n## Probe section\n\nkeep-me (project-owned, below solo:end)\n" >> "$PROJ/docs/README.md"
+printf "\n## Probe guide section\n\nkeep-me-too (project-owned CLAUDE.md content)\n" >> "$PROJ/CLAUDE.md"
 M_SOLOSVC="$(md5f "$PROJ/deploy/solo-services.json")"; M_KEYPAIR="$(md5f "$PROJ/.keypair")"; M_SEED="$(md5f "$PROJ/api/seed.json")"
 M_SERVICES="$(md5f "$PROJ/deploy/services.json")"; M_ENV_HEAD="$(head -c 4096 "$PROJ/.env" | md5f /dev/stdin 2>/dev/null || true)"
 #   [Solo] — must be restored to stock; a stale file upstream no longer ships must disappear
@@ -118,6 +123,9 @@ assert_eq "$(md5f "$PROJ/deploy/services.json")"      "$M_SERVICES" "deploy/serv
 assert_eq "$(md5f "$PROJ/.keypair")"                  "$M_KEYPAIR"  ".keypair untouched"
 assert_eq "$(md5f "$PROJ/api/seed.json")"             "$M_SEED"     "api/seed.json untouched"
 assert_grep "## Probe section" "$PROJ/docs/README.md" "docs/README.md project section (below solo:end) kept"
+assert_grep "## Probe guide section" "$PROJ/CLAUDE.md" "CLAUDE.md project section (below solo:end) kept"
+assert_grep '<!-- solo:begin -->' "$PROJ/CLAUDE.md" "CLAUDE.md solo block still marked (spliced, not replaced)"
+assert_absent "$PROJ/CLAUDE.md.solo-v$VER.new"
 assert_grep '<!-- solo:begin -->' "$PROJ/docs/README.md" "docs/README.md solo block still marked (spliced, not replaced)"
 assert_absent "$PROJ/docs/README.md.solo-v$VER.new"
 echo "  — [Solo] zone is replaced wholesale"

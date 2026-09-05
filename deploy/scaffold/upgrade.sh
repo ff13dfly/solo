@@ -209,37 +209,59 @@ PROJECT_NAME="$(node -e "try{process.stdout.write(String(require('$PROJ/package.
 # 新模板 staged 成 .new 等人合并——与 deploy 脚本的 DIVERGED 策略一致。
 # 背景:solo/docs/feedback/done/patch-upgrade-consumer-gaps.md §二
 README_STAGED=0
-_readme_tmp="$(mktemp)"
-sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" -e "s|{{SOLO_VERSION}}|$SOLO_VERSION|g" \
-    "$SCRIPT_DIR/docs/README.md" > "$_readme_tmp"
-if [ ! -f "$PROJ/docs/README.md" ]; then
-    if [ $DRY -eq 0 ]; then mkdir -p "$PROJ/docs"; cp "$_readme_tmp" "$PROJ/docs/README.md"; fi
-    REPORT+=("authoring   + docs/README.md  (was missing — added, with solo:begin/end markers)")
-elif grep -qxF '<!-- solo:begin -->' "$PROJ/docs/README.md" && grep -qxF '<!-- solo:end -->' "$PROJ/docs/README.md"; then
-    # 标记匹配必须整行精确(-x / awk ==):模板的说明注释、项目正文里都可能出现
-    # "solo:end" 字样,子串匹配会在说明文字处提前判定块结束,把过期的 Solo 块
-    # 原样留下、还报告成"已重下发"(本轮合成项目实测踩到后改为精确匹配)。
-    if [ $DRY -eq 0 ]; then
-        _readme_out="$(mktemp)"
-        awk -v tmpl="$_readme_tmp" '
-            $0 == "<!-- solo:begin -->" && !done {
-                while ((getline tline < tmpl) > 0) { print tline; if (tline == "<!-- solo:end -->") break }
-                close(tmpl); skipping = 1; done = 1; next
-            }
-            skipping { if ($0 == "<!-- solo:end -->") skipping = 0; next }
-            { print }
-        ' "$PROJ/docs/README.md" > "$_readme_out"
-        mv "$_readme_out" "$PROJ/docs/README.md"
+CLAUDEMD_STAGED=0
+
+# 标记块同步:模板的 solo:begin..solo:end 覆盖项目同名块,块外内容原样保留。
+# 两个消费者(docs/README.md 索引、项目根 CLAUDE.md)共用本函数——形状相同就别写两遍,
+# 否则加第三个文件时两份实现必然漂移。
+#   $1 模板相对 SCRIPT_DIR 的路径   $2 项目内相对路径   $3 REPORT 里的栏目名
+# 回声 "staged" 表示存量文件无标记、已 stage 成 .new 等人合并(调用方据此设旗标)。
+sync_marker_block() {
+    local _tmpl_rel="$1" _proj_rel="$2" _label="$3"
+    local _tmp _out
+    _tmp="$(mktemp)"
+    sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" -e "s|{{SOLO_VERSION}}|$SOLO_VERSION|g" \
+        "$SCRIPT_DIR/$_tmpl_rel" > "$_tmp"
+    if [ ! -f "$PROJ/$_proj_rel" ]; then
+        if [ $DRY -eq 0 ]; then mkdir -p "$(dirname "$PROJ/$_proj_rel")"; cp "$_tmp" "$PROJ/$_proj_rel"; fi
+        REPORT+=("$_label + $_proj_rel  (was missing — added, with solo:begin/end markers)")
+    elif grep -qxF '<!-- solo:begin -->' "$PROJ/$_proj_rel" && grep -qxF '<!-- solo:end -->' "$PROJ/$_proj_rel"; then
+        # 标记匹配必须整行精确(-x / awk ==):模板的说明注释、项目正文里都可能出现
+        # "solo:end" 字样,子串匹配会在说明文字处提前判定块结束,把过期的 Solo 块
+        # 原样留下、还报告成"已重下发"(合成项目实测踩到后改为精确匹配)。
+        if [ $DRY -eq 0 ]; then
+            _out="$(mktemp)"
+            awk -v tmpl="$_tmp" '
+                $0 == "<!-- solo:begin -->" && !done {
+                    while ((getline tline < tmpl) > 0) { print tline; if (tline == "<!-- solo:end -->") break }
+                    close(tmpl); skipping = 1; done = 1; next
+                }
+                skipping { if ($0 == "<!-- solo:end -->") skipping = 0; next }
+                { print }
+            ' "$PROJ/$_proj_rel" > "$_out"
+            mv "$_out" "$PROJ/$_proj_rel"
+        fi
+        REPORT+=("$_label → $_proj_rel  (solo block re-synced; project sections outside markers kept)")
+    elif cmp -s "$_tmp" "$PROJ/$_proj_rel"; then
+        REPORT+=("$_label = $_proj_rel  (already current)")
+    else
+        if [ $DRY -eq 0 ]; then cp "$_tmp" "$PROJ/$_proj_rel.solo-${NEW_VER}.new"; fi
+        REPORT+=("$_label ! $_proj_rel  (no solo markers (≤v1.1.14 template or fully custom) — NOT overwritten; new template staged as $_proj_rel.solo-${NEW_VER}.new)")
+        SYNC_STAGED=1
     fi
-    REPORT+=("authoring   → docs/README.md  (solo block re-synced; project sections outside markers kept)")
-elif cmp -s "$_readme_tmp" "$PROJ/docs/README.md"; then
-    REPORT+=("authoring   = docs/README.md  (already current)")
-else
-    if [ $DRY -eq 0 ]; then cp "$_readme_tmp" "$PROJ/docs/README.md.solo-${NEW_VER}.new"; fi
-    REPORT+=("authoring   ! docs/README.md  (no solo markers (≤v1.1.14 template or fully custom) — NOT overwritten; new template staged as docs/README.md.solo-${NEW_VER}.new)")
-    README_STAGED=1
-fi
-rm -f "$_readme_tmp"
+    rm -f "$_tmp"
+}
+
+# ⚠️ 结果经全局 SYNC_STAGED 回传，**不要**改成 `$(sync_marker_block …)` 取回声：
+# 命令替换开子 shell，函数里的 REPORT+=() 会全部丢掉（升级报告静默少几行）。
+SYNC_STAGED=0; sync_marker_block 'docs/README.md' 'docs/README.md' 'authoring  '
+README_STAGED=$SYNC_STAGED
+
+# 项目根 CLAUDE.md:每轮会话自动加载的那份约束。存量项目普遍已手写一份(7/8),
+# 那些没有标记 → 不覆盖、stage 成 .new,与 README 同策略。
+# 背景:docs/feedback/done/org-container-per-person-mesh.md §1
+SYNC_STAGED=0; sync_marker_block 'CLAUDE.md' 'CLAUDE.md' 'guide      '
+CLAUDEMD_STAGED=$SYNC_STAGED
 
 if [ $DRY -eq 0 ]; then
     mkdir -p "$PROJ/docs/authoring/workflow-examples"
@@ -436,6 +458,13 @@ if [ "${README_STAGED:-0}" -eq 1 ]; then
     echo "   • docs/README.md kept as-is (no solo markers) — merge your project sections below the"
     echo "     solo:end marker of docs/README.md.solo-${NEW_VER}.new, then replace; future upgrades"
     echo "     will only touch the marked solo block"
+fi
+if [ "${CLAUDEMD_STAGED:-0}" -eq 1 ]; then
+    echo "   • CLAUDE.md kept as-is (hand-written, no solo markers) — the new template carries the"
+    echo "     framework constraints your AI should see every session (read-only zone as a governance"
+    echo "     boundary, gate command, Entity Factory tombstone rule, secrets list). Merge your own"
+    echo "     sections below the solo:end marker of CLAUDE.md.solo-${NEW_VER}.new, then replace;"
+    echo "     future upgrades will only touch the marked solo block"
 fi
 echo "   • portal/operator/ is source-distributed and was NOT touched — if self-check flagged a stale"
 echo "     operator tarball above, rebuild/copy it or the operator portal will not be served"

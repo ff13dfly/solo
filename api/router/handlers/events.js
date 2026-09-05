@@ -228,7 +228,23 @@ async function processEvents(events, { source, actor, redisClient, trustEventAct
             };
 
             if (redisClient && redisClient.isOpen) {
-                await redisClient.xAdd(stream, '*', envelope);
+                // Bounded ring, not an unbounded log. Until 2026-09-05 this was a bare xAdd and
+                // `config.eventMaxLen` was dead config — every EVENT:* stream grew for the life
+                // of the deployment. MAXLEN '~' trims at radix-tree node boundaries (keeps AT
+                // LEAST the threshold), which is the same trade entity.js:184 makes for the WAL
+                // stream: exact trim would cost O(n) per write.
+                // The stream is a DELIVERY channel, not an audit ledger (events.md §6.5) —
+                // long-term history belongs in the consumer's own store.
+                // (docs/feedback/done/event-bus-xadd-unbounded-dead-config.md)
+                const maxLen = Object.prototype.hasOwnProperty.call(config.eventMaxLenOverrides || {}, stream)
+                    ? config.eventMaxLenOverrides[stream]
+                    : config.eventMaxLen;
+                // 0 / negative / unset = explicitly unbounded (the pre-2026-09-05 behaviour),
+                // so a deployment that truly wants an unbounded stream can still say so.
+                await redisClient.xAdd(stream, '*', envelope,
+                    Number.isInteger(maxLen) && maxLen > 0
+                        ? { TRIM: { strategy: 'MAXLEN', strategyModifier: '~', threshold: maxLen } }
+                        : undefined);
                 written++;
             }
         } catch (err) {

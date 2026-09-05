@@ -147,4 +147,4 @@
   [`../feedback/gateway-ingress-dialect-mismatch.md`](../feedback/gateway-ingress-dialect-mismatch.md) §四。
 - **角色与 UI 红线**：overview 仓 `mind/strategy/solo-v2-testbed.md`（跨仓库不设链接）。
 - **治理**（协调层归属人、bridge 配置变更接 approval）：
-  [`../feedback/org-container-per-person-mesh.md`](../feedback/org-container-per-person-mesh.md) §2，公司侧生效；个人 mesh 里归属人即本人。
+  [`../feedback/done/org-container-per-person-mesh.md`](../feedback/done/org-container-per-person-mesh.md) §2，公司侧生效；个人 mesh 里归属人即本人。

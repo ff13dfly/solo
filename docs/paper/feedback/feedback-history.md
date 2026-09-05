@@ -21,8 +21,8 @@
 | **Redis 端口归属静默失败 (v1.1.14)** | `docs/feedback/done/redis-port-ownership.md`<br>`docs/planning/CHANGELOG.md` L545 [v1.1.14] | ✅ **完全属实**<br>overview/trend 同机冲突实测，落地到 `deploy/scaffold/run.sh` 启动归属校验与前端端口 fail-fast。 | ⚠️ `docs/paper/README.md` 表格写为 `~L591`，实际在 CHANGELOG **L545**（小行号偏差）。 |
 | **批量 Upcycling 案例**<br>(v1.1.16 收口 6 篇 / v1.1.17 收口 colony 5 篇) | `docs/planning/CHANGELOG.md`<br>- L386 [v1.1.16] 收口 6 篇<br>- L321 [v1.1.17] 收口 colony 5 篇 | ✅ **完全属实**<br>CHANGELOG 头部明确标注这两轮集中 triage 记录。 | 事实无误，无需改动。 |
 | **证据级别纠偏案例**<br>(Router 如实返回 blocked 计数，ingress 丢弃) | `docs/feedback/done/inherited-router-url-silent-misdelivery.md` (L72-74)<br>`CHANGELOG.md` L502-506 [v1.1.15] | ✅ **已成功定位出处**<br>（之前在 README 标注为待定位 ⚠️） | **已定位**：原出处为 `inherited-router-url-silent-misdelivery.md`，并在 CHANGELOG v1.1.15 条目明确记录了此项纠偏。 |
-| **5/5 自然实验**<br>(派生项目自补 CLAUDE.md) | `docs/feedback/org-container-per-person-mesh.md` §一<br>实测 5 仓：overview, finance, trend, colony, runner | ✅ **完全属实**<br>实测 5 个派生栈无一例外自行补齐了项目根 governing document。 | 见下文关于派生项目总数（7 还是 8）的统计对齐说明。 |
-| **非程序员铺栈案例**<br>(promo 节点) | `docs/feedback/org-container-per-person-mesh.md` §一、§四 | ✅ **完全属实**<br>给无终端经验市场人员交付 promo 节点，验证了 operation vs provisioning 的边界。 | 见下文命名一致性说明。 |
+| **5/5 自然实验**<br>(派生项目自补 CLAUDE.md) | `docs/feedback/done/org-container-per-person-mesh.md` §一<br>实测 5 仓：overview, finance, trend, colony, runner | ✅ **完全属实**<br>实测 5 个派生栈无一例外自行补齐了项目根 governing document。 | 见下文关于派生项目总数（7 还是 8）的统计对齐说明。 |
+| **非程序员铺栈案例**<br>(promo 节点) | `docs/feedback/done/org-container-per-person-mesh.md` §一、§四 | ✅ **完全属实**<br>给无终端经验市场人员交付 promo 节点，验证了 operation vs provisioning 的边界。 | 见下文命名一致性说明。 |
 | **双反馈通道**<br>(人工 markdown + 运行时 `system.report`) | `docs/feedback/README.md`<br>Redis 键 `SYSTEM:AI:REPORT`，上限 1000 裁旧，去重累计 count | ✅ **完全属实** | 事实无误，无需改动。 |
 
 ---
@@ -59,7 +59,7 @@
 - **现象**：
   - 论文 §4.5 称 bridge mesh "designed and adversarially reviewed but not deployed"；
   - 实际上在 2026-08-23 / 08-24，仓库新增了：
-    1. A 线首个试验田拍板（overview → runner 同机 loopback bridge，见 `docs/feedback/v2-bridge-first-testbed-own-mesh.md` 与 `VERSION.v2.md` L85-89 回写）；
+    1. A 线首个试验田拍板（overview → runner 同机 loopback bridge，见 `docs/feedback/done/v2-bridge-first-testbed-own-mesh.md` 与 `VERSION.v2.md` L85-89 回写）；
     2. 主箱-子箱协同运行模式设计草案（下行存档确认制 / 定期拉取航线心跳 / 门铃，见 `docs/planning/v2-bridge-interaction.md` 与 `VERSION.v2.md` L80-84 回写）。
 - **建议**：
   - 论文 §4.5 的核心定性依然正确（代码尚未完成部署测试），但措辞可以更精准地体现当前迭代阶段，例如补充一句话："A first loopback testbed (overview → runner) and a three-channel asynchronous interaction protocol (archival-ack, periodic poll, doorbell) have recently entered specification, while deployment remains ongoing."

@@ -13,14 +13,17 @@ const { extractEvents, processEvents, checkRegistry } = require('../handlers/eve
 // ── Fake Redis ─────────────────────────────────────────────────────────────────
 function makeRedis(registryJson = null) {
     const streams = {};
+    const xaddOpts = {};   // stream -> [第 4 个参数]，用来断言 MAXLEN 修剪
     return {
         isOpen: true,
         async get(key) { return registryJson; },
-        async xAdd(stream, id, fields) {
+        async xAdd(stream, id, fields, opts) {
             (streams[stream] ||= []).push(fields);
+            (xaddOpts[stream] ||= []).push(opts);
             return '1-0';
         },
         _streams: streams,
+        _xaddOpts: xaddOpts,
     };
 }
 
@@ -231,5 +234,51 @@ describe('processEvents', () => {
             { source: 'orchestrator', redisClient: redis } // no actor
         );
         expect(redis._streams['EVENT:WORKFLOW:STATUS'][0].actor).toBe('anonymous');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 流修剪（MAXLEN）—— docs/feedback/done/event-bus-xadd-unbounded-dead-config.md
+//
+// 2026-09-05 之前这里是裸 xAdd，而 `config.eventMaxLen` 是**死配置**（全仓唯一引用即定义处）
+// ⇒ 每条 EVENT:* 流在部署的整个生命周期里无界增长。当时不接的两个理由后来都不成立：
+// 值本来就是正数；node-redis 的 TRIM 早被同仓 entity.js:184 的 WAL 流生产验证过。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('processEvents — stream trimming', () => {
+    const config = require('../config');
+    const EV = { stream: 'EVENT:WORKFLOW:STATUS', type: 'workflow.status', payload: { a: 1 } };
+    const opts = (redis, stream) => redis._xaddOpts[stream][0];
+
+    afterEach(() => { config.eventMaxLenOverrides = {}; });
+
+    test('默认带 MAXLEN ~ 修剪（近似修剪是刻意的：精确修剪每写一次都是 O(n)）', async () => {
+        const redis = makeRedis(JSON.stringify(REGISTRY));
+        await processEvents([EV], { source: 'orchestrator', actor: 'u1', redisClient: redis });
+        expect(opts(redis, EV.stream)).toEqual({
+            TRIM: { strategy: 'MAXLEN', strategyModifier: '~', threshold: config.eventMaxLen },
+        });
+    });
+
+    test('per-stream 覆盖生效——流名原样匹配，不做任何字符改造', async () => {
+        // 高频流（行情）和低频流（审批）不该共用一个窗口；覆盖口是单个 env 列表，
+        // 流名里的 ':' 原样写，正因为逐流 env 需要一套有歧义的名字改造。
+        const redis = makeRedis(JSON.stringify(REGISTRY));
+        config.eventMaxLenOverrides = { 'EVENT:WORKFLOW:STATUS': 42 };
+        await processEvents([EV], { source: 'orchestrator', actor: 'u1', redisClient: redis });
+        expect(opts(redis, EV.stream).TRIM.threshold).toBe(42);
+    });
+
+    test('覆盖只作用于被点名的流，别的流仍用默认值', async () => {
+        const redis = makeRedis(JSON.stringify(REGISTRY));
+        config.eventMaxLenOverrides = { 'EVENT:SOMETHING:ELSE': 42 };
+        await processEvents([EV], { source: 'orchestrator', actor: 'u1', redisClient: redis });
+        expect(opts(redis, EV.stream).TRIM.threshold).toBe(config.eventMaxLen);
+    });
+
+    test('覆盖为 0 = 显式不修剪（保留 2026-09-05 之前的行为，给真要无界的部署留口）', async () => {
+        const redis = makeRedis(JSON.stringify(REGISTRY));
+        config.eventMaxLenOverrides = { 'EVENT:WORKFLOW:STATUS': 0 };
+        await processEvents([EV], { source: 'orchestrator', actor: 'u1', redisClient: redis });
+        expect(opts(redis, EV.stream)).toBeUndefined();
     });
 });

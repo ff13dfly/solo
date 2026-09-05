@@ -11,6 +11,54 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+### `EVENT:*` 流终于会修剪 + scaffold 下发项目根 `CLAUDE.md`（2026-09-05）
+
+清掉两篇积压反馈（`../feedback/done/event-bus-xadd-unbounded-dead-config.md` 建议 1/2、
+`../feedback/done/org-container-per-person-mesh.md`）。
+
+- 🔴 **`EVENT:*` 流写入端接上 MAXLEN 修剪**（`router/handlers/events.js`）。此前是裸 xAdd，
+  而 `config.eventMaxLen` 是**死配置**（全仓唯一引用即定义处）⇒ 每条事件流在部署的整个生命
+  周期里无界增长（量级参考：仅 2 个 symbol 的 K 线事件 ≈ 0.86 MB/天，一年 ~0.3 GB）。
+  当初不接的两个理由后来都不成立：值本来就是正数，node-redis 的 TRIM 早被同仓
+  `entity.js:184` 的 WAL 环生产验证过。
+  - `MAXLEN ~`（近似修剪，保留**不少于**阈值——精确修剪每写一次都是 O(n)）；
+  - 默认约 1 万条，`EVENT_MAXLEN` 可调；**单条流**用
+    `EVENT_MAXLEN_OVERRIDES='EVENT:MARKET:CANDLE_1M=100000,…'` 覆盖，**流名原样写**
+    （逐流 env 需要一套有歧义的名字改造，registry 挂字段改动面又太大）。畸形条目逐条跳过
+    并 warn，不整份丢弃——一个 typo 不该悄悄把另一条流变回无界。
+  - **`EVENT_MAXLEN=0` = 显式不修剪**，给真要无界的部署留口。
+- **scaffold 下发项目根 `CLAUDE.md`**（`init.sh`）。`solo-service` skill **只在动 `api/apps/`
+  时触发**，管 wire 契约；而"AI 主动提议加功能""一上来先建五张空表""不可再生数据只躺在
+  Redis 里没有导出出口"这些**都不发生在改 `api/apps/` 的时刻**，只有每轮会话都加载的
+  `CLAUDE.md` 拦得住。证据是 scaffold 缺省而非偏好：**8 个派生项目里 7 个自己长了一份**。
+  - 做成 **`solo:begin/end` 标记块**（与 `docs/README.md` 同机制）而不是一次性模板：
+    Solo 那半随 `upgrade.sh` 重新同步，`solo:end` 之后项目自己写的部分永不被碰；
+    存量项目那 7 份手写的没有标记 ⇒ **不覆盖**、stage 成 `.new` 并在 ACTION REQUIRED 里提示。
+  - 把 README 那套 awk 抽成共用函数 `sync_marker_block`（**没有抄第二份**）。
+  - `check-upgrade-path.sh` 补 6 条断言（49 → **55**）。
+- **只读区被显式定位成治理边界**（`scaffold/README.md` + 新模板）：它常被读成"改了会丢，
+  小心点"，但真正的作用是**"标准不由使用方调整"**——一般框架的最佳实践改了没有任何后果，
+  **只读区有后果**，所以它是真的标准。多人 + 各自 AI 的场景下，这是唯一能保证
+  **每个人的 AI 不会各自发明一套约定**的东西。
+- **`VERSION.v2.md` 补两个 v2 场景 + 一处校正**：①「同运营者 ⇒ 同信任域」在**部门级隔离**
+  下不成立，已加进 actor-claim 的重启条件（此前这个场景两头不靠，措辞会让人直接跳过）；
+  ② B 线（部署瘦身）在「每个员工 + AI 一套」的用法下**是可行性前提不是优化**；
+  ③ 原反馈问的「谁有权改 bridge 配置」——**bridge 服务这个对象已被 2026-09-03 收敛掉了**，
+  但治理缺口换形态活着（现在是 gateway 的 solo 目标配置 + 对方 ingress 的 API key），落点已更新。
+- 顺带清掉 `env-int` 门禁在 router 与 library 里扫出的 5 处（`TASK_MAX_ATTEMPTS=0` 本意
+  "不重试"会变成重试 3 次）。⚠️ `library/constants.js` 的 `WAL_STREAM_MAXLEN` **刻意没有照搬**：
+  那里 `threshold: 0` 不是"关掉修剪"而是"把 WAL 热流裁空"，与 EVENT 流的 0 语义相反——
+  改成"落回默认并出声"，把原先碰巧起作用的保护变成显式的。
+
+实测：全量 e2e 68 套/358 passed；api CI 白名单 133 套/2243 passed；16 目录 autocheck ERROR=0
++ router 三条规则门绿；`check-upgrade-path.sh` 55 断言通过；doc-drift、error-codes、simulation 全绿。
+
+下游 action：🔴 **存量部署里已经无界长起来的 `EVENT:*` 流，升级后首次写入即被裁到约 1 万条。**
+事件流是投递通道不是审计账本（`events.md §6.5` 一直这么写），但**如果有谁把它当账本在用**，
+升级前先把历史导出去；要维持原状设 `EVENT_MAXLEN=0`。
+另：升级会给项目根送一份 `CLAUDE.md`——已有手写版的**不会被覆盖**，新模板 stage 成 `.new`，
+合并与否你定。
+
 ### 收尾一批：配置里的显式 0 不再被吃掉 + 下发样例照抄跑不通（2026-09-05）
 
 同一篇反馈剩下的三条（`../feedback/done/event-triggered-workflow-lifecycle-drops-events.md`

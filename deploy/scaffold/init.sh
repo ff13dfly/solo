@@ -197,6 +197,19 @@ done
 cp "$SCRIPT_DIR/docs/authoring/workflow-examples/"*.json "$NEW_DIR/docs/authoring/workflow-examples/"
 log_info "Copied: docs/ (README index + authoring/{modeling,service,events,workflows}.md + $(ls "$SCRIPT_DIR/docs/authoring/workflow-examples/"*.json | wc -l | tr -d ' ') workflow examples)"
 
+# --- 6a-bis. Project root CLAUDE.md (the contract that applies BEFORE any code) ---
+# @why The solo-service skill only fires when someone edits api/apps/ — it governs wire
+#   contracts and code style. A project-root CLAUDE.md is loaded EVERY session, and it is what
+#   catches the failures that never happen inside api/apps/: an AI proposing features nobody
+#   asked for, seeding five empty tables on day one, or leaving non-regenerable data in Redis
+#   with no export path. Evidence this is a scaffold gap, not a preference: 7 of 8 derived
+#   projects grew their own by hand (docs/feedback/done/org-container-per-person-mesh.md §1).
+# Marker-block shaped like docs/README.md: the Solo half re-syncs on upgrade, everything the
+# project writes after solo:end is never touched.
+sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" -e "s|{{SOLO_VERSION}}|$SOLO_VERSION|g" \
+    "$SCRIPT_DIR/CLAUDE.md" > "$NEW_DIR/CLAUDE.md"
+log_info "Copied: CLAUDE.md (project guide — Solo block in solo:begin/end markers, your sections after)"
+
 # --- 6b. Agent skill: solo-service (the contract, ENFORCED) ---
 # The authoring docs (6a) are the readable contract; this Claude Code skill makes it executable.
 # A downstream AI editing api/apps/ auto-discovers it: it points at docs/authoring/ + api/sample/,

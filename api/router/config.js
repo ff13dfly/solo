@@ -1,5 +1,6 @@
 require('dotenv').config();
 const { portFor, urlFor } = require('../library/ports');
+const { intFromEnv } = require('../library/env');
 
 module.exports = {
   port: portFor('router', 8600),
@@ -73,13 +74,50 @@ module.exports = {
     },
   },
 
-  // event.md D10 — approximate stream MAXLEN (placeholder; xAdd currently unbounded).
-  // Set to a positive number to enable MAXLEN trim once confirmed with node-redis version.
-  eventMaxLen: 10000,
+  // event.md D10 — approximate MAXLEN for EVENT:* streams (memory safety valve).
+  //
+  // @why Until 2026-09-05 this value existed but was never read: handlers/events.js did a bare
+  //   xAdd, so every EVENT:* stream grew without bound for the life of the deployment. The two
+  //   reasons the old comment gave for holding off were both already false — the value is a
+  //   positive number, and node-redis TRIM is proven in-tree by entity.js's WAL stream.
+  //   (docs/feedback/done/event-bus-xadd-unbounded-dead-config.md)
+  // @attention MAXLEN '~' is APPROXIMATE by design: Redis trims at radix-tree node boundaries,
+  //   so the stream keeps *at least* this many entries. That is the right trade — exact trim
+  //   costs O(n) per write. Same shape as entity.js:184's WAL ring.
+  // @attention The stream is a DELIVERY channel, not an audit ledger (events.md §6.5).
+  //   Long-term history belongs in your own store; a trimmed entry is not a lost event.
+  eventMaxLen: intFromEnv('EVENT_MAXLEN', 10000),
+
+  // Per-stream overrides, as ONE env list: 'EVENT:MARKET:CANDLE_1M=100000,EVENT:X:Y=500'.
+  // @why A high-volume stream (market candles) and a low-volume one (approvals) do not want the
+  //   same window, but the two obvious alternatives are both worse: one env var per stream needs
+  //   a stream-name→identifier mangling that is ambiguous (':' and '_' both appear in real names),
+  //   and hanging a field off the event registry widens a data structure that many places read.
+  //   A single flat list keeps stream names VERBATIM and touches nothing else.
+  // Malformed pairs are skipped loudly rather than silently dropping the whole override set —
+  // a typo in one entry must not quietly un-bound a different stream.
+  eventMaxLenOverrides: (() => {
+    const raw = process.env.EVENT_MAXLEN_OVERRIDES;
+    if (!raw || !String(raw).trim()) return {};
+    const out = {};
+    for (const pair of String(raw).split(',')) {
+      const t = pair.trim();
+      if (!t) continue;
+      const eq = t.lastIndexOf('=');            // lastIndexOf: stream names contain ':' but not '='
+      const name = eq > 0 ? t.slice(0, eq).trim() : '';
+      const n = eq > 0 ? Number(t.slice(eq + 1).trim()) : NaN;
+      if (!name || !Number.isInteger(n) || n < 0) {
+        console.warn(`[config] EVENT_MAXLEN_OVERRIDES entry ${JSON.stringify(t)} is not '<stream>=<int>' — ignored`);
+        continue;
+      }
+      out[name] = n;
+    }
+    return out;
+  })(),
   debug: process.env.DEBUG === 'true', // Default to false, explicitly enable with 'true'
   bodyLimit: process.env.BODY_LIMIT || '50mb',
-  maxStringLength: parseInt(process.env.MAX_STRING_LENGTH, 10) || 5242880, // 5MB default
-  maxArrayLength: parseInt(process.env.MAX_ARRAY_LENGTH, 10) || 1000,
+  maxStringLength: intFromEnv('MAX_STRING_LENGTH', 5242880), // 5MB default
+  maxArrayLength: intFromEnv('MAX_ARRAY_LENGTH', 1000),
   // Param-hygiene rollout mode (router/handlers/validator.js): the NEW string rules
   // (control-char floor, blank-required, pattern, minLength) roll out behind this switch.
   //   'warn'    (default) — log the violation, let the request through (observe first)
@@ -131,8 +169,8 @@ module.exports = {
   // 2026-07-05). Previously a single non-awaited axios.post — one transient failure
   // (or a process restart mid-flight) silently dropped the task with no trace at all.
   tasks: {
-    maxAttempts: parseInt(process.env.TASK_MAX_ATTEMPTS, 10) || 3,
-    retryBaseMs: parseInt(process.env.TASK_RETRY_BASE_MS, 10) || 200,
+    maxAttempts: intFromEnv('TASK_MAX_ATTEMPTS', 3),
+    retryBaseMs: intFromEnv('TASK_RETRY_BASE_MS', 200),
   },
 
   // --- Assets Serving (Option A: Direct Disk Access) ---

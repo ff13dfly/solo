@@ -80,16 +80,29 @@ CHANGELOG 的行为变更**，否则下游会把「被修剪掉了」误读成�
 
 ## 处理结论（solo 侧）
 
-2026-08-18 triage。四条事实指控经源码核实**全部属实**：`events.js:231` 裸 xAdd；
+2026-08-18 triage；**建议 1/2 于 2026-09-05 获授权后落地，本篇就此结案**。
+
+2026-08-18 的核实：四条事实指控经源码核实**全部属实**：`events.js:231` 裸 xAdd；
 `eventMaxLen` 全仓唯一引用即定义处（死配置），且 `config.js:76-77` 注释两个前提都不成立
 （值已是正数；node-redis TRIM 已被同仓 `entity.js:184` WAL 流生产验证）；`moveToDLQ`
 是三个 DLQ 里唯一没封顶的（notification/orchestrator 的 list 版都有硬上限）。
 
-- ⏸ **建议 1/2（Router 接线 TRIM + per-stream 覆盖）**：确认该做，但涉及 `api/router/`
-  修改保护区，**用户明确决定本轮不动 router**，留待其审阅后另行授权。已定的实现取向
-  （授权后照此做）：TRIM 模式抄 `entity.js:184`；per-stream 覆盖口选**单个 env 列表**
-  （`EVENT_MAXLEN_OVERRIDES='EVENT:MARKET:CANDLE_1M=100000,…'`——流名原样写、不动
-  registry 数据结构），不用逐流 env（流名字符改造有歧义）也不用 registry 挂字段（改动面大）。
+- ✅ **建议 1/2（Router 接线 TRIM + per-stream 覆盖）—— 2026-09-05 用户授权后落地**，
+  完全按当初定的取向做，方案没改：
+  - `handlers/events.js` 的 xAdd 带上 `TRIM: { strategy:'MAXLEN', strategyModifier:'~' }`，
+    抄 `entity.js:184` 的 WAL 环。`~` 的近似修剪是**刻意的**：精确修剪每写一次都是 O(n)。
+  - `config.eventMaxLen` 从死配置变成活的，可经 `EVENT_MAXLEN` 覆盖（走新的
+    `library/env.js:intFromEnv`，所以**显式写 0 生效**）。
+  - per-stream 覆盖用**单个 env 列表** `EVENT_MAXLEN_OVERRIDES='EVENT:MARKET:CANDLE_1M=100000,…'`
+    ——流名原样写。解析用 `lastIndexOf('=')`（流名含 `:` 但不含 `=`），畸形条目**逐条跳过并
+    warn**、不整份丢弃：一个 typo 不该悄悄把另一条流变回无界。
+  - **`maxLen <= 0` = 显式不修剪**，保留 2026-09-05 之前的行为，给真要无界的部署留口。
+  - `router/tests/events.test.js` 新增 4 例（默认修剪 / 覆盖生效 / 覆盖只作用于被点名的流 /
+    0 = 不修剪），mock 的 xAdd 补收第 4 个参数。
+
+  ⚠️ **下游行为变更**：存量部署里已经无界长起来的 EVENT:* 流，升级后**首次写入即被裁到约
+  1 万条**（或你配的值）。事件流是投递通道不是审计账本（events.md §6.5），但**如果有谁把它
+  当账本在用**，升级前先把历史导出去；要维持原状设 `EVENT_MAXLEN=0`。
 - ✅ **建议 3（NEXUS:DLQ 封顶）**：`stream.js` `moveToDLQ` 的 xAdd 加
   `TRIM: MAXLEN ~`，上限 `NEXUS_DLQ_MAXLEN`（默认 1000），对齐 notification/orchestrator
   两家的做法与默认值。stream.test.js 新增 1 例（驱动 consumeOnce 过 maxDeliveries，

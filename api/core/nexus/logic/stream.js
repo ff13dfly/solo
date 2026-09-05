@@ -5,7 +5,7 @@ const logger = createLogger('nexus-stream');
 // DLQ hard cap — mirrors notification/logic/worker.js DLQ_MAXLEN and orchestrator
 // worker.js RUNQ_DLQ_MAXLEN (their own words: "no bound = unbounded poison
 // accumulation"); this stream-flavored DLQ was the one without a lid
-// (docs/feedback/event-bus-xadd-unbounded-dead-config.md §二.4). Approximate
+// (docs/feedback/done/event-bus-xadd-unbounded-dead-config.md §二.4). Approximate
 // trim (~), oldest parked entries drop first; the source event stays in its
 // origin stream, the DLQ entry is just the retry handle.
 const DLQ_MAXLEN = (() => {
