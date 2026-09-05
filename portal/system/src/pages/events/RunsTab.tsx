@@ -150,7 +150,7 @@ export default function RunsTab() {
     return items;
   }, [runs]);
 
-  const STATUS_OPTIONS = ['', 'RUNNING', 'DONE', 'FAILED', 'STALLED', 'PAUSED_AWAITING_HUMAN', 'RESUMING', 'ABORTED', 'DEADLETTER'];
+  const STATUS_OPTIONS = ['', 'RUNNING', 'DONE', 'FAILED', 'STALLED', 'PAUSED_AWAITING_HUMAN', 'RESUMING', 'ABORTED', 'DEADLETTER', 'DEFERRED_COOLING'];
 
   return (
     <>

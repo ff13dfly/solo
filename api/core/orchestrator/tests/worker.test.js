@@ -25,6 +25,7 @@ const W = config.worker;
 function makeFakeRedis() {
     const lists = {};   // key -> array (index 0 = head, matches lPush/blPop semantics)
     const zsets = {};   // key -> Map(value -> score)
+    const docs  = {};   // key -> JSON doc (workflow docs, for the cooling check)
 
     const api = {
         duplicate() { return api; },
@@ -48,9 +49,17 @@ function makeFakeRedis() {
             const m = zsets[key] || new Map();
             return [...m.entries()].filter(([, s]) => s >= min && s <= max).map(([v]) => v);
         },
+        // JSON docs — the worker reads the workflow to tell "too early" (cooling) from
+        // "permanently rejected". Absent by default, so the pre-existing permanent-rejection
+        // tests keep exercising the fail-safe path (unreadable workflow ⇒ treat as permanent).
+        json: {
+            async get(key) { return docs[key] !== undefined ? JSON.parse(JSON.stringify(docs[key])) : null; },
+            async set(key, _p, val) { docs[key] = JSON.parse(JSON.stringify(val)); },
+        },
         // test helpers
         _list(key) { return lists[key] || []; },
         _zset(key) { return zsets[key] || new Map(); },
+        _setWorkflow(id, doc) { docs[`${R.workflowPrefix}${id}`] = doc; },
     };
     return api;
 }
@@ -310,5 +319,130 @@ describe('worker.handleNeedsGrant — auto→human seam', () => {
 
         await expect(worker.processOne(redis, JSON.stringify({ runId: 'run_2', workflowId: 'wf2' }))).resolves.toBeUndefined();
         expect(paused).toEqual([{ id: 'run_2', missingMethods: ['x.y.do'] }]); // pause survived the notify failure
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cooling period — "too early" is not "rejected"
+// docs/feedback/done/event-triggered-workflow-lifecycle-drops-events.md §一/§二
+//
+// A high-risk workflow goes ACTIVE with effective_at = now + 24h, and runner.js rejects
+// with FORBIDDEN until then. FORBIDDEN is not retryable, so every genuine trigger inside
+// that window used to be dead-lettered with attempts:0 — i.e. every event for a day after
+// any rollout, silently. The criterion that separates the two kinds of "no": a rejection
+// that names WHEN it stops applying is not permanent.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('worker.handleThrown — cooling period defers instead of dead-lettering', () => {
+    const coolingErr = () => { const e = new Error('Workflow in cooling period until 2026-09-06T02:02:19.498Z'); e.code = -32005; throw e; };
+
+    function coolingWorker(redis, { effectiveAt, run = null } = {}) {
+        redis._setWorkflow('wf_cw', { id: 'wf_cw', status: 'ACTIVE', effective_at: effectiveAt });
+        return createWorker(redis, { relay: fakeRelay, runner: { run: coolingErr }, run });
+    }
+
+    test('defers to the RETRY zset at effective_at — not the deadletter queue', async () => {
+        const redis = makeFakeRedis();
+        const until = Date.now() + 60_000;
+        const worker = coolingWorker(redis, { effectiveAt: until });
+
+        await worker.processOne(redis, JSON.stringify({ runId: 'r1', workflowId: 'wf_cw', triggerSource: 'event:EVENT:D', triggerId: '1-1', attempts: 0 }));
+
+        expect(redis._list(R.runQueueDeadletter)).toHaveLength(0);
+        const zset = redis._zset(R.runQueueRetry);
+        expect(zset.size).toBe(1);
+        const [value, score] = [...zset.entries()][0];
+        // Fires at effective_at (+ up to 1s of jitter so a burst does not wake in lockstep).
+        expect(score).toBeGreaterThanOrEqual(until);
+        expect(score).toBeLessThan(until + 1000);
+        const cmd = JSON.parse(value);
+        expect(cmd.coolingDefers).toBe(1);
+        // The whole point: the exponential-backoff budget is untouched. Counting cooling
+        // against maxRetries would burn all 5 attempts inside the window and dead-letter
+        // the event anyway — the bug this fix exists to remove.
+        expect(cmd.attempts).toBe(0);
+        // trigger identity preserved → the eventual run dedups downstream exactly as it would have
+        expect(cmd).toMatchObject({ runId: 'r1', triggerSource: 'event:EVENT:D', triggerId: '1-1' });
+    });
+
+    test('marks the run DEFERRED_COOLING so the stall scanner leaves it alone', async () => {
+        const redis = makeFakeRedis();
+        const deferred = [];
+        const run = {
+            create: async () => {}, getGrant: async () => null, done: async () => {},
+            deadletter: async () => { throw new Error('should not deadletter'); },
+            defer: async (id, d) => { deferred.push({ id, ...d }); },
+        };
+        const until = Date.now() + 60_000;
+        const worker = coolingWorker(redis, { effectiveAt: until, run });
+
+        await worker.processOne(redis, JSON.stringify({ runId: 'r2', workflowId: 'wf_cw', triggerSource: 'event', attempts: 0 }));
+
+        // Left RUNNING it would be flipped STALLED in 10 minutes and page ops with a
+        // false "worker died mid-run" story.
+        expect(deferred).toHaveLength(1);
+        expect(deferred[0]).toMatchObject({ id: 'r2', until });
+    });
+
+    test('cooling already over → normal permanent handling (no defer loop)', async () => {
+        const redis = makeFakeRedis();
+        const worker = coolingWorker(redis, { effectiveAt: Date.now() - 1000 });
+
+        await worker.processOne(redis, JSON.stringify({ runId: 'r3', workflowId: 'wf_cw', triggerSource: 'event', attempts: 0 }));
+
+        expect(redis._zset(R.runQueueRetry).size).toBe(0);
+        expect(redis._list(R.runQueueDeadletter)).toHaveLength(1);
+    });
+
+    test('a FORBIDDEN that is NOT cooling still dead-letters (footprint, DEPRECATED, …)', async () => {
+        const redis = makeFakeRedis();
+        redis._setWorkflow('wf_perm', { id: 'wf_perm', status: 'ACTIVE', effective_at: null });
+        const worker = createWorker(redis, {
+            relay: fakeRelay,
+            runner: { run: async () => { const e = new Error('footprint violation'); e.code = -32005; throw e; } },
+        });
+
+        await worker.processOne(redis, JSON.stringify({ runId: 'r4', workflowId: 'wf_perm', triggerSource: 'event', attempts: 0 }));
+
+        expect(redis._zset(R.runQueueRetry).size).toBe(0);
+        expect(redis._list(R.runQueueDeadletter)).toHaveLength(1);
+    });
+
+    test('defer cap reached → dead-letters (a workflow whose effective_at keeps moving)', async () => {
+        const redis = makeFakeRedis();
+        const worker = coolingWorker(redis, { effectiveAt: Date.now() + 60_000 });
+
+        await worker.processOne(redis, JSON.stringify({
+            runId: 'r5', workflowId: 'wf_cw', triggerSource: 'event', attempts: 0,
+            coolingDefers: W.maxCoolingDefers,
+        }));
+
+        expect(redis._zset(R.runQueueRetry).size).toBe(0);
+        expect(redis._list(R.runQueueDeadletter)).toHaveLength(1);
+    });
+
+    test('unreadable workflow → fail SAFE (permanent), never an infinite defer', async () => {
+        const redis = makeFakeRedis();
+        redis.json.get = async () => { throw new Error('redis down'); };
+        const worker = createWorker(redis, { relay: fakeRelay, runner: { run: coolingErr } });
+
+        await worker.processOne(redis, JSON.stringify({ runId: 'r6', workflowId: 'wf_cw', triggerSource: 'event', attempts: 0 }));
+
+        expect(redis._list(R.runQueueDeadletter)).toHaveLength(1);
+    });
+
+    test('promoteDueRetries brings a deferred command back once effective_at passes', async () => {
+        const redis = makeFakeRedis();
+        const worker = coolingWorker(redis, { effectiveAt: Date.now() - 5_000 });
+        // Seed the zset directly with a due deferral (as the defer path would have written it).
+        await redis.zAdd(R.runQueueRetry, {
+            score: Date.now() - 1,
+            value: JSON.stringify({ runId: 'r7', workflowId: 'wf_cw', triggerSource: 'event', attempts: 0, coolingDefers: 1 }),
+        });
+
+        await worker.promoteDueRetries(redis);
+
+        expect(redis._zset(R.runQueueRetry).size).toBe(0);
+        expect(redis._list(R.runQueuePending)).toHaveLength(1);
+        expect(JSON.parse(redis._list(R.runQueuePending)[0]).runId).toBe('r7');
     });
 });

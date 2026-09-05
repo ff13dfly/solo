@@ -43,7 +43,21 @@ module.exports = {
         // toFix §6.2① — at-most-once trigger guard per (event, workflow). The matcher
         // acks AFTER enqueue, so a crash between the two re-delivers the event; this
         // SETNX stops the re-delivery double-firing the workflow.
-        firedGuardPrefix:   'ORCHESTRATOR:FIRED:'
+        firedGuardPrefix:   'ORCHESTRATOR:FIRED:',
+
+        // Parked inbound events (list, newest at head — same shape as runQueueDeadletter).
+        // @why An event whose ONLY subscribers are not ACTIVE yet (PENDING_REVIEW, or a
+        //   revision awaiting re-approval) used to be xAck'd with nothing enqueued: the
+        //   matcher loops over `workflows` and acks OUTSIDE that loop, so an empty match
+        //   set acked the entry as if it had been delivered. That is the whole window in
+        //   which a workflow is being put live or revised — i.e. every rollout — and it
+        //   left no run, no DLQ row, no trace at all.
+        //   Parking keeps the envelope until a subscriber can take it.
+        //   ⚠️ NOT solved by "just don't ack": this matcher only ever reads with id '>'
+        //   and there is no XAUTOCLAIM/XCLAIM anywhere, so an un-acked entry is stranded
+        //   in the PEL forever — worse than acking, since acked entries at least remain
+        //   in the (untrimmed) stream. Ack + park is the only shape that actually works.
+        eventParkQueue:     'ORCHESTRATOR:EVENTQ:PARKED'
     },
 
     // Where auto→human governance alerts (a run paused awaiting a grant) are delivered.
@@ -81,6 +95,14 @@ module.exports = {
         extraStreams:  (process.env.ORCH_CONSUMER_STREAMS || '').split(',').filter(Boolean),
         // Fired-guard TTL — same horizon as the Router's event dedup window.
         firedGuardTtlSec: parseInt(process.env.EVENT_DEDUP_TTL_SEC || '3600', 10),
+        // Hard cap on the parked-event list (oldest dropped past this), and how many
+        // parked entries one consume cycle will try to release. Bounded like every other
+        // queue here — an unbounded park list is just a slower leak.
+        parkMaxLen:       parseInt(process.env.ORCH_EVENT_PARK_MAXLEN || '1000', 10),
+        parkReleaseBatch: parseInt(process.env.ORCH_EVENT_PARK_BATCH || '100', 10),
+        // How long a parked event waits for a subscriber before it is dropped. A workflow
+        // that never comes back ACTIVE must not pin its events forever.
+        parkTtlMs:        parseInt(process.env.ORCH_EVENT_PARK_TTL_MS || String(7 * 24 * 60 * 60 * 1000), 10),
     },
 
     // event.md §5 — async execution worker. Async triggers (event/cron) enqueue
@@ -104,6 +126,16 @@ module.exports = {
         // process restart instead of resetting to zero. Past this cap the run stops auto-retrying
         // that compensation and requires a human — see runner.js's runCompensations().
         compensationMaxAttempts: parseInt(process.env.RUN_COMPENSATION_MAX_ATTEMPTS || '3', 10),
+        // Cooling deferrals are a SEPARATE axis from `attempts`/maxRetries: a cooling
+        // rejection is not a failure, it is "too early", and it carries a known release
+        // instant. Counting it against the exponential-backoff budget would burn all 5
+        // attempts inside a 24h cooling window and dead-letter the event anyway — the
+        // exact bug this cap exists NOT to reintroduce. Only a workflow whose effective_at
+        // keeps moving forward (repeated re-approval) can exhaust this.
+        maxCoolingDefers: parseInt(process.env.RUN_MAX_COOLING_DEFERS || '5', 10),
+        // Manual revivals of a dead-lettered run (run.revive). Bounded so a genuinely
+        // broken run cannot be looped through the queue forever by a script.
+        maxRevives: parseInt(process.env.RUN_MAX_REVIVES || '3', 10),
     },
 
     

@@ -323,8 +323,68 @@ module.exports = (redis, { relay, runner, run = null, control = null } = {}) => 
         return stalled;
     }
 
+    /**
+     * Is this rejection merely EARLY? Returns the instant it stops being early, else null.
+     *
+     * @why A high-risk workflow becomes ACTIVE with an `effective_at` cooling period, and
+     *      runner.js rejects with FORBIDDEN until then. FORBIDDEN is not retryable, so every
+     *      real trigger inside that window was dead-lettered with attempts:0 — for the default
+     *      24h cooling that is "every event for a day after any rollout", silently.
+     *      "Business rejection" conflated two different things: a PERMANENT no (footprint
+     *      violation, DEPRECATED workflow — retrying is pointless) and a TEMPORARY no that
+     *      carries its own release instant. The clean criterion: a rejection that names WHEN
+     *      it stops applying is not permanent.
+     *      Read from the workflow doc rather than parsing the error string — jsonrpc errors
+     *      here are {code, message} only, and re-deriving a timestamp by regex over a human
+     *      message is exactly the kind of coupling that breaks silently.
+     */
+    async function coolingDeferUntil(cmd) {
+        try {
+            const wf = await redis.json.get(`${R.workflowPrefix}${cmd.workflowId}`);
+            const at = wf && wf.effective_at;
+            if (Number.isFinite(at) && at > Date.now()) return at;
+        } catch (e) {
+            logger.warn('cooling check failed (treating as permanent):', e.message);
+        }
+        return null;
+    }
+
     async function handleThrown(client, cmd, err) {
         if (!isRetryable(err)) {
+            // Early, not wrong: park the command until the cooling period ends.
+            const defers = cmd.coolingDefers || 0;
+            if (defers < W.maxCoolingDefers) {
+                const until = await coolingDeferUntil(cmd);
+                if (until) {
+                    // Jitter so a burst of events parked behind one effective_at does not
+                    // wake as a thundering herd on the same millisecond.
+                    const dueAt = until + Math.floor(Math.random() * 1000);
+                    await client.zAdd(R.runQueueRetry, {
+                        score: dueAt,
+                        // `attempts` is deliberately NOT incremented: cooling is a separate
+                        // axis from failure backoff. Counting it would burn all maxRetries
+                        // inside the window and dead-letter the event anyway.
+                        value: JSON.stringify({ ...cmd, coolingDefers: defers + 1 }),
+                    });
+                    logger.warn('run.deferred.cooling', {
+                        workflowId: cmd.workflowId, runId: cmd.runId,
+                        dueAt: new Date(dueAt).toISOString(), defers: defers + 1, reason: err.message,
+                    });
+                    // processOne already created the run doc as RUNNING. Leaving it RUNNING
+                    // would let scanStalledRuns flip it STALLED in 10 minutes and page ops
+                    // with a false "worker died mid-run" story.
+                    if (run && cmd.runId) {
+                        await run.defer(cmd.runId, { until, reason: err.message })
+                            .catch(e => logger.warn('run.defer failed:', e.message));
+                    }
+                    return;
+                }
+            } else {
+                logger.error('run.cooling.defers_exhausted', {
+                    workflowId: cmd.workflowId, runId: cmd.runId, defers,
+                });
+            }
+
             // A non-retryable error here is a CLIENT/gate rejection (a real jsonrpc code that
             // is NOT -32603 — e.g. cooling-period / footprint / status FORBIDDEN), thrown
             // before any side-effect. It's an expected business rejection, NOT a system fault,

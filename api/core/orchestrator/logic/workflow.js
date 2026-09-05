@@ -411,7 +411,8 @@ module.exports = (redis, { serviceName, relay } = {}) => {
          */
         async update({ id, name, desc, category, priority, tags, examples, negative, keywords,
                     required_inputs, optional_inputs, synonyms, allowed_triggers, steps, resolvers,
-                    event_subscriptions, input_schema, strict_result, require_actor_permit, expected_version }) {
+                    event_subscriptions, input_schema, strict_result, require_actor_permit, expected_version,
+                    revise = false }) {
             if (!id) throw jsonrpc.MISSING_PARAM('id');
 
             // Validate steps shape once, outside the CAS retry loop (pure input check).
@@ -447,9 +448,27 @@ module.exports = (redis, { serviceName, relay } = {}) => {
                 // Freeze executable fields on ACTIVE workflows — approval gate must not be bypassed.
                 // require_actor_permit is in this set: flipping the actor gate OFF on a live
                 // workflow would silently widen who can trigger it, past what was approved.
+                //
+                // `revise: true` opts into the supported alternative: keep the workflow (and
+                // therefore its event_subscriptions) and send it back through review, instead
+                // of the only path that existed before — delete → create → approve.
+                // @why that mattered: a deleted workflow is not a subscriber, so every event
+                //   on its stream during the rebuild had no subscriber at all and was acked
+                //   into nothing. Revising in place keeps a PENDING_REVIEW subscriber alive,
+                //   which is exactly what matcher.js parks events for.
+                // @why still a flag (fulfillment's profile.update re-opens review with no flag):
+                //   there, re-review freezes instances — visible and inert. Here it takes a
+                //   live event consumer offline for the length of review + cooling. That is
+                //   not something an update() call should do because a field was passed by
+                //   accident; the caller says so.
                 const isActive = existing.status === 'ACTIVE';
-                if (isActive && (steps !== undefined || resolvers !== undefined || require_actor_permit !== undefined)) {
-                    throw jsonrpc.FORBIDDEN('Workflow locked');
+                const execEdit = steps !== undefined || resolvers !== undefined || require_actor_permit !== undefined;
+                if (isActive && execEdit && revise !== true) {
+                    throw jsonrpc.FORBIDDEN(
+                        'Workflow locked: executable fields (steps/resolvers/require_actor_permit) are frozen while ACTIVE. ' +
+                        'Pass revise:true to edit it in place — the workflow returns to PENDING_REVIEW (keeping its ' +
+                        'event_subscriptions, so inbound events are parked rather than dropped) and must be re-approved.'
+                    );
                 }
 
                 const next = { ...existing };
@@ -486,6 +505,15 @@ module.exports = (redis, { serviceName, relay } = {}) => {
                     withRiskClassification(next);
                     delete next.gateId;
                     delete next.effective_at;
+
+                    // An in-place revision of a LIVE workflow: it stops being runnable until
+                    // re-approved. Collected signatures are void — they signed the old digest.
+                    if (isActive && execEdit) {
+                        next.status = 'PENDING_REVIEW';
+                        next.approvals = [];
+                        next.revisionOf = existing.version || 0;
+                        next.revisedAt = Date.now();
+                    }
                 }
 
                 next.version = (existing.version || 0) + 1;

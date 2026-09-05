@@ -27,6 +27,8 @@ function makeFakeRedis(initDocs = {}) {
     const docs = { ...initDocs };
     const sets = {};   // key -> Set(member)
     const kv   = {};   // key -> string (fired-guard SETNX, toFix §6.2①)
+    const lists = {};  // key -> array (parked-event queue; index 0 = newest, lPush)
+    const streams = {};// key -> [{ id, message }] (xRange source for replay)
     const WF = config.redis.workflowPrefix;
     const WF_IDX = config.redis.workflowIndex;
     // matcher 现用 SMEMBERS(非 KEYS)发现 workflow → 任何 workflow doc 写入都维护 id 索引.
@@ -53,6 +55,19 @@ function makeFakeRedis(initDocs = {}) {
             return 'OK';
         },
         async del(key) { delete kv[key]; return 1; },
+        // Lists (parked-event queue) + xRange (admin replay).
+        async lPush(key, val)          { (lists[key] ||= []).unshift(val); return lists[key].length; },
+        async lLen(key)                { return (lists[key] || []).length; },
+        async lRange(key, start, stop) { return (lists[key] || []).slice(start, stop === -1 ? undefined : stop + 1); },
+        async lTrim(key, start, stop)  { lists[key] = (lists[key] || []).slice(start, stop === -1 ? undefined : stop + 1); return 'OK'; },
+        async lRem(key, _count, val)   {
+            const arr = lists[key] || []; const i = arr.indexOf(val);
+            if (i >= 0) arr.splice(i, 1);
+            return i >= 0 ? 1 : 0;
+        },
+        async xRange(key, _from, _to, _opts) { return streams[key] || []; },
+        _lists: lists,
+        _streams: streams,
         _kv: kv,
         duplicate() { return this; },
         async connect() {},
@@ -62,15 +77,28 @@ function makeFakeRedis(initDocs = {}) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Fake stream client (simulates xReadGroup returning preset results)
 // ─────────────────────────────────────────────────────────────────────────────
-function makeFakeClient(xReadGroupResult = null) {
+function makeFakeClient(xReadGroupResult = null, redis = null) {
     const created = [];
     const acked   = [];
+    // park()/releaseParked() run against the CLIENT (the duplicated stream connection),
+    // so it must share list storage with the fake redis or the two see different queues.
+    const lists = redis ? redis._lists : {};
     return {
         async xGroupCreate(stream, group, id, opts) { created.push({ stream, group }); },
         async xReadGroup(_g, _n, _streams, _opts)   { return xReadGroupResult; },
         async xAck(stream, group, id)               { acked.push({ stream, group, id }); return 1; },
+        async lPush(key, val)          { (lists[key] ||= []).unshift(val); return lists[key].length; },
+        async lLen(key)                { return (lists[key] || []).length; },
+        async lRange(key, start, stop) { return (lists[key] || []).slice(start, stop === -1 ? undefined : stop + 1); },
+        async lTrim(key, start, stop)  { lists[key] = (lists[key] || []).slice(start, stop === -1 ? undefined : stop + 1); return 'OK'; },
+        async lRem(key, _count, val)   {
+            const arr = lists[key] || []; const i = arr.indexOf(val);
+            if (i >= 0) arr.splice(i, 1);
+            return i >= 0 ? 1 : 0;
+        },
         _created: created,
         _acked:   acked,
+        _lists:   lists,
     };
 }
 
@@ -94,7 +122,7 @@ function makeMatcher(docs = {}, xResult = null) {
     const enqueued = [];
     const worker = { enqueue: async (cmd) => enqueued.push(cmd) };
     const matcher = createMatcher(redis, { config, worker });
-    const client = makeFakeClient(xResult);
+    const client = makeFakeClient(xResult, redis);
     return { matcher, client, enqueued, redis };
 }
 
@@ -150,13 +178,27 @@ describe('discoverStreams', () => {
         expect(streams.length).toBe(2);
     });
 
-    test('skips non-ACTIVE workflows', async () => {
+    // 2026-09-05 — docs/feedback/done/event-triggered-workflow-lifecycle-drops-events.md §2.1.
+    // PENDING_REVIEW now DOES contribute its stream, deliberately: xGroupCreate uses '$', so a
+    // consumer group born only at approve time silently skips every event emitted during
+    // review. Creating it at workflow-create time is what makes those events parkable at all.
+    test('INCLUDES PENDING_REVIEW subscribers (group must exist before approval)', async () => {
         const docs = {
             [`${WF}wf_pending`]: { ...activeWf('wf_pending', [{ stream: 'EVENT:X' }]), status: 'PENDING_REVIEW' },
         };
         const { matcher } = makeMatcher(docs);
+        expect(await matcher.discoverStreams()).toContain('EVENT:X');
+    });
+
+    test('still skips statuses that are never coming back (REJECTED/DELETED/DEPRECATED)', async () => {
+        const docs = {
+            [`${WF}wf_r`]: { ...activeWf('wf_r', [{ stream: 'EVENT:R' }]), status: 'REJECTED' },
+            [`${WF}wf_d`]: { ...activeWf('wf_d', [{ stream: 'EVENT:D' }]), status: 'DELETED' },
+            [`${WF}wf_x`]: { ...activeWf('wf_x', [{ stream: 'EVENT:P' }]), status: 'DEPRECATED' },
+        };
+        const { matcher } = makeMatcher(docs);
         const streams = await matcher.discoverStreams();
-        expect(streams).not.toContain('EVENT:X');
+        expect(streams).toEqual([]);
     });
 
     test('returns empty when no workflows', async () => {
@@ -512,5 +554,174 @@ describe('loop — idle pacing when no streams subscribed', () => {
         // Pre-fix this was in the thousands; assert a generous ceiling well below that.
         expect(sMembersCalls).toBeGreaterThan(0);
         expect(sMembersCalls).toBeLessThan(30);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. Rollout window — park instead of drop
+//    docs/feedback/done/event-triggered-workflow-lifecycle-drops-events.md §2.1
+//
+//    The reported failure: matcher acks OUTSIDE the `for (const wf of workflows)` loop,
+//    so an event whose only subscriber was still under review was acked with nothing
+//    enqueued — no run, no DLQ row, no trace. That is the whole window in which a
+//    workflow is put live or revised, i.e. every rollout.
+// ─────────────────────────────────────────────────────────────────────────────
+function pendingWf(id, subs) {
+    return { ...activeWf(id, subs), status: 'PENDING_REVIEW' };
+}
+const PARK_KEY = config.redis.eventParkQueue;
+const oneEvent = (stream, id, message) => ([{ name: stream, messages: [{ id, message }] }]);
+
+describe('consumeOnce — parking (subscriber exists but is not ACTIVE yet)', () => {
+    test('parks the envelope and STILL acks (never leave it in the PEL)', async () => {
+        // Not acking is not an option: this matcher only ever reads with id '>' and there is
+        // no XAUTOCLAIM/XCLAIM anywhere, so an un-acked entry is stranded forever.
+        const docs = { [`${WF}wf_p`]: pendingWf('wf_p', [{ stream: 'EVENT:D' }]) };
+        const { matcher, client, enqueued, redis } = makeMatcher(
+            docs, oneEvent('EVENT:D', '1-1', { type: 'x', payload: '{"a":1}' }));
+
+        await matcher.consumeOnce(client);
+
+        expect(enqueued).toHaveLength(0);
+        expect(client._acked).toHaveLength(1);
+        const parked = redis._lists[PARK_KEY];
+        expect(parked).toHaveLength(1);
+        const rec = JSON.parse(parked[0]);
+        expect(rec).toMatchObject({ stream: 'EVENT:D', entryId: '1-1', waitingFor: ['wf_p'] });
+    });
+
+    test('does NOT park when nobody subscribes to that event (pub/sub semantics)', async () => {
+        // A workflow on ANOTHER stream keeps knownStreams non-empty so the read actually
+        // happens (with zero streams consumeOnce short-circuits before xReadGroup).
+        const docs = { [`${WF}wf_other`]: activeWf('wf_other', [{ stream: 'EVENT:OTHER' }]) };
+        const { matcher, client, redis } = makeMatcher(
+            docs, oneEvent('EVENT:NOBODY', '1-1', { type: 'x' }));
+        await matcher.consumeOnce(client);
+        expect(client._acked).toHaveLength(1);   // acked and forgotten — correct for pub/sub
+        expect(redis._lists[PARK_KEY] || []).toHaveLength(0);
+    });
+
+    test('does NOT park when an ACTIVE subscriber already took it', async () => {
+        const docs = {
+            [`${WF}wf_a`]: activeWf('wf_a', [{ stream: 'EVENT:D' }]),
+            [`${WF}wf_p`]: pendingWf('wf_p', [{ stream: 'EVENT:D' }]),
+        };
+        const { matcher, client, enqueued, redis } = makeMatcher(
+            docs, oneEvent('EVENT:D', '1-1', { type: 'x' }));
+        await matcher.consumeOnce(client);
+        expect(enqueued.map(c => c.workflowId)).toEqual(['wf_a']);
+        expect(redis._lists[PARK_KEY] || []).toHaveLength(0);
+    });
+
+    test('a filter that does not match is not "waiting" — no park', async () => {
+        const docs = { [`${WF}wf_p`]: pendingWf('wf_p', [{ stream: 'EVENT:D', filter: { type: 'other' } }]) };
+        const { matcher, client, redis } = makeMatcher(
+            docs, oneEvent('EVENT:D', '1-1', { type: 'x' }));
+        await matcher.consumeOnce(client);
+        expect(redis._lists[PARK_KEY] || []).toHaveLength(0);
+    });
+});
+
+describe('releaseParked — the subscriber goes ACTIVE', () => {
+    async function parkOne() {
+        const docs = { [`${WF}wf_p`]: pendingWf('wf_p', [{ stream: 'EVENT:D' }]) };
+        const ctx = makeMatcher(docs, oneEvent('EVENT:D', '1-1', { type: 'x', payload: '{"a":1}' }));
+        await ctx.matcher.consumeOnce(ctx.client);
+        expect(ctx.redis._lists[PARK_KEY]).toHaveLength(1);
+        return ctx;
+    }
+
+    test('approval releases the parked event with trigger/input intact', async () => {
+        const { matcher, client, enqueued, redis } = await parkOne();
+
+        await redis.json.set(`${WF}wf_p`, '$', activeWf('wf_p', [{ stream: 'EVENT:D' }]));
+        const released = await matcher.releaseParked(client);
+
+        expect(released).toBe(1);
+        expect(redis._lists[PARK_KEY]).toHaveLength(0);
+        expect(enqueued).toHaveLength(1);
+        // triggerId must survive: it is what makes the downstream idempotency keys line up.
+        expect(enqueued[0]).toMatchObject({
+            workflowId: 'wf_p', triggerSource: 'event:EVENT:D', triggerId: '1-1', input: { a: 1 },
+        });
+    });
+
+    test('still waiting → stays parked (does not drop, does not double-enqueue)', async () => {
+        const { matcher, client, enqueued, redis } = await parkOne();
+        expect(await matcher.releaseParked(client)).toBe(0);
+        expect(redis._lists[PARK_KEY]).toHaveLength(1);
+        expect(enqueued).toHaveLength(0);
+    });
+
+    test('subscriber rejected → dropped (nobody is ever coming for it)', async () => {
+        const { matcher, client, redis } = await parkOne();
+        await redis.json.set(`${WF}wf_p`, '$', { ...pendingWf('wf_p', [{ stream: 'EVENT:D' }]), status: 'REJECTED' });
+        await matcher.releaseParked(client);
+        expect(redis._lists[PARK_KEY]).toHaveLength(0);
+    });
+
+    test('park TTL exceeded → dropped even though a subscriber is still under review', async () => {
+        const { matcher, client, redis } = await parkOne();
+        const rec = JSON.parse(redis._lists[PARK_KEY][0]);
+        rec.parkedAt = Date.now() - (config.consumer.parkTtlMs + 1000);
+        redis._lists[PARK_KEY][0] = JSON.stringify(rec);
+        await matcher.releaseParked(client);
+        expect(redis._lists[PARK_KEY]).toHaveLength(0);
+    });
+
+    test('empty queue is one LLEN and no workflow scan', async () => {
+        const { matcher, client, redis } = makeMatcher({});
+        let sMembers = 0;
+        const real = redis.sMembers.bind(redis);
+        redis.sMembers = async (k) => { sMembers++; return real(k); };
+        expect(await matcher.releaseParked(client)).toBe(0);
+        expect(sMembers).toBe(0);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. replayRange — recovery for events dropped before the park queue existed
+// ─────────────────────────────────────────────────────────────────────────────
+describe('replayRange', () => {
+    test('re-matches a stream range and enqueues for ACTIVE subscribers', async () => {
+        const docs = { [`${WF}wf_a`]: activeWf('wf_a', [{ stream: 'EVENT:D' }]) };
+        const { matcher, enqueued, redis } = makeMatcher(docs);
+        redis._streams['EVENT:D'] = [
+            { id: '1-1', message: { type: 'x', event_id: 'e1', payload: '{"n":1}' } },
+            { id: '2-1', message: { type: 'x', event_id: 'e2', payload: '{"n":2}' } },
+        ];
+
+        const r = await matcher.replayRange({ stream: 'EVENT:D' });
+
+        expect(r).toMatchObject({ scanned: 2, enqueued: 2, suppressed: 0, unmatched: 0 });
+        expect(enqueued.map(c => c.input.n)).toEqual([1, 2]);
+        expect(enqueued.map(c => c.triggerId)).toEqual(['1-1', '2-1']);
+    });
+
+    test('an event this workflow already ran is SUPPRESSED, never double-fired', async () => {
+        // The dedup guard is the reason an admin recovery tool cannot re-trigger live
+        // side effects; replay reports it instead of bypassing it.
+        const docs = { [`${WF}wf_a`]: activeWf('wf_a', [{ stream: 'EVENT:D' }]) };
+        const { matcher, enqueued, redis } = makeMatcher(docs);
+        redis._streams['EVENT:D'] = [{ id: '1-1', message: { type: 'x', event_id: 'e1' } }];
+
+        await matcher.replayRange({ stream: 'EVENT:D' });
+        const second = await matcher.replayRange({ stream: 'EVENT:D' });
+
+        expect(second).toMatchObject({ scanned: 1, enqueued: 0, suppressed: 1 });
+        expect(enqueued).toHaveLength(1);
+    });
+
+    test('subscriber still under review → unmatched (replay does not bypass the gate)', async () => {
+        const docs = { [`${WF}wf_p`]: pendingWf('wf_p', [{ stream: 'EVENT:D' }]) };
+        const { matcher, enqueued, redis } = makeMatcher(docs);
+        redis._streams['EVENT:D'] = [{ id: '1-1', message: { type: 'x' } }];
+        expect(await matcher.replayRange({ stream: 'EVENT:D' })).toMatchObject({ unmatched: 1, enqueued: 0 });
+        expect(enqueued).toHaveLength(0);
+    });
+
+    test('requires a stream', async () => {
+        const { matcher } = makeMatcher({});
+        await expect(matcher.replayRange({})).rejects.toThrow(/stream required/);
     });
 });

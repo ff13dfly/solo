@@ -59,7 +59,7 @@ const WORKFLOW_DOC = [
 const RUN_DOC = [
     { name: 'id',            type: 'string', required: true },
     { name: 'workflowId',    type: 'string', required: true },
-    { name: 'status',        type: 'string', required: true },   // RUNNING|DONE|FAILED|STALLED|PAUSED_AWAITING_HUMAN|RESUMING|ABORTED|DEADLETTER
+    { name: 'status',        type: 'string', required: true },   // RUNNING|DONE|FAILED|STALLED|PAUSED_AWAITING_HUMAN|RESUMING|ABORTED|DEADLETTER|DEFERRED_COOLING
     { name: 'input',         type: 'object' },
     { name: 'triggerSource', type: 'string' },                   // nullable
     { name: 'triggerId',     type: 'string' },                   // nullable
@@ -232,6 +232,41 @@ const methods = [
         ai: false
     },
     {
+        name: 'orchestrator.run.revive',
+        params: [
+            { name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id' }
+        ],
+        returns_schema: [
+            { name: 'ok',      type: 'boolean', required: true },
+            { name: 'runId',   type: 'string',  required: true },
+            { name: 'status',  type: 'string',  required: true },
+            { name: 'revives', type: 'number',  required: true },
+        ],
+        description: 'Overturn a DEADLETTER run and re-queue it — same idempotency/actor threading as run.retry, bounded by a revive cap (admin)',
+        ai: false
+    },
+    {
+        name: 'orchestrator.event.replay',
+        params: [
+            { name: 'stream', type: 'string', required: true, maxLength: 128 },
+            // Redis stream range ids: '-'/'+' or '<ms>-<seq>'. Kept as opaque strings.
+            { name: 'from',   type: 'string', required: false, maxLength: 64 },
+            { name: 'to',     type: 'string', required: false, maxLength: 64 },
+            { name: 'limit',  type: 'number', required: false },
+        ],
+        returns_schema: [
+            { name: 'stream',     type: 'string', required: true },
+            { name: 'from',       type: 'string', required: true },
+            { name: 'to',         type: 'string', required: true },
+            { name: 'scanned',    type: 'number', required: true },
+            { name: 'enqueued',   type: 'number', required: true },
+            { name: 'suppressed', type: 'number', required: true },
+            { name: 'unmatched',  type: 'number', required: true },
+        ],
+        description: 'Re-match a range of an EVENT:* stream and enqueue runs for ACTIVE subscribers — recovers events dropped before the park queue existed; dedup guard still applies (admin)',
+        ai: false
+    },
+    {
         name: 'orchestrator.run.trace',
         params: [
             { name: 'runId', type: 'string', maxLength: 64, pattern: 'id' },
@@ -364,7 +399,8 @@ const methods = [
             { name: 'input_schema', type: 'array', required: false },
             { name: 'strict_result', type: 'boolean', required: false },
             { name: 'require_actor_permit', type: 'boolean', required: false },
-            { name: 'expected_version', type: 'number', required: false }
+            { name: 'expected_version', type: 'number', required: false },
+            { name: 'revise', type: 'boolean', required: false }
         ],
         returns_schema: WORKFLOW_DOC,
         description: 'Update an existing workflow',

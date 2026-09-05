@@ -10,6 +10,9 @@ export function runStatusBadge(status: RunStatus) {
     RESUMING:               'border-accent/30 text-accent/70 bg-accent/5',
     ABORTED:                'border-border text-text-secondary bg-white/5',
     DEADLETTER:             'border-error/40 text-error bg-error/10',
+    // Not a failure — the workflow is ACTIVE but still inside its approval cooling
+    // period, so the command waits in the retry queue until effective_at.
+    DEFERRED_COOLING:       'border-warning/30 text-warning/80 bg-warning/5',
   };
   return `text-[10px] px-1.5 py-0.5 border rounded font-mono ${map[status] || ''}`;
 }

@@ -519,3 +519,89 @@ describe('submission surface — create/update store event_subscriptions + input
             .rejects.toMatchObject({ code: -32005 });
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// In-place revision — docs/feedback/done/event-triggered-workflow-lifecycle-drops-events.md §2.1
+//
+// Reported: the only way to change `steps` on a live workflow was delete → create →
+// approve. A DELETED workflow is not a subscriber, so every event on its stream during
+// the rebuild matched nothing and was acked into nothing. Revising in place keeps a
+// PENDING_REVIEW subscriber alive, which is what the matcher parks events for.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('workflow.update — revise an ACTIVE workflow in place', () => {
+    let h;
+    beforeEach(async () => { h = await createHarness(); });
+    afterEach(async () => { await h.stop(); });
+
+    const SUBS = [{ stream: 'EVENT:WEBHOOK:DESIGNER' }];
+    async function liveWorkflow(id) {
+        await h.createWorkflow({
+            id, category: 'test', name: 'live', desc: 'x',
+            steps: [{ id: 's1', service: 'planner', method: 'planner.task.get', params: {} }],
+            event_subscriptions: SUBS,
+        });
+        await h.logic.workflow.approve({ id }, 'approver-1');   // → ACTIVE
+        return id;
+    }
+
+    test('without revise:true it is still locked — and the error names the way out', async () => {
+        const id = await liveWorkflow('wf_rev_frozen2');
+        await expect(h.logic.workflow.update({
+            id, steps: [{ id: 's2', service: 'planner', method: 'planner.task.list', params: {} }],
+        })).rejects.toMatchObject({
+            code: -32005,
+            message: expect.stringMatching(/revise:true/),
+        });
+        expect((await h.logic.workflow.get({ id })).status).toBe('ACTIVE');
+    });
+
+    test('revise:true → PENDING_REVIEW, approvals void, subscriptions KEPT', async () => {
+        const id = await liveWorkflow('wf_rev_ok');
+        const before = await h.logic.workflow.get({ id });
+        expect(before.approvals.length).toBe(1);
+
+        const updated = await h.logic.workflow.update({
+            id, revise: true,
+            steps: [{ id: 's2', service: 'planner', method: 'planner.task.list', params: {} }],
+        });
+
+        expect(updated.status).toBe('PENDING_REVIEW');
+        expect(updated.approvals).toEqual([]);           // they signed the old digest
+        expect(updated.revisionOf).toBe(before.version);
+        expect(updated.gateId).toBeUndefined();
+        expect(updated.effective_at).toBeUndefined();
+        // The whole point: it is still a subscriber, so inbound events are parkable
+        // instead of landing on a stream nobody is listening to.
+        expect(updated.event_subscriptions).toEqual(SUBS);
+        expect(updated.steps[0].id).toBe('s2');
+    });
+
+    test('re-approval puts the revised definition back ACTIVE', async () => {
+        const id = await liveWorkflow('wf_rev_recheck');
+        await h.logic.workflow.update({
+            id, revise: true,
+            steps: [{ id: 's2', service: 'planner', method: 'planner.task.list', params: {} }],
+        });
+        await h.logic.workflow.approve({ id }, 'approver-2');
+        const after = await h.logic.workflow.get({ id });
+        expect(after.status).toBe('ACTIVE');
+        expect(after.steps[0].id).toBe('s2');
+    });
+
+    test('revise:true on a metadata-only edit does NOT knock it offline', async () => {
+        // The flag says "I am prepared to go back through review", not "do it now".
+        // A name/desc edit was never frozen and must stay a plain update.
+        const id = await liveWorkflow('wf_rev_meta');
+        const updated = await h.logic.workflow.update({ id, revise: true, desc: 'just a note' });
+        expect(updated.status).toBe('ACTIVE');
+        expect(updated.desc).toBe('just a note');
+    });
+
+    test('revise:true does not resurrect a DELETED or DEPRECATED workflow', async () => {
+        const id = await liveWorkflow('wf_rev_del');
+        await h.logic.workflow.delete({ id });
+        await expect(h.logic.workflow.update({
+            id, revise: true, steps: [{ id: 's2', service: 'planner', method: 'planner.task.list', params: {} }],
+        })).rejects.toMatchObject({ code: -32005 });
+    });
+});

@@ -249,6 +249,26 @@ app.post('/jsonrpc', async (req, res) => {
                     await Methods.worker.enqueue(cmd);   // re-enqueue with the SAME runId + triggerId
                     return { ok: true, runId: updated.id, status: updated.status };
                 },
+                // Overturn a DEADLETTER run (human reverses a gate rejection). Same machinery
+                // as retry — the difference is which verdict is being reversed, and that shows
+                // up in the audit trail (revivedBy vs requeuedBy). Admin-only.
+                'orchestrator.run.revive': async (p) => {
+                    if (!isAdmin) throw jsonrpc.UNAUTHORIZED();
+                    const { run: updated, cmd } = await Methods.run.revive({ id: p && p.id, byUid: req.user });
+                    await Methods.worker.enqueue(cmd);
+                    return { ok: true, runId: updated.id, status: updated.status, revives: updated.revives };
+                },
+                // Re-run event matching over a range of an EVENT:* stream and enqueue for the
+                // ACTIVE subscribers. Recovery for events that were dropped before this
+                // version's park queue existed, or that predate their consumer group (created
+                // at '$'). The fired-guard still applies, so an event a workflow already ran
+                // within the dedup window comes back as `suppressed`, never double-fired.
+                // Admin-only.
+                'orchestrator.event.replay': async (p) => {
+                    if (!isAdmin) throw jsonrpc.UNAUTHORIZED();
+                    if (!Methods.matcher) throw jsonrpc.SERVICE_NOT_READY();
+                    return Methods.matcher.replayRange(p || {});
+                },
                 // toFix.md "执行轨迹持久化" — per-step trace log (file-backed, trace-audit.js).
                 'orchestrator.run.trace': async (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.traceAudit.recent(p || {}); },
                 'orchestrator.workflow.categories': () => Methods.workflow.categories(),

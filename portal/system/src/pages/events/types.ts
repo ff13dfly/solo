@@ -18,7 +18,7 @@ export interface Schedule {
   last_fired_at: number | null;
 }
 
-export type RunStatus = 'RUNNING' | 'DONE' | 'FAILED' | 'STALLED' | 'PAUSED_AWAITING_HUMAN' | 'RESUMING' | 'ABORTED' | 'DEADLETTER';
+export type RunStatus = 'RUNNING' | 'DONE' | 'FAILED' | 'STALLED' | 'PAUSED_AWAITING_HUMAN' | 'RESUMING' | 'ABORTED' | 'DEADLETTER' | 'DEFERRED_COOLING';
 
 export interface Run {
   id: string;

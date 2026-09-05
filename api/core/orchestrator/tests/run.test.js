@@ -143,3 +143,108 @@ describe('run entity — checkpoint + requeue', () => {
         expect(new Set(runs.map((r) => r.id)).size).toBe(total); // 无重复
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// revive + defer — docs/feedback/done/event-triggered-workflow-lifecycle-drops-events.md
+//
+// Reported: run.list({status:'DEADLETTER'}) could SHOW exactly which business actions
+// never happened, and nothing could make them happen — requeue() hard-rejects anything
+// that is not STALLED. A dead-lettered gate rejection is thrown BEFORE any side effect,
+// so the whole run-command is intact on the doc and replaying it is safe.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('run entity — revive (overturn a DEADLETTER) ', () => {
+    let redis, run;
+    beforeEach(() => { redis = makeFakeRedis(); run = createRun(redis); });
+
+    async function deadRun(id = 'rDead1') {
+        await run.create({
+            runId: id, workflowId: 'wf_x', input: { n: 1 },
+            triggerSource: 'event:EVENT:D', triggerId: '1-1',
+            actor: 'uid-cause', actorSource: 'system.ingress', trace: 'tr-1',
+        });
+        await run.deadletter(id, { error: 'Workflow in cooling period until …' });
+        return id;
+    }
+
+    test('rebuilds the command with triggerId + actor intact (idempotency & actor pre-check)', async () => {
+        const id = await deadRun();
+        const { run: updated, cmd } = await run.revive({ id, byUid: 'uid-ops' });
+
+        expect(updated.status).toBe('RESUMING');
+        expect(updated.revives).toBe(1);
+        expect(updated.revivedBy).toBe('uid-ops');
+        // These two are what make a replay safe rather than a double-fire:
+        // triggerId keeps downstream idempotency keys identical, actor keeps the
+        // require_actor_permit pre-check evaluating the same principal.
+        expect(cmd).toMatchObject({
+            runId: id, workflowId: 'wf_x', input: { n: 1 },
+            triggerSource: 'event:EVENT:D', triggerId: '1-1',
+            actor: 'uid-cause', actorSource: 'system.ingress', trace: 'tr-1',
+        });
+    });
+
+    test('refuses a run that is not DEADLETTER, and points at the right verb', async () => {
+        await run.create({ runId: 'rRun1', workflowId: 'wf', triggerId: 't' });
+        await expect(run.revive({ id: 'rRun1' })).rejects.toMatchObject({
+            code: -32005, message: expect.stringMatching(/Only DEADLETTER runs can be revived/),
+        });
+
+        await run.stall('rRun1', { thresholdMs: -1 });
+        await expect(run.revive({ id: 'rRun1' })).rejects.toMatchObject({
+            code: -32005, message: expect.stringMatching(/run\.retry/),
+        });
+    });
+
+    test('requeue still refuses a DEADLETTER run, and points at revive', async () => {
+        const id = await deadRun('rDead2');
+        await expect(run.requeue({ id })).rejects.toMatchObject({
+            code: -32005, message: expect.stringMatching(/Only STALLED runs can be requeued/),
+        });
+        await expect(run.requeue({ id })).rejects.toMatchObject({
+            code: -32005, message: expect.stringMatching(/run\.revive/),
+        });
+    });
+
+    test('bounded: a broken run cannot be looped through the queue forever', async () => {
+        const id = await deadRun('rDead3');
+        for (let i = 0; i < 2; i++) {
+            await run.revive({ id, maxRevives: 2 });
+            await run.deadletter(id, { error: 'still rejected' });
+        }
+        await expect(run.revive({ id, maxRevives: 2 })).rejects.toMatchObject({
+            code: -32005, message: expect.stringMatching(/already revived 2 time\(s\)/),
+        });
+    });
+
+    test('missing / unknown id', async () => {
+        await expect(run.revive({})).rejects.toMatchObject({ code: -32602 });          // MISSING_PARAM
+        await expect(run.revive({ id: 'nope' })).rejects.toMatchObject({ code: -32002 }); // NOT_FOUND
+    });
+});
+
+describe('run entity — defer (cooling)', () => {
+    let redis, run;
+    beforeEach(() => { redis = makeFakeRedis(); run = createRun(redis); });
+
+    test('DEFERRED_COOLING is invisible to the stall scanner, and resumes via create()', async () => {
+        await run.create({ runId: 'rDef1', workflowId: 'wf', triggerId: 't' });
+        const until = Date.now() + 60_000;
+
+        const deferred = await run.defer('rDef1', { until, reason: 'cooling' });
+        expect(deferred.status).toBe('DEFERRED_COOLING');
+        expect(deferred.deferredUntil).toBe(until);
+        expect(deferred.deferCount).toBe(1);
+
+        // The stall scanner lists status:'RUNNING' — a deferred run must not be in it, or
+        // it gets flagged STALLED in 10 minutes and pages ops with a false crash story.
+        expect((await run.list({ status: 'RUNNING' })).map(r => r.id)).not.toContain('rDef1');
+        expect(await run.stall('rDef1', { thresholdMs: -1 })).toBeNull();
+
+        // When the retry queue fires, create() upserts it back to RUNNING.
+        expect((await run.create({ runId: 'rDef1', workflowId: 'wf' })).status).toBe('RUNNING');
+    });
+
+    test('unknown id is a no-op (never throws inside the worker error path)', async () => {
+        expect(await run.defer('nope', { until: Date.now() })).toBeNull();
+    });
+});

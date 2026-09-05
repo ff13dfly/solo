@@ -11,7 +11,62 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
-_（空）_
+### 事件触发型 workflow 的上线 / 改版窗口不再吃掉事件（2026-09-05）
+
+来源：steward 线上实测（[`../feedback/event-triggered-workflow-lifecycle-drops-events.md`](../feedback/event-triggered-workflow-lifecycle-drops-events.md)）。
+把一条 workflow 上线或改一版，必须依次穿过两个窗口，**两个窗口里的真实触发都被静默吃掉**：
+① 还没批准时没有 ACTIVE 订阅者 ⇒ 匹配为空、**ack 丢弃**，连 run 都没建过；
+② 批准后到 `effective_at` 之间 ⇒ 冷却闸抛 FORBIDDEN，而 FORBIDDEN 不可重试 ⇒ 直接 **DEADLETTER**
+（`attempts:0`），且 `run.requeue` 硬判 STALLED，捞不回来。而"改 `steps`"在 ACTIVE 上是冻结的，
+唯一出路是 delete→create→approve——**必然把两个窗口都走一遍**。窗口②默认长 24 小时
+（`APPROVAL_COOLING_MS_HIGH`），窗口的宿主是**每一个会干实事的 workflow**（`risk.js`：footprint
+里有任何写方法即 HIGH）。调用方全程看到的是 webhook `ok:true` + 工单原地不动。
+
+- **停车而不是丢弃**（`matcher.js`）：一条事件若有订阅者、但订阅者都还不是 ACTIVE
+  （PENDING_REVIEW），信封 **ack + 转存**进 `ORCHESTRATOR:EVENTQ:PARKED`；订阅者一 ACTIVE，
+  下一个消费周期自动释放重投（`triggerId` 原样带走，下游幂等键仍对得上）。有界（MAXLEN +
+  `parkTtlMs`），订阅者被 REJECTED/DELETED 或超期即丢弃。
+  ⚠️ **刻意不是"不 ack"**：matcher 只用 `id:'>'` 读，全仓没有 `XAUTOCLAIM`/`XCLAIM`/pending 重读
+  ——不 ack 会把事件永久钉死在 PEL 里，比 ack 掉更糟（`consumeOnce` 里那句
+  "re-delivered after consumer restart" 的注释本身就是错的）。
+- **消费组提前到 create**（`discoverStreams` 现在也发现 PENDING_REVIEW 的订阅流）：
+  `xGroupCreate` 用 `'$'`，组建在 approve 时就会**静默跳过审批期间的全部事件**。顺带消掉一个
+  更隐蔽的不确定性——`knownStreams` 是只增缓存，此前"同一个操作丢不丢事件取决于中途有没有重启"。
+- **原地改版**（`workflow.update` 新增 `revise: true`）：改 `steps`/`resolvers`/`require_actor_permit`
+  不再一律 `FORBIDDEN('Workflow locked')`，而是回落 PENDING_REVIEW + 清空已收签名 +
+  **保留 `event_subscriptions`**。保留订阅是关键——delete→create 之间没有任何订阅者，
+  停车机制就无从判断"暂时没人"还是"真没人"。默认仍锁着，**要显式传 `revise:true`**：
+  这一步会把一个活的事件消费者下线一整个审批+冷却周期，不该因为顺手多传了个字段就发生。
+- **冷却期是"太早"不是"拒绝"**（`worker.js`）：命令改投 RETRY zset，`score = effective_at`（+抖动），
+  run 落新状态 **`DEFERRED_COOLING`**。`attempts` **不递增**——冷却与失败退避是两条轴，混算会在
+  24h 窗口里耗光 `maxRetries` 然后照样进 DLQ。`effective_at` 从 workflow doc 读，不从错误串正则捞。
+  另有 `maxCoolingDefers` 上限兜住"`effective_at` 被反复推后"。
+- **死信可以翻案**：新增 **`orchestrator.run.revive`**（admin，带 `maxRevives` 上限）。
+  刻意是新动词而非放宽 `requeue`：STALLED 是"卡住了继续跑"，DEADLETTER 是"已判死、人工翻案"，
+  审计含义不同（`revivedBy`/`revivedAt` vs `requeuedBy`/`requeuedAt`）。两者共用 `commandFor()`，
+  所以 `triggerId`/`actor`/`actorSource` 不会只在其中一条路上丢。观测面不新增——
+  `run.list({status:'DEADLETTER'})` 本来就能读。
+- **补捞历史事件**：新增 **`orchestrator.event.replay { stream, from, to, limit }`**（admin）。
+  `EVENT:` 流是无界的（`router/config.js:76` 自注 "xAdd currently unbounded"），`xAck` 也只标记
+  消费不删条目 ⇒ **被丢掉的事件其实都还在**，丢的只是投递。这条命令按 id 区间重跑匹配，
+  把停车机制上线之前丢的、以及建组之前就到达的，都捞得回来。幂等守卫照旧生效：
+  已跑过的事件报 `suppressed`，**不会二次触发副作用**。
+- Portal 的 run 状态集补 `DEFERRED_COOLING`（类型 / 徽章 / 筛选项）。
+
+实测：新增 e2e **`106-workflow-rollout-window`**（真栈四条：park→审批→释放→副作用可见；
+冷却落 `DEFERRED_COOLING` + RETRY zset 且 DLQ 不增；`run.retry` 拒绝并指向 `revive` 而 `revive`
+跑成 DONE；`event.replay` 捞回建组前的事件、二次重放被幂等守卫拦住）。
+全量 e2e **68 套 / 358 passed** 全绿；api CI 白名单 **133 套 / 2220 passed**；
+16 目录 autocheck ERROR=0；simulation 七场景、doc-drift、error-codes、portal tsc 全绿。
+
+下游 action：**三件事**，都不需要改现有 workflow 定义。
+① 新增 Redis 键 `ORCHESTRATOR:EVENTQ:PARKED`（有界，默认上限 1000 / 保留 7 天，
+`ORCH_EVENT_PARK_MAXLEN` · `ORCH_EVENT_PARK_TTL_MS` 可调）。
+② run 多了一个状态 **`DEFERRED_COOLING`**：自建看板/告警若按状态枚举硬编码，加上它——
+它**不是失败**，是"等冷却结束再跑"。同理，冷却期的触发不再出现在 `ORCHESTRATOR:RUNQ:DEADLETTER`
+里，按 DLQ 深度告警的会看到这类条目消失（那正是它们本不该在的地方）。
+③ 想改一条 ACTIVE workflow 的 `steps`，现在传 `revise:true` 即可，不必再 delete→create；
+旧的 delete→create 仍然可用，但**会经历一段没有订阅者的真空**（停车机制救不了那一瞬）。
 
 ---
 

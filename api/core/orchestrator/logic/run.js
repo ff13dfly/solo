@@ -19,6 +19,16 @@
  *   RUNNING → DEADLETTER    (genuine transient failure exhausted maxRetries)
  *   STALLED → RESUMING      (operator re-drives via run.requeue; re-run from the top, with
  *                            idempotency_key making committed steps dedup downstream)
+ *   RUNNING → DEFERRED_COOLING → RUNNING
+ *                           (worker.defer: the workflow is ACTIVE but still inside its
+ *                            approval cooling period. "Too early", not "failed" — the
+ *                            command waits in the RETRY zset until effective_at and comes
+ *                            back on its own. A distinct status because leaving it RUNNING
+ *                            would let the stall scanner flip it STALLED after 10 min and
+ *                            page ops with a false "worker died mid-run" story.)
+ *   DEADLETTER → RESUMING   (operator翻案 via run.revive — see revive() below; distinct from
+ *                            requeue on purpose: STALLED is "it got stuck, keep going",
+ *                            DEADLETTER is "it was judged dead, a human is overturning that")
  *
  * Storage: ORCHESTRATOR:RUN:{id}  (JSON document)
  *          ORCHESTRATOR:RUN:{id}:GRANT  (one-shot grant, cleared after use)
@@ -189,27 +199,83 @@ module.exports = (redis) => {
     // instead of double-committing. SAFE ONLY FOR IDEMPOTENCY-AWARE DOWNSTREAMS (the at-least-once
     // contract). Only STALLED is eligible (RUNNING is in-flight; DONE/FAILED/ABORTED terminal;
     // PAUSED uses grant). Returns { run, cmd } — caller (index.js) re-enqueues, like grant.
+    // The run-command rebuilt from a stored run doc. Everything that makes a re-drive SAFE
+    // lives here: triggerId keeps the downstream idempotency keys identical (already-committed
+    // steps dedup instead of double-firing), and actor/actorSource keep the re-run subject to
+    // the same require_actor_permit pre-check as the original. Shared by requeue() and
+    // revive() so the two can never drift into "one of them replays without idempotency".
+    function commandFor(run) {
+        return {
+            runId: run.id,
+            workflowId: run.workflowId,
+            input: run.input || {},
+            triggerSource: run.triggerSource,
+            triggerId: run.triggerId,            // PRESERVED → re-run idempotency keys match
+            trace: run.trace || null,
+            parentEventId: run.parentEventId || null,
+            actor: run.actor || null,            // PRESERVED → re-run passes the same actor pre-check
+            actorSource: run.actorSource || null,
+        };
+    }
+
     async function requeue({ id, byUid } = {}) {
         if (!id) throw jsonrpc.MISSING_PARAM('id');
         const run = await _load(id);
         if (!run) throw jsonrpc.NOT_FOUND('Run');
         if (run.status !== 'STALLED')
-            throw jsonrpc.FORBIDDEN(`Only STALLED runs can be requeued (status: ${run.status})`);
+            throw jsonrpc.FORBIDDEN(`Only STALLED runs can be requeued (status: ${run.status})` +
+                (run.status === 'DEADLETTER' ? ' — a dead-lettered run is overturned with orchestrator.run.revive' : ''));
         const updated = await _save({ ...run, status: 'RESUMING', requeuedBy: byUid || null, requeuedAt: Date.now() });
-        return {
-            run: updated,
-            cmd: {
-                runId: run.id,
-                workflowId: run.workflowId,
-                input: run.input || {},
-                triggerSource: run.triggerSource,
-                triggerId: run.triggerId,            // PRESERVED → re-run idempotency keys match
-                trace: run.trace || null,
-                parentEventId: run.parentEventId || null,
-                actor: run.actor || null,            // PRESERVED → re-run passes the same actor pre-check
-                actorSource: run.actorSource || null,
-            },
-        };
+        return { run: updated, cmd: commandFor(run) };
+    }
+
+    /**
+     * Overturn a dead-lettered run and put it back on the queue (operator action).
+     *
+     * @why A DEADLETTER run was rejected by a gate BEFORE any side effect (see worker.js
+     *      handleThrown) — the whole run-command is intact on the doc. Until now there was
+     *      no way to act on that: run.list({status:'DEADLETTER'}) could SHOW you exactly
+     *      which business actions never happened, and nothing could make them happen.
+     *      Every cooling-window event was in that state.
+     * @why a separate verb, not a wider requeue(): STALLED means "the worker died, carry on",
+     *      DEADLETTER means "the system judged this dead and a human is reversing that".
+     *      They deserve different audit records — revivedBy/revivedAt vs requeuedBy/requeuedAt.
+     * @attention Bounded by `maxRevives`: a genuinely broken run must not be loopable through
+     *      the queue forever by a retry script.
+     */
+    async function revive({ id, byUid, maxRevives } = {}) {
+        if (!id) throw jsonrpc.MISSING_PARAM('id');
+        const run = await _load(id);
+        if (!run) throw jsonrpc.NOT_FOUND('Run');
+        if (run.status !== 'DEADLETTER')
+            throw jsonrpc.FORBIDDEN(`Only DEADLETTER runs can be revived (status: ${run.status})` +
+                (run.status === 'STALLED' ? ' — a stalled run is re-driven with orchestrator.run.retry' : ''));
+        const cap = Number.isFinite(maxRevives) ? maxRevives : (config.worker && config.worker.maxRevives) || 3;
+        const revives = run.revives || 0;
+        if (revives >= cap)
+            throw jsonrpc.FORBIDDEN(`Run already revived ${revives} time(s) (cap ${cap}) — fix the underlying cause instead of re-queueing`);
+        const updated = await _save({
+            ...run, status: 'RESUMING',
+            revives: revives + 1, revivedBy: byUid || null, revivedAt: Date.now(),
+        });
+        return { run: updated, cmd: commandFor(run) };
+    }
+
+    /**
+     * Park a run that cannot start YET because its workflow is inside the approval cooling
+     * period. Not a failure: the worker re-queues the command to fire at effective_at.
+     * Distinct status so the stall scanner (which lists status:'RUNNING') leaves it alone.
+     */
+    async function defer(id, { until, reason } = {}) {
+        const run = await _load(id);
+        if (!run) return null;
+        return _save({
+            ...run,
+            status: 'DEFERRED_COOLING',
+            deferredUntil: Number.isFinite(until) ? until : null,
+            deferReason: reason || null,
+            deferCount: (run.deferCount || 0) + 1,
+        });
     }
 
     // Transition to DEADLETTER (retries exhausted or non-retriable error).
@@ -311,5 +377,5 @@ module.exports = (redis) => {
         return ids.length;
     }
 
-    return { create, get, pause, done, fail, stall, checkpoint, compensationCheckpoint, deadletter, grant, abort, requeue, getGrant, list, rebuildIndex };
+    return { create, get, pause, done, fail, stall, checkpoint, compensationCheckpoint, deadletter, defer, grant, abort, requeue, revive, getGrant, list, rebuildIndex };
 };
