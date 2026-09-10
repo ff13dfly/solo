@@ -121,3 +121,40 @@ steward 的演示车道 profile：`image_submitted` 有两条分支（confidence
   ⇒ emit 失败一次 = 一张业务工单静默地停在中间状态，没有任何调用方可见的痕迹。
   这条与本文是同一族问题（**写成功了但没人知道发生过什么**），但改法不同（要么重投、
   要么把失败写进 history），所以只作为附注。
+
+---
+
+## 六、处理结论
+
+**2026-09-07 核实：三节事实指控逐条属实。** `advance` 的 `mergedMeta`（`logic/instance.js:73`）
+与不含 `metaUpdate` 的 `entry`（`:106`）一字不差；`update`（`:305-320`）确实没有 `req`、没有 CAS、
+没有 history；`resolveVariables`（`orchestrator/logic/runner.js:491-531`）只解析**值**不解析**键**，
+所以「应用层自己拼 `confidence_${n}`」这条路在 workflow 那一侧确实走不通。
+
+补一条本文没写、但让「像疏漏不像决定」更实锤的：**`index.js:109` 一直在传 `req`**
+（`(p) => Methods.instance.update(p, req)`），只是 logic 的签名没接。
+
+### 落地（v1.2.15）
+
+- ✅ **建议 1：`history[]` 条目带 `meta_update`**（`logic/instance.js`，非空才落）。守卫的**输入**
+  和**输出**（`state`）从此记在同一条里。`cancel`/`hold`/`override` 走的也是 `advance`，
+  于是 `cancel_reason`/`hold_reason` 一并留痕。
+- ✅ **建议 2：`update` 接 `req` 并落 `updatedBy`**，同时 `delete updates.updatedBy`
+  ——出处是 Router 的话，不是调用方能填的字段。introspection 的 `INSTANCE_BASE` 同步声明
+  （typed，not required：未鉴权调用方为 null）。
+- ⏸ **建议 3（乐观锁 `expectedUpdatedAt`）**：本轮不做。它是唯一需要新参数的一条，
+  且现在有了 `updatedBy` + `updatedAt`，「谁最后写的」至少查得出来了——等真出现并发覆盖的
+  实例再上，那时才知道该锁在 `updatedAt` 还是 `meta` 的某个子键上。
+- ❌ **建议 4（`EVENT:FULFILLMENT:META_UPDATED`）**：不做，本文自己也不建议。
+- ⏸ **§五 附带发现（emit 失败静默）**：单独一族，本轮不动。⚠️ 但要指出：steward 那次
+  「派单没被唤起」大概率**不是**这个 catch 的锅——同一时段该栈五个 relay token 全是死的
+  （见 `relay-token-lazy-refresh-dies-when-idle.md`），emit 根本发不出去。
+  真要处理它得连「重投 or 写进 history」一起设计，且得先有一次**排除了 token 因素**的复现。
+
+### 一句没被本文写出来、但值得单记的
+
+本文最有价值的半句在 §三：同一个项目里，**人自己写的那半（探针按尝试次数编号 `publishOutcome_1/2`）
+刻意做对了，框架够得着的那半没有**。判据因此可以零成本地一般化：
+**凡是「守卫读它、而它是覆盖写」的字段，都要问一句「这一跳读到的值事后查得出来吗」**——
+答不出就是本文这个坑。与 `entity-factory-no-secondary-index-primitives.md` 的
+「每建一个辅助键，当场回答谁在什么时候删它」是同一族判据。

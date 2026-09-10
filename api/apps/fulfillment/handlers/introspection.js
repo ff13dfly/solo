@@ -47,6 +47,7 @@ const INSTANCE_BASE = [
     { name: 'createdBy',        type: 'string' },                   // req.user || null
     { name: 'pending_callbacks', type: 'array' },                   // [] at create
     { name: 'updatedAt',        type: 'number' },                   // only stamped by instance.update()
+    { name: 'updatedBy',        type: 'string' },                   // req.user || null; only stamped by instance.update()
 ];
 // transition/cancel/hold/override return advance() = { ...instance, _tasks } — _tasks is
 // always at least [] on these four paths (NOT on resume).
@@ -173,6 +174,8 @@ const methods = [
         returns_schema: [
             ...INSTANCE_BASE.filter((r) => r.name !== 'updatedAt'),
             { name: 'updatedAt', type: 'number', required: true },
+            // updatedBy is stamped on every update() but is null for un-authenticated
+            // callers (req.user || null) → typed, not required.
         ],
         ai: false
     },

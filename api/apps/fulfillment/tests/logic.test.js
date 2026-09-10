@@ -217,6 +217,28 @@ describe('fulfillment.instance', () => {
         const updated = await logic.instance.update({ id: inst.id, meta: { b: 2 } });
         expect(updated.meta).toEqual({ a: 1, b: 2 });
     });
+
+    // instance.meta is an overwriting merge with no history — without meta_update on the
+    // history entry, "what did the guard read when it branched HERE" is unanswerable as soon
+    // as a later hop rewrites the key (feedback/done/fulfillment-meta-write-leaves-no-trace.md).
+    test('transition — history entry carries the metaUpdate the guard evaluated', async () => {
+        const inst = await logic.instance.create({ sourceId: 'ORD-011b', profileId: PROFILE_ID }, MOCK_REQ);
+        const result = await logic.instance.transition(
+            { id: inst.id, event: 'order_submitted', metaUpdate: { confidence: 0.55 } }, MOCK_REQ);
+        expect(result.history[1].meta_update).toEqual({ confidence: 0.55 });
+        // the later value overwrites instance.meta, but the earlier hop keeps its own copy
+        expect(result.history[0].meta_update).toBeUndefined();   // no payload → key omitted
+    });
+
+    test('update — stamps updatedBy from req and refuses a caller-supplied one', async () => {
+        const inst = await logic.instance.create({ sourceId: 'ORD-011c', profileId: PROFILE_ID }, MOCK_REQ);
+        const updated = await logic.instance.update({ id: inst.id, meta: { b: 2 }, updatedBy: 'uid-forged' }, MOCK_REQ);
+        expect(updated.updatedBy).toBe(MOCK_REQ.user);
+        expect(updated.updatedAt).toBeTruthy();
+        // un-authenticated path stays legal (null, not a throw) — probes may call without req
+        const anon = await logic.instance.update({ id: inst.id, meta: { c: 3 } });
+        expect(anon.updatedBy).toBeNull();
+    });
 });
 
 // ============================================================

@@ -177,7 +177,16 @@ module.exports = [
     { name: 'user.bot.suspend', params: [{ name: 'uid', type: 'string', required: true, maxLength: 64, pattern: 'id' }], returns: ['id', 'status', 'revoked'], returns_schema: [{ name: 'id', type: 'string', required: true }, { name: 'status', type: 'string', required: true }, { name: 'revoked', type: 'number', required: true }], description: 'Reversibly suspend a bot: blocks refresh/issue, kills live sessions (admin)', ai: false },
     // resume returns { id, status } on both the no-op early-return and the normal path — no `revoked`.
     { name: 'user.bot.resume', params: [{ name: 'uid', type: 'string', required: true, maxLength: 64, pattern: 'id' }], returns: ['id', 'status'], returns_schema: [{ name: 'id', type: 'string', required: true }, { name: 'status', type: 'string', required: true }], description: 'Resume a suspended bot to ACTIVE; re-issue token to bring it back online (admin)', ai: false },
-    { name: 'user.token.refresh', params: [], returns: ['token', 'expiresAt'], returns_schema: [{ name: 'token', type: 'string', required: true }, { name: 'expiresAt', type: 'number', required: true }], description: 'Refresh caller\'s own bot session token (bot accounts only)', ai: false },
+    // The public flag below is infra self-service, NOT a business grant. The Router's permit check
+    // would otherwise require every bot permit to carry `user: ['user.token.refresh']`, and
+    // the reference permit map (deploy/bot-permits.js) omitted it for a month: relay's
+    // rotation heartbeat then fires every 10min against a Forbidden wall for the last 2h of
+    // the token's life and the bot dies silently at TTL (steward 2026-09-07, 47 log lines
+    // nobody read — docs/feedback/done/relay-token-lazy-refresh-dies-when-idle.md). Granting
+    // no authority: tokenRefresh() keys off callerUid, so a caller can only ever renew ITS
+    // OWN token; non-bot callers are rejected, and suspend/revoke still cut a bot off
+    // (the ACTIVE gate lives inside tokenRefresh, not in the permit).
+    { name: 'user.token.refresh', params: [], returns: ['token', 'expiresAt'], returns_schema: [{ name: 'token', type: 'string', required: true }, { name: 'expiresAt', type: 'number', required: true }], description: 'Refresh caller\'s own bot session token (bot accounts only)', ai: false, public: true },
     { name: 'user.token.revoke', params: [{ name: 'uid', type: 'string', required: true, maxLength: 64, pattern: 'id' }], returns: ['uid', 'revoked'], returns_schema: [{ name: 'uid', type: 'string', required: true }, { name: 'revoked', type: 'number', required: true }], description: 'Revoke all live session tokens of a uid (admin)', ai: false },
 
     // Roles (authority.md) — named permit templates for internal users + external passports (ai: false)

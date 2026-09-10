@@ -11,7 +11,43 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
-_（空）_
+⚠️ **下面的代码注释与 scaffold 文档里已写死 `v1.2.15`**（`bot-permits.js` 头注、
+`scaffold/docs/authoring/events.md §0.5`、fulfillment `GUIDE.md`）——发版时若不是这个号，
+先把那三处改掉。
+
+### relay bot token 空闲过 TTL 后永久失联（清 `../feedback/done/relay-token-lazy-refresh-dies-when-idle.md`）
+
+- 🔴 **`user.token.refresh` 改为 `public: true`**（`core/user/handlers/introspection.js`）。
+  此前它跟普通业务方法一样查 permit，于是每个 relay bot 都必须在自己的 permit 里显式带上
+  `user: ['user.token.refresh']`——而**框架自己的参考权限图 `deploy/bot-permits.js` 9 个 bot
+  一个都没带**（`scaffold/docs/authoring/events.md:40` 却用 🔴 写着「必须含」，依据是 colony
+  2026-08-10 同款事故：**教训进了文档，没进代码**）。后果：relay 的轮转心跳每 10 分钟撞一次
+  `Forbidden`，撞满到期前 2 小时，然后 bot 在 24h TTL 上静默死亡，之后一律 `NO_TOKEN`
+  ——报错措辞（"Admin must call …token.set"）把人指向「从没接过线」，实际是接过、跑通过、
+  然后死了。steward 2026-09-07 实测五个服务全中、日志里 47 行没人看。
+  **安全上不放开任何东西**：`tokenRefresh` 按 `callerUid` 取 bot，只能续调用者**自己**的 token，
+  非 bot / 非 ACTIVE 一律拒；停用 bot 仍走 `suspend`/`revoke`。
+  同步登记进 `autocheck/static/public-surface-check.js` 白名单（那道门当场拦住了这次改动）。
+- `deploy/bot-permits.js` 9 个 bot 仍显式补上该方法 + 头注说明它是 infra 通道不是业务权限
+  （冗余是故意的：照抄这份权限图的项目可能常年跑着更早的 bundle）。
+- `scaffold/docs/authoring/events.md §0.5` 补上「新栈不必再配、旧栈仍要配」+ **症状长什么样、
+  去哪个日志文件搜**。
+- 澄清：反馈里提的「relay 没有定时续签」**不成立**——轮转心跳 v1.1.17（`d438a6f`）就有了。
+
+### 履约 `instance.meta` 写入留痕（清 `../feedback/done/fulfillment-meta-write-leaves-no-trace.md` 建议 1/2）
+
+- **`history[]` 条目带上本次 `meta_update`**（`apps/fulfillment/logic/instance.js`，非空才落）。
+  JsonLogic 守卫判的是 `instance.meta`，而 meta 是**无版本、原地覆盖**的 read-modify-write ⇒
+  「这一跳的守卫当时读到的是什么值」在后一跳覆盖之后就查不出来了（实例：confidence 0.55 被拒
+  转人工 → 0.95 通过，库里只剩 0.95，history 记得它去过 NEEDS_HUMAN、记不得为什么）。
+  现在守卫的**输入**与**输出**（`state`）记在同一条里。`cancel`/`hold`/`override` 同享。
+- **`instance.update` 接 `req` 并落 `updatedBy`**（调用侧 `index.js` 一直在传，只是 logic 签名没接）。
+  它是探针写事实的唯一入口，此前「探针写的」与「人工改的」完全分不开。
+  `updatedBy` 由 Router 身份决定，调用方传的会被丢弃。
+
+**下游 action**：无。两条都是只加不破——`meta_update` / `updatedBy` 是新增字段，
+旧读法不受影响；`user.token.refresh` 从「要 permit」变成「不要」，旧 permit 照样能用。
+跑着 ≤ v1.2.14 bundle 的栈若已中招，可不升级、改自己的 provision 脚本补 permit 后重跑（幂等）。
 
 ---
 

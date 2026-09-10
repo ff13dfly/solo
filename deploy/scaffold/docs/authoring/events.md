@@ -38,6 +38,12 @@
 - `uid` 必须**恰好**是 `system.<serviceName>`（`library/relay.js` 的 `expectedSub` 这么拼），不匹配抛 `SUB_MISMATCH`。
 - 第 1 步的 `permit` 不能给 `allow_all:true`（`user.bot.create` 会拒绝——bot 权限必须显式枚举 `services.method`），按你的服务实际要调的 Router 方法（通常至少要有 `event.emit`）来写。
 - 🔴 **`services` 里必须含 `user: ['user.token.refresh']`，不论你的服务实际要调什么方法**——这一条不是业务权限，是 `library/relay.js` 自身续期机制（`rotateBeforeMs` 默认到期前 2 小时）要用的，`event.emit` 本身虽然不查 permit，但 relay 每隔一段时间会自己去调 `user.token.refresh`，那次调用跟普通方法一样过权限检查。**漏了这条，token 到期前 2 小时开始悄悄轮转失败，24 小时后彻底失效，之后所有 `event.emit`/`relay.call` 都静默丢事件**——RPC 返回、日志、账本全部正常，只有事件消失，且要等满一个 token 生命周期才会暴露（colony 2026-08-10 实测踩过，丢了 3 条真实事件才发现，详见 `docs/feedback/done/relay-provisioning-and-event-registry.md` §五）。
+  **v1.2.15 起 Router 不再对这条查 permit**（`user.token.refresh` 在 user 服务的 introspection 里标了
+  `public: true`——它只能续调用者**自己**的 token，`callerUid` 结构性锁死，给不出任何横向权限），
+  所以新栈漏写也不会死。但**仍然照写**：派生项目常年跑着某个更早的 bundle，而这条坑的暴露延迟是整整一个
+  token 生命周期。**症状长这样**（去 `api/debug/stack.log` 搜，steward 2026-09-07 实测五个服务全中、
+  47 行没人看）：`[relay:<svc>] token refresh failed (expires ...): RPC call failed: Forbidden`，
+  每 10 分钟一条持续 2 小时，然后变成 `rotation heartbeat: Service token expired and refresh failed.`
 - 🔴 **permit 配齐只保证轮转不被「拒」，不保证轮转被「触发」**——relay 的轮转是惰性的，只在
   `relay.call()`/`getToken()` 被走到时才检查。调用稀疏的服务（事件驱动、可静默数小时的）完全可能在
   到期前 2h 的轮转窗口内一次调用都没有，token 静默过期，之后所有调用 `TOKEN_EXPIRED`——四步做全也一样。

@@ -103,7 +103,14 @@ module.exports = (redis, config, relay = null) => {
         instance.meta           = mergedMeta;
         // trace: chain correlation — which causal chain drove this transition (walContext
         // carries it from the Router token meta; null for direct/un-traced callers).
+        // meta_update: the guard's INPUT for this hop, kept next to its OUTPUT (the state it
+        // moved to). instance.meta is an overwriting merge with no history, so without this
+        // the one question a reviewer actually asks — "what did the condition read when it
+        // branched here?" — is unanswerable the moment a later hop overwrites the key
+        // (steward FL-20260906-6658: confidence 0.55 → NEEDS_HUMAN → 0.95 → passed; the
+        // library only remembers 0.95). Omitted when empty, so no-payload hops cost nothing.
         const entry = { state: toState, event, transition_id: transitionId, user: req?.user || null, trace: walContext.getStore()?.trace || null, stamp: Date.now() };
+        if (metaUpdate && Object.keys(metaUpdate).length) entry.meta_update = metaUpdate;
         if (forced) entry.forced = true;
         if (reason) entry.reason = reason;
         instance.history.push(entry);
@@ -302,15 +309,21 @@ module.exports = (redis, config, relay = null) => {
         /**
          * fulfillment.instance.update — metadata/field update (restricted fields blocked).
          */
-        async update({ id, meta, ...updates }) {
+        async update({ id, meta, ...updates }, req) {
             const instance = await getInstance(id);
 
             delete updates.id;
             delete updates.history;
             delete updates.state;
             delete updates.prevState;
+            delete updates.updatedBy;   // provenance is the Router's word, never the caller's
 
-            const updated = { ...instance, ...updates, updatedAt: Date.now() };
+            // updatedBy: this is the ONLY write path for meta that leaves no history entry,
+            // and meta is what the JsonLogic guards judge — so "a probe wrote this fact" vs
+            // "a human edited it" was previously indistinguishable. create/advance both take
+            // req and record createdBy / history[].user; update was the odd one out even
+            // though index.js has been passing req in all along.
+            const updated = { ...instance, ...updates, updatedBy: req?.user || null, updatedAt: Date.now() };
             // meta is MERGED, not replaced — caching meta_fields.source values must
             // not drop other keys.
             if (meta && typeof meta === 'object') updated.meta = { ...instance.meta, ...meta };

@@ -107,6 +107,11 @@ await call('setting.task.update', { whitelist: wl }); // ← 整体替换，不�
   `instance.meta`）。v1.1.17 起 transition 也收 `meta` 作别名，但**别指望「传错了会报错」**——
   Router 不校验未声明参数，写错的字段既不报错也不进日志，只是悄悄不见（colony 的镜像就这么丢了
   一天多的 `closeReason`/`realizedPnl`，而状态机、事件、history 全绿）。
+- **想知道「这一跳的守卫当时读到什么」，看 `history[].meta_update`**（v1.2.15 起，非空才落）。
+  `instance.meta` 是**覆盖合并、无版本**的，后一跳会把前一跳的值抹掉：0.55 被拒转人工、0.95 通过之后，
+  库里只剩 0.95，光看 history 只知道它去过 NEEDS_HUMAN、不知道为什么。`meta_update` 把那一跳的**输入**
+  和**输出**（`state`）记在同一条里。⚠️ 走 `instance.update` 写 meta 的**不进 history**（它不是跃迁），
+  只留 `updatedBy` + `updatedAt`——要可回放就把证据随 transition 的 `metaUpdate` 送，别先 update 再空跃迁。
 - **profile 软删**：`delete` 是软删，返回**整条记录**（`status: DELETED`），不是 `{ success: true }`；
   `restore` 复活为 ACTIVE；`destroy` 才是真删、返回 `{ success: true }`。instance **不软删**。
 - **写方法对 AI 关闭**：只有 create/get/list 类是 `ai:true`（LLM 可自主调）；所有 transition/cancel/hold/

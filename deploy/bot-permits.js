@@ -17,39 +17,46 @@
  *  其窄 permit 由治理 e2e / 生产按需用 user.bot.create + issue.token 供给。)
  */
 
+// 🔴 每个 bot 都带 `user: ['user.token.refresh']` —— 这不是业务权限，是 relay 自身的续期
+// 通道（library/relay.js 的 rotation heartbeat 每 10min 走一次 getValidToken，到期前
+// rotateBeforeMs 内调 user.token.refresh）。**别因为"这个服务又不调 user"就删掉它**：
+// 漏掉时的症状是 token 到期前 2 小时开始每 10 分钟被 Router 挡回 Forbidden、24h 后 bot
+// 静默死亡，之后一律 NO_TOKEN（steward 2026-09-07 实测五个服务全中）。
+// v1.2.15 起 user.token.refresh 已在 introspection 标 public、Router 不再查 permit，
+// 这里保留显式声明是给**照抄这份权限图的派生项目**看的：它们可能还跑着旧 bundle。
 const BOT_PERMITS = {
     // orchestrator:事件触发的 workflow 步骤跑 collection→market→notification→fulfillment。
     // user.permit.get:H6 footprint 预审要读 bot 自己的 permit(经 Router;getPermit 已能解析 bot uid)。
     // §3.1:高风险 approve 转发 approval.gate.*(open/sign/get)+ 验签读审批人公钥。
-    'system.orchestrator': { collection: ['*'], market: ['*'], notification: ['*'], fulfillment: ['*'], user: ['user.permit.get'], approval: ['approval.gate.open', 'approval.gate.sign', 'approval.gate.get'] },
+    'system.orchestrator': { collection: ['*'], market: ['*'], notification: ['*'], fulfillment: ['*'], user: ['user.token.refresh', 'user.permit.get'], approval: ['approval.gate.open', 'approval.gate.sign', 'approval.gate.get'] },
 
     // nexus:哨兵消费者投递走 notification.send;context 装配的 data_fetcher 读 collection.payment.get;
     // autorun 闭环还经 relay 调 agent.decide(结构化决策契约)。没它哨兵每次投递死在 relay NO_TOKEN。
-    'system.nexus':        { orchestrator: ['*'], notification: ['notification.send'], collection: ['collection.payment.get'], agent: ['agent.chat', 'agent.decide'], user: ['user.permit.get'] },
+    'system.nexus':        { orchestrator: ['*'], notification: ['notification.send'], collection: ['collection.payment.get'], agent: ['agent.chat', 'agent.decide'], user: ['user.token.refresh', 'user.permit.get'] },
 
     // notification 投递 worker:gateway.{channel}.send 出站 + user.profile 解析默认出站地址(email/phone)。
-    'system.notification': { gateway: ['gateway.email.send', 'gateway.sms.send', 'gateway.webhook.send'], user: ['user.profile'] },
+    'system.notification': { gateway: ['gateway.email.send', 'gateway.sms.send', 'gateway.webhook.send'], user: ['user.token.refresh', 'user.profile'] },
 
     // passport 自助 OTP 投递:user 经 relay 调 gateway.{email,sms}.send(user/index.js 构造)。
     // Dormant 直到 config.passport 开自助 OTP 发证(默认 'closed');投递 best-effort(otpRequest 吞 relay 错)。
-    'system.user':         { gateway: ['gateway.email.send', 'gateway.sms.send'] },
+    'system.user':         { gateway: ['gateway.email.send', 'gateway.sms.send'], user: ['user.token.refresh'] },
 
     // ingress:event.emit → EVENT:WEBHOOK:*(无下游服务调用,permit 为空)。
-    'system.ingress':      {},
+    'system.ingress':      { user: ['user.token.refresh'] },
 
     // gateway 出站增值:附件按 storage 引用取字节(asset.get 元数据 + resolve 拿 URL),
     // 失败投递事件走 event.emit(EVENT:GATEWAY:DELIVERY / gateway.delivery.failed)。
     // 缺席时优雅降级:无附件能力 + 失败只记台账 —— 普通 send 不依赖本 bot。
-    'system.gateway':      { storage: ['storage.asset.get', 'storage.asset.resolve'] },
+    'system.gateway':      { storage: ['storage.asset.get', 'storage.asset.resolve'], user: ['user.token.refresh'] },
 
     // fulfillment:emit EVENT:FULFILLMENT:*(经 Router 事件注册表)+ 调 agent.chat 做 profile.generate(NL → profile)。
-    'system.fulfillment':  { agent: ['agent.chat'] },
+    'system.fulfillment':  { agent: ['agent.chat'], user: ['user.token.refresh'] },
 
     // §3.1:approval gate 验签时读审批人公钥。
-    'system.approval':     { user: ['user.key.public'] },
+    'system.approval':     { user: ['user.token.refresh', 'user.key.public'] },
 
     // collection.payment.refund 退款前经 relay 验审批单(approval.record.get)——没它 refund 死在 relay NO_TOKEN。
-    'system.collection':   { approval: ['approval.record.get'] },
+    'system.collection':   { approval: ['approval.record.get'], user: ['user.token.refresh'] },
 };
 
 module.exports = { BOT_PERMITS };

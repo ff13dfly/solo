@@ -35,6 +35,11 @@ const ALLOWED_PUBLIC_METHODS = {
         'user.passport.otp.verify',
         'user.passport.device.issue',
         'user.passport.upgrade',
+        // relay 自续期通道:只能续调用者自己的 token(tokenRefresh 按 callerUid 取 bot,
+        // 非 bot / 非 ACTIVE 一律拒),不暴露任何他人数据或横向权限。标 public 是为了让
+        // bot permit 不必逐个记得写这条 infra 方法——漏写的代价是 24h 后静默死亡
+        // (docs/feedback/done/relay-token-lazy-refresh-dies-when-idle.md)。
+        'user.token.refresh',
     ]),
     administrator: new Set([
         'admin.login.request',
