@@ -119,10 +119,27 @@ module.exports = {
     //      Redis override (SYSTEM:INDEX_SCHEMA:{serviceName}) takes priority.
     //      If no Redis config exists, these local definitions are used as fallback.
     //
-    // Format: { entityName: { name, prefix, schema } }
-    //   name   — RediSearch index name (convention: idx:{service}_{entity})
-    //   prefix — Redis key prefix to index (convention: SERVICE:ENTITY:)
-    //   schema — FT.CREATE SCHEMA arguments array
+    // Format: { entityName: { name, prefix, schema, language? } }
+    //   name     — RediSearch index name (convention: idx:{service}_{entity})
+    //   prefix   — Redis key prefix to index (convention: SERVICE:ENTITY:)
+    //   schema   — FT.CREATE SCHEMA arguments array
+    //   language — optional FT.CREATE LANGUAGE; set 'chinese' for CJK text (see below)
+    //
+    // 🔴 中文数据必读（实测：redis-stack 7.4.0-v8 / search 21020，5,860 条合成中文商品名）
+    //   ① 默认 TEXT 对中文等于没建索引 —— 分词器按空格与标点切词，整串中文是一个 token，
+    //      `@name:收纳` 命中 0 条。
+    //   ② 下面 `$.name` 那条 TAG WITHSUFFIXTRIE 只能用 `@name:{*收纳*}` 查，那是通配查询，
+    //      受全局 MAXPREFIXEXPANSIONS 约束（默认 200）且**超限静默截断**：实测 2,000 条
+    //      命中只返回 200 条（10%），不报错、不告警。截断量与"有多少个不同的词命中通配"
+    //      成正比 ⇒ 冷门词 100% 正确、高频词大量丢，**开发期小样本永远看不出来**。
+    //      indexer.js 的 ensureAll()/rebuild() 现在会把这个上限一并调高（默认 200000，
+    //      可用 REDISEARCH_MAXPREFIXEXPANSIONS 覆盖），所以这条路现在是通的。
+    //   ③ 中文全文检索的正解是 `language: 'chinese'` + TEXT（见下面被注释的 cnItem），
+    //      实测同一批数据召回 2,000/2,000。注意它按词切分，查询词若是索引词的前缀
+    //      （"不锈钢" vs "不锈钢锅"）仍会漏 —— 要精确子串就仍用 ② 的 TAG，两者可并存。
+    //
+    // ⚠️ 改了 language 必须 rebuild：已存在的索引 ensureAll() 会跳过，
+    //    光改配置重启没有任何效果，而症状是搜索结果静默不对。
     //
     // See: library/indexer.js for the unified index manager.
     indexes: {
@@ -134,6 +151,18 @@ module.exports = {
                 '$.name',      'AS', 'name',       'TAG', 'WITHSUFFIXTRIE',
                 '$.status',    'AS', 'status',     'TAG',
                 '$.createdAt', 'AS', 'created_at', 'NUMERIC', 'SORTABLE',
+            ],
+        },
+        */
+
+        /* 中文文本检索：TEXT + language:'chinese'，查询写 `@name:收纳`（不是 `{*收纳*}`）
+        cnItem: {
+            name: 'idx:sample_cn_item',
+            prefix: 'SAMPLE:ITEM:',
+            language: 'chinese',
+            schema: [
+                '$.name',   'AS', 'name',   'TEXT',
+                '$.status', 'AS', 'status', 'TAG',
             ],
         },
         */

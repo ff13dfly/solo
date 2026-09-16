@@ -99,6 +99,10 @@ web_modules/
 .env.test
 .env.production
 
+# 初始凭据参考（init.sh / provision 脚本把账号密码写在这里）——永不入库。
+# scaffold/.gitignore 一直有这条，Solo 自己的却漏了：框架给下游做对了、自己没做。
+SETUP.md
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache

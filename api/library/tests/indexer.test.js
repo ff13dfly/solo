@@ -10,7 +10,7 @@
  * saveSchemas / createIfMissing / buildIndex) are exercised through the public
  * surface — schemas(), ensureAll(), rebuild(), updateSchemas().
  */
-const { createIndexer } = require('../indexer');
+const { createIndexer, buildCreateCommand, maxPrefixExpansions } = require('../indexer');
 
 const KEY = (svc) => `SYSTEM:INDEX_SCHEMA:${svc}`;
 
@@ -81,6 +81,9 @@ const expectedCreateArgv = (def) => [
     ...def.schema,
 ];
 const CONFIG_ARGV = ['FT.CONFIG', 'SET', 'MAXSEARCHRESULTS', '-1'];
+// 第二堵墙：通配/中缀查询能展开多少个词。默认 200 且超限静默截断，所以框架一并解掉
+// （只解一半比两个都不解更坏 —— 调用方会以为这类上限框架管了）。
+const PREFIX_ARGV = ['FT.CONFIG', 'SET', 'MAXPREFIXEXPANSIONS', '200000'];
 
 // ──────────────────────────────────────────────────────────────────────────
 describe('schemas() — loadSchemas: Redis override > local fallback', () => {
@@ -139,14 +142,15 @@ describe('schemas() — loadSchemas: Redis override > local fallback', () => {
 
 // ──────────────────────────────────────────────────────────────────────────
 describe('ensureAll() — FT.CONFIG then createIfMissing per def', () => {
-    test('sets MAXSEARCHRESULTS -1 first, then FT.CREATE each def with exact argv', async () => {
+    test('sets both global limits first, then FT.CREATE each def with exact argv', async () => {
         const redis = makeFakeRedis();
         const idx = createIndexer(redis, 'svc', { product: PRODUCT, order: ORDER });
         await idx.ensureAll();
 
-        // FT.CONFIG is the very first command issued.
+        // FT.CONFIG is the very first command issued — both limits, before any FT.CREATE.
         expect(redis.calls[0]).toEqual(CONFIG_ARGV);
-        expect(redis.configs()).toHaveLength(1);
+        expect(redis.calls[1]).toEqual(PREFIX_ARGV);
+        expect(redis.configs()).toEqual([CONFIG_ARGV, PREFIX_ARGV]);
 
         const creates = redis.creates();
         expect(creates).toHaveLength(2);
@@ -158,7 +162,7 @@ describe('ensureAll() — FT.CONFIG then createIfMissing per def', () => {
         const redis = makeFakeRedis();
         const idx = createIndexer(redis, 'svc'); // no defs
         await idx.ensureAll();
-        expect(redis.configs()).toHaveLength(1);
+        expect(redis.configs()).toEqual([CONFIG_ARGV, PREFIX_ARGV]);
         expect(redis.creates()).toHaveLength(0);
     });
 
@@ -335,5 +339,92 @@ describe('updateSchemas() — saveSchemas: merge over current and persist', () =
         // then { ...current, order: ORDER } → order unchanged, product stays remote.
         expect(merged).toEqual({ product: remote, order: ORDER });
         expect(JSON.parse(redis._kv.get(KEY('svc')))).toEqual({ product: remote, order: ORDER });
+    });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// CJK 索引：`language` 直通 FT.CREATE，且 MAXPREFIXEXPANSIONS 可配。
+//
+// 这一组测的是两件"坏起来完全没有声音"的事：LANGUAGE 拼在 SCHEMA 之后就永远
+// 不是合法命令（RediSearch 把 SCHEMA 之后的一切当字段定义），而 MAXPREFIXEXPANSIONS
+// 超限只会让查询少返回几行、不报错。实测依据见 library/indexer.js 顶部注释。
+describe('language + MAXPREFIXEXPANSIONS', () => {
+    const CN = {
+        name: 'idx:svc_product_cn',
+        prefix: 'SVC:PRODUCT:',
+        schema: ['$.name', 'AS', 'name', 'TEXT'],
+        language: 'chinese',
+    };
+
+    test('buildCreateCommand: LANGUAGE 落在 SCHEMA 之前', () => {
+        const argv = buildCreateCommand(CN);
+        expect(argv.indexOf('LANGUAGE')).toBeLessThan(argv.indexOf('SCHEMA'));
+        expect(argv).toEqual([
+            'FT.CREATE', CN.name,
+            'ON', 'JSON',
+            'PREFIX', '1', CN.prefix,
+            'LANGUAGE', 'chinese',
+            'SCHEMA',
+            ...CN.schema,
+        ]);
+    });
+
+    test('不带 language 的 def，argv 与改动前逐字节一致（向后兼容）', () => {
+        expect(buildCreateCommand(PRODUCT)).toEqual(expectedCreateArgv(PRODUCT));
+        expect(buildCreateCommand(PRODUCT)).not.toContain('LANGUAGE');
+    });
+
+    test('ensureAll 把 language 透传给 FT.CREATE', async () => {
+        const redis = makeFakeRedis();
+        const idx = createIndexer(redis, 'svc', { product: CN });
+        await idx.ensureAll();
+        expect(redis.creates()[0]).toEqual(buildCreateCommand(CN));
+    });
+
+    test('rebuild 同样透传 language（drop 后重建才是 language 生效的唯一途径）', async () => {
+        const redis = makeFakeRedis();
+        const idx = createIndexer(redis, 'svc', { product: CN });
+        await idx.rebuild('product');
+        expect(redis.creates()[0]).toEqual(buildCreateCommand(CN));
+    });
+
+    test('Redis 覆盖的 schema 也能带 language（loadSchemas 整对象覆盖）', async () => {
+        const redis = makeFakeRedis();
+        redis._kv.set(KEY('svc'), JSON.stringify({ product: CN }));
+        const idx = createIndexer(redis, 'svc', { product: PRODUCT });
+        await idx.ensureAll();
+        expect(redis.creates()[0]).toEqual(buildCreateCommand(CN));
+    });
+
+    describe('maxPrefixExpansions()', () => {
+        const ENV = 'REDISEARCH_MAXPREFIXEXPANSIONS';
+        afterEach(() => { delete process.env[ENV]; });
+
+        test('默认 200000', () => {
+            delete process.env[ENV];
+            expect(maxPrefixExpansions()).toBe(200000);
+        });
+
+        test('环境变量可覆盖', () => {
+            process.env[ENV] = '5000';
+            expect(maxPrefixExpansions()).toBe(5000);
+        });
+
+        // RediSearch 的下界是 1：0 与 -1 都被拒 (Value is outside acceptable bounds)，
+        // 所以 MAXSEARCHRESULTS 那套 -1 = unlimited 的约定在这里不成立。
+        test.each([['0', 0], ['-1', -1]])('非法值 %s 退回默认而不是发出去', (raw) => {
+            process.env[ENV] = raw;
+            const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+            expect(maxPrefixExpansions()).toBe(200000);
+            expect(warn).toHaveBeenCalled();     // 退回是响亮的，不是静默的
+            warn.mockRestore();
+        });
+
+        test('非整数退回默认（intFromEnv 自身的行为，这里钉住）', () => {
+            process.env[ENV] = 'lots';
+            const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+            expect(maxPrefixExpansions()).toBe(200000);
+            warn.mockRestore();
+        });
     });
 });

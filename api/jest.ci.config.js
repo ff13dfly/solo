@@ -100,6 +100,7 @@ module.exports = {
         '<rootDir>/library/tests/config.test.js',
         '<rootDir>/library/tests/process.test.js',
         '<rootDir>/library/tests/indexer.test.js',
+        '<rootDir>/autocheck/tests/entity-factory-rule.test.js',
         '<rootDir>/library/tests/search.test.js',
         '<rootDir>/library/tests/vector.test.js',
         '<rootDir>/library/tests/relay.test.js',

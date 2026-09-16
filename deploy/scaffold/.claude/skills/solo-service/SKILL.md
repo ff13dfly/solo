@@ -86,6 +86,17 @@ Router capability catalog in Redis — you don't guess it. These docs supply the
   pays to read forever. Either way, logic and `entities.js` must agree. And for "give me
   everything" reads use `entity.listAll()`, never `list({ limit: <a big number> })` — anything
   past the guess is silently dropped. (autocheck `entity-factory` / `soft-delete-check`)
+  **The one sanctioned way out**: when a table's dominant query shape is multi-dimension filtering
+  / JOIN / aggregate reporting and the row count is large, those rows may live in an external store
+  (PostgreSQL etc.) — declare it with a `// SAFE: external-store` line in the logic file rather than
+  renaming functions to dodge the gate, and re-implement `$owner` row scoping, `sensitiveFields`
+  masking and WAL audit yourself. Framework entities stay on Redis. See `service.md` §6.8.
+- **CJK text fields need `language: 'chinese'` in `config.indexes`.** A default `TEXT` field over
+  Chinese matches **nothing** (the whole string is one token), and the `TAG WITHSUFFIXTRIE` +
+  `@f:{*词*}` workaround truncates **silently** past `MAXPREFIXEXPANSIONS` — measured 200 of 2,000
+  hits, and it truncates *more* the more common the word, so small dev samples always look perfect.
+  Changing `language` requires `indexer.rebuild(entity)`; `ensureAll()` skips existing indexes.
+  See `service.md` §6.7.
 - **Every `*.list` method declares its pagination — or declares that it has none.** The rule is a
   fork, not a blanket "always paginate":
   - **Unbounded collection** (user data, anything that grows with usage) → declare `limit` /

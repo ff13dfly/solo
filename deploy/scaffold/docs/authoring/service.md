@@ -330,7 +330,97 @@ entity.list()           → 默认 status = ACTIVE，看不见它          ← �
 
 ---
 
-## 7. 写完自查（9 条最常踩）
+## 6.7 ★ 中文数据建索引：两条默认路都会静默给错结果
+
+做中文业务、字段里存的是中文，这一节必须看完再建索引——**三种写法里有两种不报错但结果是错的**。
+
+实测（redis-stack 7.4.0-v8 / search 21020，5,860 条合成中文商品名，"收纳"真值 2,000 条）：
+
+| schema 写法 | 查询 | 命中 | 结论 |
+|---|---|---:|---|
+| `'$.name','AS','name','TEXT'`（默认） | `@name:收纳` | **0** (0%) | 等于没建索引 |
+| `...'TAG','WITHSUFFIXTRIE'` | `@name:{*收纳*}` | **200** (10%) | **静默截断** |
+| `language:'chinese'` + `TEXT` | `@name:收纳` | 2,000 (100%) | ✅ |
+
+**(a) 默认 `TEXT` 对中文等于没建索引。** RediSearch 默认分词器按空格与标点切词，
+一整串中文商品名是**一个 token**，搜任何子串都是 0 条。不报错。
+
+**(b) `TAG WITHSUFFIXTRIE` + `{*词*}` 会静默截断——这条最阴。**
+那是通配查询，受全局 `MAXPREFIXEXPANSIONS` 约束（RediSearch 默认 **200**），
+超限**不报错、不告警**，只是少返回几行。
+
+🔴 截断量与「**有多少个不同的词命中这个通配**」成正比 ⇒ **词越冷门越正确**。
+同一次实测里只有 60 条记录的冷门词 100% 正确，而 2,000 条的高频词只回 10%。
+所以它**在开发期的小样本上永远是满分**，上量之后开始丢，而丢的恰恰是运营最常搜的那些词。
+
+> `indexer.js` 的 `ensureAll()` / `rebuild()` 现在会把这个上限一并调高（默认 200000，
+> 可用 `REDISEARCH_MAXPREFIXEXPANSIONS` 覆盖），所以这条路现在是通的。
+> 框架此前只调了 `MAXSEARCHRESULTS`（管"能返回多少条"）——**两堵墙管的是不同的事，
+> 只解一半比两个都不解更坏**，因为使用者会以为这类上限框架管了。
+
+**(c) 正解是 `language: 'chinese'`：**
+
+```js
+indexes: {
+    product: {
+        name: 'idx:catalog_product',
+        prefix: 'CATALOG:PRODUCT:',
+        language: 'chinese',                       // ← 必须；它走在 SCHEMA 之前
+        schema: ['$.name', 'AS', 'name', 'TEXT'],
+    },
+}
+```
+
+查询写 `@name:收纳`（**不是** `{*收纳*}`）。
+
+⚠️ **它按词切分，所以前缀查询仍会漏**：同一批数据里 `@name:不锈钢` 只命中 862/1,307（66%），
+因为"不锈钢锅"被切成一个词。**要精确子串就仍然要 TAG 那条，两者可以并存**（同一个 prefix
+建两个索引，各查各的）。别指望一条 schema 同时满足"分词检索"和"精确子串"。
+
+⚠️ **改了 `language` 必须 `rebuild`**：`ensureAll()` 对已存在的索引直接跳过，
+光改 config 重启**没有任何效果**，而症状是搜索结果静默不对。走 `indexer.rebuild('product')`。
+
+---
+
+## 6.8 ★ 什么时候不该用 Entity Factory
+
+默认答案仍然是「用」。Entity Factory 给的是 id 生成、索引维护、MULTI/EXEC、WAL 审计、
+`$owner` 行隔离、`sensitiveFields` 掩码——**自己写等于把这六样重新实现一遍**。
+
+但有一类情况它不匹配：**主要查询形态是多维筛选 / JOIN / 聚合报表 / 全文检索**，
+且数据量到了。原因是 `entity.list()` 的 filter 一律在**取回之后**跑，
+一个只命中 50 个 SKU 的品类查询，成本等于翻完整个集合。
+
+判据（命中两条以上就该认真考虑外部存储）：
+
+- 单实体行数 **> 50 万**，且查询要按多个字段任意组合筛
+- 要 **JOIN**（订单 ↔ 渠道映射、BOM 展开）
+- 要 **聚合报表**（按品牌/时间分组求和，不是拉回来在内存里算）
+- 要**结构化属性筛选**（JSONB 那种任意 key 查询）
+
+**这条路是允许的，走法是显式声明**：在 logic 文件里写一整行注释
+
+```js
+// SAFE: external-store
+```
+
+门禁（`autocheck/static/entity-factory.js`）见到它就放行。**别拿 `// SAFE: singleton` 去豁免**
+——那个标记的语义是"没有 id、没有软删、永远只有一份"的单例配置，商品表不是；
+也**别靠改函数名规避检查**，那样这件事在代码里就没有痕迹了。
+`grep -rn 'SAFE: external-store'` 能一把扫出全部这类服务，这正是要它显式的原因。
+
+🔴 **代价要自己接回来，门禁只是不拦你，不代表这三样不用做：**
+
+| 你放弃的 | 必须自己做什么 |
+|---|---|
+| `$owner` 行隔离 | 每个查询自己带上 owner 条件；passport 外部会话尤其不能漏（见 §7.8） |
+| `sensitiveFields` 掩码 | 返回前自己抹掉密码/密钥类字段 |
+| WAL 审计流 | 写操作自己记审计，否则这部分数据在 WAL 里是个空洞 |
+
+**框架自己的实体（category / config / session / 任务队列）仍然在 Redis 上，不受影响**——
+这条出口说的只是"某几张业务表的行存在别处"，不是"把 Redis 换掉"。
+
+## 7. 写完自查（11 条最常踩）
 
 1. **声明↔注册不同步** → `autocheck --static` 直接红。先跑它。
 2. **自己重写了 library 已有的东西**（category/entity/index/auth）→ 回 §0/§4 改成 `require` + 挂载。
@@ -346,5 +436,11 @@ entity.list()           → 默认 status = ACTIVE，看不见它          ← �
 9. **手写的二级索引（身份槽/幂等槽/枚举集合）没判墓碑、没配清理** → 幂等槽把已软删的记录
    当成"已建好"交回去，活儿静默丢掉；枚举集合只增不减，留下空条目（§6.6）。判据两条：
    存了 id 就必须查 `status !== 'DELETED'`；`sAdd`/`zAdd` 了什么，自己的 `delete` 里就要撤掉。
+
+10. **中文字段建了默认 `TEXT` 索引**（或用 `TAG` 中缀通配当全文检索）→ 前者命中 0 条，
+    后者超过 `MAXPREFIXEXPANSIONS` 静默截断，**两者都不报错**。中文文本字段加
+    `language: 'chinese'`，改完必须 `rebuild`（§6.7）。
+11. **业务行确实该落 Redis 之外，却靠改函数名绕过门禁** → 写 `// SAFE: external-store`
+    显式声明，并自己接回 `$owner` 行隔离、`sensitiveFields` 掩码、WAL 审计三样（§6.8）。
 
 > 跑通后：`node api/autocheck/checker.js api/apps/{{PROJECT_NAME}} --static` 必须 PASS；把服务加进 `deploy/solo-services.json` 或你的 services.json 才会被 Router 拉起。

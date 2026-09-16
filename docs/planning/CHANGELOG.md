@@ -12,8 +12,9 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
 ⚠️ **下面的代码注释与 scaffold 文档里已写死 `v1.2.15`**（`bot-permits.js` 头注、
-`scaffold/docs/authoring/events.md §0.5`、fulfillment `GUIDE.md`）——发版时若不是这个号，
-先把那三处改掉。
+`scaffold/docs/authoring/events.md §0.5`、fulfillment `GUIDE.md`，
+以及 `../feedback/done/{redisearch-cjk-both-paths-blocked,no-sanctioned-exit-for-external-store}.md`
+的「落地（v1.2.15）」小标题）——发版时若不是这个号，先把那几处改掉。
 
 ### relay bot token 空闲过 TTL 后永久失联（清 `../feedback/done/relay-token-lazy-refresh-dies-when-idle.md`）
 
@@ -45,9 +46,88 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
   它是探针写事实的唯一入口，此前「探针写的」与「人工改的」完全分不开。
   `updatedBy` 由 Router 身份决定，调用方传的会被丢弃。
 
-**下游 action**：无。两条都是只加不破——`meta_update` / `updatedBy` 是新增字段，
-旧读法不受影响；`user.token.refresh` 从「要 permit」变成「不要」，旧 permit 照样能用。
-跑着 ≤ v1.2.14 bundle 的栈若已中招，可不升级、改自己的 provision 脚本补 permit 后重跑（幂等）。
+### 中文全文检索两条路都堵着（清 `../feedback/done/redisearch-cjk-both-paths-blocked.md` 建议 1–4）
+
+- 🔴 **`MAXPREFIXEXPANSIONS` 一并解掉**（`library/indexer.js`，两条 `FT.CONFIG` 收进
+  `applyGlobalLimits()`，`ensureAll()` / `rebuild()` 各调一次）。此前框架只设了
+  `MAXSEARCHRESULTS`（管「能返回多少条」），而**通配/中缀查询能展开多少个词**是另一堵墙，
+  默认 **200** 且超限**不报错、不告警、只是少返回几行**。
+  🔴 截断量与「有多少个不同的词命中通配」成正比 ⇒ **词越冷门越正确**：实测 5,860 条中文
+  商品名，60 条的冷门词 100% 正确、2,000 条的高频词只回 **200（10%）**——**开发期小样本
+  永远满分，上量之后丢的恰恰是最常搜的那些词**。而框架给的唯一索引示例
+  （`sample/config.js` 的 `TAG WITHSUFFIXTRIE`）正是唯一依赖这个参数的查询形态，
+  注释还写着「uncomment when your entity reaches 1000+ records」——**被建议启用的时刻，
+  正是它开始出错的时刻**。
+  - 默认 **200000**，`REDISEARCH_MAXPREFIXEXPANSIONS` 可覆盖；取值 `< 1` 响亮退回默认。
+  - ⚠️ 取值范围是 **≥ 1**：`-1` 与 `0` 都被 RediSearch 拒（`Value is outside acceptable
+    bounds`）——`MAXSEARCHRESULTS` 那套 `-1 = 无限`的约定**在这个参数上不成立**
+    （顺带：`MAXSEARCHRESULTS -1` 回读是字符串 `"unlimited"`）。
+  - 判据写进常量注释：**只解同族限制里的一个，比两个都不解更坏**——使用者会据此认为这类
+    上限框架管了。
+- 🔴 **`FT.CREATE` 开 `LANGUAGE` 口子**（`indexer.js` 抽出 `buildCreateCommand(def)`）。
+  中文数据用默认 `TEXT` 等于没建索引（默认分词器按空格与标点切词，整串中文是一个 token，
+  实测命中 **0** 条），而正解 `LANGUAGE chinese` 此前**拼不出来**：RediSearch 要求
+  `LANGUAGE` 在 `SCHEMA` 关键字**之前**，而调用方唯一能注入的 `def.schema` 整个展开在
+  `SCHEMA` 之后。现在 `def.language` 直通，两处建索引代码共用同一个拼装函数。
+  - **不传 `language` 时 argv 与改动前逐字节一致**（有断言钉住），默认行为一字未变。
+  - ⚠️ `LANGUAGE chinese` 按词切分，查询词若是索引词的**前缀**仍会漏（实测「不锈钢」
+    命中 862/1,307 = 66%，因为"不锈钢锅"是一个词）⇒ 要精确子串仍然要 TAG 那条，
+    **两者可并存**，别指望一条 schema 同时满足分词检索与精确子串。
+  - ⚠️ **改了 `language` 必须 `rebuild()`**：`ensureAll()` 对已存在的索引直接跳过，
+    光改 config 重启**没有任何效果**，而症状是搜索结果静默不对。
+- `sample/config.js` 补中文说明 + 一条被注释的 `cnItem` 示例（TEXT + `language: 'chinese'`，
+  查询写 `@name:收纳` 而不是 `{*收纳*}`）；`scaffold/docs/authoring/service.md` 新增
+  **§6.7「中文数据建索引」**（三行对照表 + 三条坑），§7 自查加第 10 条。
+
+### 业务表落 Redis 之外没有正规出口（清 `../feedback/done/no-sanctioned-exit-for-external-store.md` 建议 1/3/4）
+
+- 🔴 **新增豁免标记 `// SAFE: external-store`**（`autocheck/static/entity-factory.js`）。
+  这条规则想管的是「别绕过 Entity Factory 在 Redis 里各写各的 key」，但它的判据是
+  **「有没有 import entity.js」**，于是把「行根本不在 Redis 里」的实现也一并拦下了
+  （`api/apps/` 下是 **ERROR**，门禁退出码 1）——而那是个合理选择：查询形态是多维筛选 /
+  JOIN / 聚合报表时 Redis 不匹配（`entity.list()` 的 filter 一律在取回之后跑，
+  一次只命中 50 个 SKU 的品类查询等于翻完整个集合）。
+  此前唯一的出口 `// SAFE: singleton` 语义对不上（商品表既有 id 也会软删），
+  用它豁免是**把标记的语义用坏**。
+  - **默认行为一字未变**：不写标记的服务判定与今天完全一样。
+  - ERROR 的 hint 改成**两个出口都给**，并当场点明代价。
+  - 显式而留痕：`grep -rn 'SAFE: external-store'` 一把扫出全部这类服务。
+- 🔴 **代价必须自己接回来**（写进 `service.md` **§6.8「什么时候不该用 Entity Factory」**）：
+  `$owner` 行隔离、`sensitiveFields` 掩码、WAL 审计三样。门禁不拦你 ≠ 这三样不用做。
+  §6.8 同时给出四条命中判据（>50 万行 / JOIN / 聚合报表 / 结构化属性筛选），
+  §7 自查加第 11 条。框架实体（category/config/session/任务队列）仍在 Redis 上，不受影响。
+- `scaffold/.env.example` 留配置位（注释 + 一行注释掉的 `DATABASE_URL=`，**刻意不在
+  `library/config.js` 里加解析**——框架自身不消费，真加进去就是一个没人读的死配置）。
+- ⏸ 反馈建议 2（把检测面从「有没有 import」收紧到「有没有绕过 factory 直接写 Redis」）
+  本轮不做：改动大、会动存量服务的判定，且那个判据会把**只读**服务一并放过，
+  而它们恰恰最该被问一句「为什么不用 factory」。建议 1 已把「合理地不用」从规避变成显式声明。
+
+### 两处声明面与测试
+
+- **`scaffold/.claude/skills/solo-service/SKILL.md` 同步**：下游 AI 写服务时读的是它，
+  原本只有一句「Entities go through the Entity Factory」，既没有外部存储的出口、
+  也没有 CJK 索引的提醒——**只改 `service.md` 的话那边仍然把人引向错的路**。
+- **回归测试**：`library/tests/indexer.test.js` +10 例（LANGUAGE 位置、不传时逐字节兼容、
+  ensureAll/rebuild/Redis 覆盖三条路径都透传、取值边界与非法值退回）；
+  新建 `autocheck/tests/entity-factory-rule.test.js` 7 例并进 CI 白名单
+  ——**autocheck 的静态规则此前一个测试都没有**，而这条规则是唯一决定
+  「不用 factory 算不算 ERROR」的地方。白名单 **134 套 / 2262 例全绿**。
+
+**下游 action**：**只在你用了 `config.indexes`（RediSearch）时才需要看第 2、3 条**，
+其余只加不破——`meta_update` / `updatedBy` 是新增字段，旧读法不受影响；
+`user.token.refresh` 从「要 permit」变成「不要」，旧 permit 照样能用；
+`// SAFE: external-store` 不写就等于没这回事，门禁判定与 v1.2.14 完全一样。
+跑着 ≤ v1.2.14 bundle 的栈若已中 relay token 那条，可不升级、改自己的 provision 脚本补 permit 后重跑（幂等）。
+
+1. 升级后 `indexer.ensureAll()` 会**额外设一个全局 `MAXPREFIXEXPANSIONS=200000`**
+   （原为 RediSearch 默认 200）。它是 **FT.CONFIG 全局项**，对同一 Redis 实例上的**所有**
+   索引生效：通配/中缀查询从此返回完整结果，代价是展开更多词、更慢更吃内存。
+   要维持旧行为设 `REDISEARCH_MAXPREFIXEXPANSIONS=200`。
+2. 中文文本字段要改用 `language: 'chinese'` 的，**改完 config 必须 `indexer.rebuild(entity)`**
+   ——`ensureAll()` 跳过已存在的索引，光升级 + 改配置**不会生效**，而症状是搜索结果静默不对。
+3. 中文项目升级前先量一下当前召回：若在用 `TAG WITHSUFFIXTRIE` + `@f:{*词*}`，
+   此前很可能一直在静默截断（判据见 `service.md` §6.7 的对照表），升级后结果会变多——
+   那是修复，不是回归。
 
 ---
 
