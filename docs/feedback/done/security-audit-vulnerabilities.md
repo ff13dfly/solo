@@ -60,4 +60,13 @@
 
 ## 处理结论
 
-- **状态**：待落地修复（待更新对应模块代码与回归单测）
+- **状态**：已修复 (RESOLVED, 2026-09-18)
+- **落地改动**：
+  1. `api/router/handlers/auth.js`：修复 `isLoopbackRequest`，移除 `req?.hostname === 'localhost'`，改为严格基于真实客户端 Socket IP 判定（包含 IPv4、IPv6 及 IPv4-mapped IPv6：`127.0.0.1`、`::1`、`::ffff:127.0.0.1`），彻底消除了 Host 头伪造漏洞。
+  2. `api/router/handlers/category.js`：强化 `system.category.delete` 鉴权条件为 `if (!service || data.owner !== service)`，缺少 `service` 或属主不一致一律拒绝。
+  3. `api/router/index.js`：限流 IP 改为优先使用物理连接 Socket IP，仅在显式配置 `TRUST_PROXY=true` 时提取 XFF 首个 IP；接入 `corsOptionsFromEnv` 收紧跨域配置；统一 `system.service.add` 本地检测。
+  4. `api/core/administrator/index.js`：修复形参污染，显式赋值 `isAdmin: req.permit === 'admin'`。
+  5. `api/router/handlers/service.js`：增加 URL 基础白名单与合法性校验，拦截非法协议及保留云元数据地址（`169.254.169.254`）。
+- **回测验证**：
+  - `auth.test.js`、`category_protocol.test.js`、`service.test.js`、`administrator/handlers.test.js` 对应新增/回归单测全绿。
+  - CI 门禁关键测试套件全部回归通过。

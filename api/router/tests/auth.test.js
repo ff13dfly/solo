@@ -52,15 +52,17 @@ describe('Auth Handler', () => {
     });
 
     describe('isLoopbackRequest', () => {
-        test('true for IPv4 / IPv6 loopback ip and localhost hostname', () => {
+        test('true for IPv4 / IPv6 / IPv4-mapped loopback ip or socket remoteAddress', () => {
             expect(authHandlers.isLoopbackRequest({ ip: '127.0.0.1' })).toBe(true);
             expect(authHandlers.isLoopbackRequest({ ip: '::1' })).toBe(true);
-            expect(authHandlers.isLoopbackRequest({ hostname: 'localhost' })).toBe(true);
+            expect(authHandlers.isLoopbackRequest({ ip: '::ffff:127.0.0.1' })).toBe(true);
+            expect(authHandlers.isLoopbackRequest({ socket: { remoteAddress: '127.0.0.1' } })).toBe(true);
         });
 
-        test('false for a remote ip / hostname', () => {
-            expect(authHandlers.isLoopbackRequest({ ip: '10.0.0.5', hostname: 'router' })).toBe(false);
-            expect(authHandlers.isLoopbackRequest({ ip: '203.0.113.7' })).toBe(false);
+        test('false for remote ip, even with Host/hostname spoofed to localhost', () => {
+            expect(authHandlers.isLoopbackRequest({ ip: '10.0.0.5', hostname: 'localhost' })).toBe(false);
+            expect(authHandlers.isLoopbackRequest({ ip: '203.0.113.7', hostname: 'localhost' })).toBe(false);
+            expect(authHandlers.isLoopbackRequest({ hostname: 'localhost' })).toBe(false);
         });
 
         test('false for a nullish request', () => {

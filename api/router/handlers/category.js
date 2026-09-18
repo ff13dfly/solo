@@ -92,7 +92,7 @@ function createCategoryHandlers(redisClient, SERVICES) {
                 const data = JSON.parse(existing);
 
                 // Permission check: Only the owner can delete a category
-                if (service && data.owner !== service) {
+                if (!service || data.owner !== service) {
                     return res.json({ jsonrpc: '2.0', error: { code: -32012, message: 'CATEGORY_PERMISSION_DENIED' }, id });
                 }
 

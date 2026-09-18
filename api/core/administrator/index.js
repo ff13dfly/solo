@@ -177,13 +177,11 @@ app.post('/jsonrpc', async (req, res) => {
             'setting.display.delete': (p) => Methods.display.del(p),
         };
 
-        const trustedParams = { ...params };
-        if (req.permit === 'admin') {
-            trustedParams.isAdmin = true;
-        }
-        trustedParams._user = req.user;
-
-        trustedParams._user = req.user;
+        const trustedParams = {
+            ...params,
+            isAdmin: req.permit === 'admin',
+            _user: req.user
+        };
         
         if (!handlers[method]) {
             return jsonrpc.error(res, jsonrpc.METHOD_NOT_FOUND(method), id, 404);

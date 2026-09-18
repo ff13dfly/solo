@@ -26,6 +26,23 @@ const { enrichCapabilityMap } = require('./capability');
  *      and its microservices without pre-shared keys.
  */
 async function addService(inputUrl, SERVICES, redisClient, keypair, CAPABILITY_MAP) {
+    if (!inputUrl || typeof inputUrl !== 'string') {
+        throw new Error('Invalid service URL');
+    }
+    let parsed;
+    try {
+        parsed = new URL(inputUrl);
+    } catch (_) {
+        throw new Error('Malformed service URL');
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error('Service URL protocol must be http or https');
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') {
+        throw new Error('Service URL points to a forbidden address');
+    }
+
     let baseUrl = inputUrl.replace(/\/$/, '').replace(/\/jsonrpc$/, '');
     console.log(chalk.cyan(`[Discovery] Initiating handshake with: ${baseUrl}`));
 

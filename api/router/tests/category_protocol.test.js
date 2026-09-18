@@ -130,4 +130,23 @@ describe('Router Category Protocol', () => {
         const stored = await mockRedis.hGet(REGISTRY_KEY, 'ROLE');
         expect(JSON.parse(stored).status).toBe('ACTIVE');
     });
+
+    test('TestCase 6: Delete rejects missing or mismatched service', async () => {
+        const h = createCategoryHandlers(mockRedis, mockServices);
+        await h.reserve({ key: 'FINANCE_LEDGER', service: 'finance' }, 1, new MockResponse());
+
+        // Attempt delete without service param
+        const resMissing = new MockResponse();
+        await h.delete({ key: 'FINANCE_LEDGER' }, 2, resMissing);
+        expect(resMissing.sentData.error?.code).toBe(-32012);
+
+        // Attempt delete with attacker service param
+        const resWrong = new MockResponse();
+        await h.delete({ key: 'FINANCE_LEDGER', service: 'attacker' }, 3, resWrong);
+        expect(resWrong.sentData.error?.code).toBe(-32012);
+
+        // Verify still active
+        const stored = await mockRedis.hGet(REGISTRY_KEY, 'FINANCE_LEDGER');
+        expect(JSON.parse(stored).status).toBe('ACTIVE');
+    });
 });

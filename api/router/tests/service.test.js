@@ -69,6 +69,17 @@ describe('Service Handlers', () => {
             await expect(addService(inputUrl, SERVICES, redisClient, keypair, CAPABILITY_MAP))
                 .rejects.toThrow('Handshake verification rejected by target service');
         });
+
+        test('should reject invalid or forbidden URLs', async () => {
+            await expect(addService('', SERVICES, redisClient, keypair, CAPABILITY_MAP))
+                .rejects.toThrow('Invalid service URL');
+            await expect(addService('not-a-url', SERVICES, redisClient, keypair, CAPABILITY_MAP))
+                .rejects.toThrow('Malformed service URL');
+            await expect(addService('ftp://example.com', SERVICES, redisClient, keypair, CAPABILITY_MAP))
+                .rejects.toThrow('Service URL protocol must be http or https');
+            await expect(addService('http://169.254.169.254/latest', SERVICES, redisClient, keypair, CAPABILITY_MAP))
+                .rejects.toThrow('Service URL points to a forbidden address');
+        });
     });
 
     describe('ensureAdministratorService', () => {

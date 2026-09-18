@@ -4,6 +4,7 @@ const bodyParser = require('body-parser');
 const config = require('./config');
 const { mountHealth } = require('../library/health');
 const { bindAddr } = require('../library/ports');
+const { corsOptionsFromEnv } = require('../library/cors');
 
 // --- HANDLER MODULES ---
 const handlers = {
@@ -46,7 +47,7 @@ process.on('unhandledRejection', (reason, promise) => {
 const app = express();
 const PORT = config.port;
 
-app.use(cors());
+app.use(cors(corsOptionsFromEnv()));
 app.use(bodyParser.json({ limit: config.bodyLimit }));
 
 /**
@@ -207,7 +208,7 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
                 'system.report.update': (p, i, r) => handlers.report(redisClient).update(p, i, r, isAdmin),
                 'system.service.list': (p, i, r) => serviceHandlers.listServices(i, r),
                 'system.service.add': (p, i, r) => {
-                    const isLocal = req.ip === '127.0.0.1' || req.ip === '::1' || req.hostname === 'localhost';
+                    const isLocal = handlers.auth.isLoopbackRequest(req);
                     if (!isAdmin && !(isLocal && config.debug)) return jsonrpc.error(r, jsonrpc.FORBIDDEN('Admin required'), i);
                     return systemHandlers.systemAddService(p, i, r);
                 },
@@ -273,7 +274,10 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
             if (!config.rateLimitDisabled) {
                 const rlRules  = await handlers.ratelimit.getRules(redisClient);
                 const rlRule   = handlers.ratelimit.resolveLimit(method, CAPABILITY_MAP, rlRules);
-                const rlIp     = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+                const clientIp = req.socket?.remoteAddress || '127.0.0.1';
+                const rlIp     = (process.env.TRUST_PROXY === 'true' && req.headers['x-forwarded-for'])
+                    ? req.headers['x-forwarded-for'].split(',')[0].trim()
+                    : clientIp;
                 const identity = (rlRule.by === 'user' && sessionUser.uid) ? sessionUser.uid : rlIp;
                 const rlStatus = await handlers.ratelimit.checkLimit(redisClient, method, identity, rlRule);
                 if (!rlStatus.allowed) {

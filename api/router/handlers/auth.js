@@ -134,7 +134,8 @@ function isAdmin(sessionUser) {
  *      would need the caller to present a service-bot token instead.
  */
 function isLoopbackRequest(req) {
-    return req?.ip === '127.0.0.1' || req?.ip === '::1' || req?.hostname === 'localhost';
+    const ip = req?.ip || req?.socket?.remoteAddress;
+    return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
 }
 
 /**
