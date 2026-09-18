@@ -190,3 +190,11 @@ Do not end the run before one of exactly two terminal states: (a) all Phase 6 ar
 8. Re-reporting carried same-source prior confirmed records or using them as exemplars that anchor the hunt.
 9. Assigning severity to `needs_validation` records.
 10. Writing the report before independent verification or letting prose and JSON disagree.
+
+## Periodic re-evaluation cadence (定期安全复评)
+
+Refer to `.agents/rules/security-cadence.md` for repo-specific triggers and cadence:
+- **Event triggers**: Trigger a re-audit whenever network boundaries (Router/Gateway), workflow evaluation (`runner.js`/resolvers), AI inverted gates (`decide.js`), or storage policies change.
+- **Cadence**: Recommended review every 30 days or prior to major milestone releases.
+- **Baseline reference**: [`docs/security/SECURITY_EVALUATION_REPORT.md`](../../../docs/security/SECURITY_EVALUATION_REPORT.md).
+
