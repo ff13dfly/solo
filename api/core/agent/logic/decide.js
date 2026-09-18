@@ -25,6 +25,7 @@ const ProviderFactory = require('../providers');
 const modelConfig = require('./model_config');
 const jsonrpc = require('../handlers/jsonrpc');
 const { createLogger } = require('../../../library/logger');
+const { scanValue } = require('../../../library/injection-detect');
 
 const logger = createLogger(config.serviceName || 'agent');
 
@@ -89,6 +90,22 @@ async function decide(params = {}) {
 
     const targetModel = await modelConfig.resolve('agent.decide', model);
     const provider = ProviderFactory.getProvider(config, targetModel);
+
+    // Prompt injection pre-screening: scan context for adversarial prompt-injection payloads.
+    // If untrusted input attempts instruction hijack, fail-soft immediately to human escalation.
+    if (context && typeof context === 'object') {
+        const injectionHits = scanValue(context);
+        if (injectionHits.length > 0) {
+            logger.warn(`[decide] prompt injection detected in context at ${injectionHits[0].path}: ${injectionHits[0].hits.join(', ')}`);
+            return escalation(`suspected prompt injection in context (${injectionHits[0].hits.join(', ')})`, {
+                securityViolation: 'prompt_injection',
+                path: injectionHits[0].path,
+                hits: injectionHits[0].hits,
+                provider: 'shield',
+                model: targetModel,
+            });
+        }
+    }
 
     if (!provider || typeof provider.decide !== 'function') {
         // Provider can't make structured decisions → degrade to manual handling.

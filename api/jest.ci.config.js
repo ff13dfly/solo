@@ -134,6 +134,7 @@ module.exports = {
         '<rootDir>/core/orchestrator/tests/control.test.js',
         '<rootDir>/core/agent/tests/mock-provider.test.js',
         '<rootDir>/core/agent/tests/decide.test.js',
+        '<rootDir>/core/agent/tests/prompt-injection.test.js',
         '<rootDir>/core/agent/tests/focus.test.js',
         '<rootDir>/core/agent/tests/model-config.test.js',
         '<rootDir>/router/tests/events.test.js',

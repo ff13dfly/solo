@@ -56,4 +56,31 @@ function scanDeclaredStrings(schemaItems, data) {
     return violations;
 }
 
-module.exports = { PATTERNS, scanString, scanDeclaredStrings };
+/**
+ * Recursively scan any JavaScript object, array, or string for prompt injection patterns.
+ * Returns an array of { path, hits, pattern }.
+ */
+function scanValue(val, path = '') {
+    if (typeof val === 'string') {
+        const hits = scanString(val);
+        return hits.length ? [{ path: path || 'root', hits, pattern: hits[0] }] : [];
+    }
+    if (Array.isArray(val)) {
+        const out = [];
+        val.forEach((item, idx) => {
+            out.push(...scanValue(item, path ? `${path}[${idx}]` : `[${idx}]`));
+        });
+        return out;
+    }
+    if (val && typeof val === 'object') {
+        const out = [];
+        for (const [k, v] of Object.entries(val)) {
+            out.push(...scanValue(v, path ? `${path}.${k}` : k));
+        }
+        return out;
+    }
+    return [];
+}
+
+module.exports = { PATTERNS, scanString, scanDeclaredStrings, scanValue };
+
