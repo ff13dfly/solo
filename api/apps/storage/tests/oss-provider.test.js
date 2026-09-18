@@ -110,6 +110,23 @@ describe('local provider — round-trip against the single-file local-oss-server
         expect(await store.head(keying.keyFor(sha('never-written'), '.txt'))).toBeNull();
     });
 
+    test('serves security headers (nosniff and CSP for SVG/HTML) on GET and HEAD', async () => {
+        const svgKey = keying.keyFor(sha('payload-svg'), '.svg');
+        const svgBody = Buffer.from('<svg><script>alert(1)</script></svg>');
+        await store.put(svgKey, svgBody, { contentType: 'image/svg+xml' });
+
+        const signed = store.presignGet(svgKey);
+        const resGet = await httpGet(signed);
+        expect(resGet.status).toBe(200);
+        expect(resGet.headers['x-content-type-options']).toBe('nosniff');
+        expect(resGet.headers['content-security-policy']).toBe("default-src 'none'; style-src 'unsafe-inline'");
+
+        const resHead = await httpGet(signed, { method: 'HEAD' });
+        expect(resHead.status).toBe(200);
+        expect(resHead.headers['x-content-type-options']).toBe('nosniff');
+        expect(resHead.headers['content-security-policy']).toBe("default-src 'none'; style-src 'unsafe-inline'");
+    });
+
     test('presignGet yields a fetchable URL; unsigned/tampered/expired are rejected', async () => {
         const key = keying.keyFor(sha('payload-3'), '.txt');
         const body = Buffer.from('signed-content');

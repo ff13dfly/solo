@@ -247,7 +247,8 @@ module.exports = (redis, { serviceName, routerUrl, traceAudit }) => ({
                     if (value !== undefined) {
                         // Map to the target source path
                         const targetPath = resolver.source.substring(1); // Remove leading $
-                        setPath(context, targetPath, value);
+                        const setOk = setPath(context, targetPath, value);
+                        if (!setOk) continue;
                         logger.info(`Resolver ${key} resolved to:`, value);
 
                         // SYNC: If target is step.ID.params.VAR, also update input.VAR
@@ -826,9 +827,15 @@ function extractPath(obj, path) {
  * Set value in nested object using a path string like "step.id.params.x"
  */
 function setPath(obj, path, value) {
-    if (!path) return;
+    if (!path || !obj || typeof obj !== 'object') return false;
     const parts = path.split('.');
     
+    // Prototype pollution defense: reject path traversal through prototype keys
+    if (parts.some((p) => p === '__proto__' || p === 'constructor' || p === 'prototype')) {
+        logger.warn(`Blocked attempt to set dangerous path "${path}"`);
+        return false;
+    }
+
     // Special handling for $step.ID.params.VAR to also update $input.VAR
     // This is because UI often maps input.VAR to step.params.VAR
     if (parts[0] === 'step' && parts.length >= 4 && parts[2] === 'params') {
@@ -848,4 +855,9 @@ function setPath(obj, path, value) {
         current = current[part];
     }
     current[parts[parts.length - 1]] = value;
+    return true;
 }
+
+module.exports._setPath = setPath;
+module.exports._extractPath = extractPath;
+

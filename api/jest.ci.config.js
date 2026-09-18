@@ -25,6 +25,7 @@ module.exports = {
     testMatch: [
         '<rootDir>/core/orchestrator/tests/engine.test.js',
         '<rootDir>/core/orchestrator/tests/trace-audit.test.js',
+        '<rootDir>/core/orchestrator/tests/runner-security.test.js',
         '<rootDir>/core/notification/tests/worker.test.js',
         '<rootDir>/core/administrator/tests/handlers.test.js',
         '<rootDir>/core/user/tests/introspection.test.js',

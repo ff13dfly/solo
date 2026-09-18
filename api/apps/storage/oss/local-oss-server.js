@@ -238,9 +238,14 @@ function createLocalOssServer(opts = {}) {
             if (!fs.existsSync(abs)) return res.status(404).end();
             const st = fs.statSync(abs);
             const meta = readMeta(key);
+            const ct = (meta && meta.contentType) || mimeFromExt(key);
             res.setHeader('Content-Length', st.size);
-            res.setHeader('Content-Type', (meta && meta.contentType) || mimeFromExt(key));
+            res.setHeader('Content-Type', ct);
             res.setHeader('Last-Modified', st.mtime.toUTCString());
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            if (typeof ct === 'string' && /^(image\/svg\+xml|text\/html|text\/xml|application\/xhtml\+xml|application\/xml)/i.test(ct)) {
+                res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+            }
             if (meta && meta.etag) res.setHeader('ETag', meta.etag);
             return res.status(200).end();
         }
@@ -258,6 +263,10 @@ function createLocalOssServer(opts = {}) {
                 } catch (e) { log.warn(`[local-oss] image process failed: ${e.message}`); }
             }
             res.setHeader('Content-Type', ct);
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            if (typeof ct === 'string' && /^(image\/svg\+xml|text\/html|text\/xml|application\/xhtml\+xml|application\/xml)/i.test(ct)) {
+                res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+            }
             return res.status(200).end(buf);
         }
 
