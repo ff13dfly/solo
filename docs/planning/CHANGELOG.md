@@ -16,6 +16,22 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 以及 `../feedback/done/{redisearch-cjk-both-paths-blocked,no-sanctioned-exit-for-external-store}.md`
 的「落地（v1.2.15）」小标题）——发版时若不是这个号，先把那几处改掉。
 
+### 软删不释放载荷：autocheck 补载荷维度 + 建模判据成文（清 `../feedback/done/soft-delete-keeps-large-payloads.md`）
+
+- **`autocheck softDelete` 新增规则 5**：软删实体的方法参数里出现 `maxLength ≥ 100000` ⇒ **WARN**。
+  `softDelete` 只改 `status`、**载荷一字不动**，而框架 / 文档 / autocheck 三处原本都只盯索引一致性——
+  steward 实测 85 条墓碑占掉一个实体 81% 的体积（10.39MB），硬删后整库 44.64MB → 24.03MB，
+  躺了近一个月零信号。规则**不改行为**，只把它变成写代码时就要显式回答的问题。
+  判据落在 `handlers/introspection.js` 的参数 `maxLength`（`entities.js` 的字段 schema 没有长度维）。
+- **scaffold 文档两处**：`authoring/service.md` §6.6 补第 (c) 条「删了不等于不占」；
+  `authoring/modeling.md` 新增「★ 要不要软删：先看载荷」——此前 modeling 里「软删」二字 **grep 零提及**，
+  而「该不该软删」本就是建模决策。
+- **`entity.js` 的 `destroy` 头注**从纯警告（"Use with caution"，读起来像「正常别用」）
+  改为说明正当用途：对带 ≥100KB 载荷字段的实体，**它才是正确的清理路径**。
+
+下游 action：升级后 `autocheck` 可能对既有软删实体报新的 `[载荷]` WARN——确认清理路径即可
+（真要可恢复就保持现状、注释一句），**不阻塞门禁**（WARN 不是 ERROR）。
+
 ### relay bot token 空闲过 TTL 后永久失联（清 `../feedback/done/relay-token-lazy-refresh-dies-when-idle.md`）
 
 - 🔴 **`user.token.refresh` 改为 `public: true`**（`core/user/handlers/introspection.js`）。

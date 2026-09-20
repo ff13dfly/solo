@@ -16,6 +16,12 @@
 > **2026-07-15 增补**：新增 §3.6「安全考量（设计前必解）」——对 A 线 bridge 设计做了一轮多-agent
 > 对抗式安全评审，结论（四处硬缺口 + 若干承认未解项 + 实现陷阱）归入该节。
 >
+
+> **2026-09-20 增补**：新增 §3.7「身份面：跨箱统一登录」——**人**怎么在多箱之间登录一次、各箱按各自权限放行。
+> 此前 §3 全篇只讲**机器**调用（箱子互为客户端），身份面是空白。结论：走 frame 已有的 passport → bot account 路由，
+> 零新名词；**只覆盖受限视图主体，不覆盖运营者的管理视角**（判据见该节）。同时它是 §2.3 末尾那个
+> 「同一运营者 ⇒ 同信任域在部门场景下不成立」判断点的**第一个具体场景**。
+>
 > **🔴 2026-09-03 收敛（用户拍板）**：**A 线 bridge 不再是新服务**——收敛为「gateway 出站 → ingress 入站」，
 > frame 只加 `gateway.webhook.send` 一个 solo 目标模式；§3.3–§3.6 的 mesh 签名 / principal / 预检 / 独立服务
 > 整体收窄为**跨运营方档**条件依赖。判据：SOLO 作为支持层的必要条件是简洁。详见 §3.0。
@@ -91,6 +97,16 @@ server-attested 执行）。2026-07-03 拆分把能「只加不破」的项全�
 > 没有任何区分**。建议不变、落点变了：把这类跨网格配置变更接到 **approval（多签）+
 > orchestrator 分层审批**上（两样 v1.1 已落地，只差接线）。
 
+> **🔴 2026-09-20 补：上面那个判断点有第一个具体场景了 —— 跨箱统一登录**（用户提出，本轮理清）。
+>
+> 那条补充说它「必须是个**被显式列出的判断点**」，但当时没有触发它的实例，所以一直悬着。**跨箱统一登录就是它。**
+> 形状上完全吻合那句「**尤其当上游那个协同 AI 可以代表任意下游发起调用时**」——统一登录的实现必然是
+> 「主箱代人去子箱换 session」，主箱因此持有一组能变成 N 个人的凭据，这是该描述的极端形态而非近似。
+>
+> **本轮的结论是：这个场景可以在不触发 actor-claim 重启的前提下落地**，代价是划一条适用边界
+> （只覆盖受限视图主体，运营者管理视角仍走各箱本地登录）。落地规格见 **§3.7**。
+> 判断点本身**不关闭**——它在「B 线落地后 N 按人头增长」或「出现部门级信息隔离需求」时仍会重新变成活的。
+
 ---
 
 ## 3. A 线 · 联邦级联 / SOLO Bridge（跨网格联邦）
@@ -142,6 +158,9 @@ apiprovider 式「approve = 放行一个出站目标」）。主权形状不变�
 之间的事（ingress `dataSchema` 可选声明，违约 422 留人审）。这是 ingress 原本的 dumb pipe 划线，也是论文 frame / payload 的划线。
 §3.5 末「mesh edge 规范是否独立成文」的待拍板项因此**大幅缩水**：同运营者档的 edge 就是 ingress 信封 + `gateway.webhook.send`
 solo 模式，两者都已有文档；独立成文只在跨运营方档才有必要。
+
+**身份面不在本节** —— 本节定义的是**机器**怎么过边界（箱子互为客户端）。**人**怎么跨箱登录见 **§3.7**，
+它同样只用本节认可的两种凭证之外的东西：一个 `public` 方法，连 bot token 都不需要。
 
 ### 3.1 概念
 SOLO_A 的 `bridge` 服务把请求分发到下游 SOLO_{1..n}，形成级联。**每个下游 SOLO 是一个独立网格**
@@ -375,6 +394,122 @@ nonce 缓存 + method/params/aud 摘要绑定 + 非对称验签，不得字面�
 > **一句话**：骨架对，但**签名信封字段不完整（缺 aud + 真 nonce 存储 + hop 计数）、actor/source 的推迟有被当审计实为授权的
 > 后果、互认单向（未钉 callee）、"窄 permit"被 public 方法与通配漏掉**——A 组四处是 v2 开工前必解；其余要么承认未做（B 组），
 > 要么被"同运营者 + 静态拓扑"的默认前提圈掉（C 组）。
+
+### 3.7 身份面：跨箱统一登录（2026-09-20 定 · 同运营者档 / 首发面）
+
+> **地位**：本节属于**首发面**（与 §3.0 同档），不是 §3.3–§3.6 那种跨运营方档基线。
+> 起因：用户提出「user account → bot account 实现统一登录、各箱权限区分」。依据分两类：
+> **源码现查（2026-09-20）**——逐条标了 `文件:行号`；**设计判断**——适用边界与爆炸半径的取舍为本轮拍板，
+> 尚无运行结果（今天没有任何一条跨箱登录在跑）。
+
+#### 3.7.1 🔴 适用边界（先划清，其余都从这里推出）
+
+**统一登录只覆盖「受限视图主体」，不覆盖「运营者的管理视角」。** 四条现查依据，全部指向同一结论：
+
+| # | 事实 | 出处（现查） |
+|---|------|------|
+| 1 | passport 发证 fail-closed：解析出的 permit 必须含 `$owner.value`，否则拒签 session | `api/core/user/logic/passport.js:205` |
+| 2 | **Entity Factory 现在会自动执行 `$owner`**：服务注入 `requestContext(req)` 后，创建时盖戳、跨 owner 访问 `NOT_FOUND`、list 自动过滤 | `api/library/entity.js:111-118`、`:1009`；`api/library/README.md:31`；测试 `library/tests/entity-owner-scope.test.js` |
+| 3 | ⇒ passport session **结构性地看不到别人的行**。这是 passport 的主要卖点，不是限制 | 1+2 |
+| 4 | 内部 user 账号是挑战-响应登录（`SHA256(challenge + user_hash)`），主箱要代登录**必须持有 user_hash**（等价于密码） | `api/core/user/logic/user.js:127-200` |
+
+⚠️ **依据 2 是本轮现查改写的结论**：`../feedback/done/passport-owner-isolation-declared-not-enforced.md`
+（2026-08-15 实测）记的是「`$owner` 强制声明、可选执行，服务不读就等于没有」。**该篇的建议 ① 已落地**，
+所以它在 `done/`。别再按那篇的旧结论设计——彼时「运营者能靠 passport 看到全表」是真的，现在不是了。
+
+**⇒ 运营者跨箱做管理，仍然各箱各自登录。** 这不是妥协：它正好保住
+[`v2-bridge-interaction.md`](./v2-bridge-interaction.md) §1「子箱是完整生命体」——
+子箱的管理入口从不经过主箱，主箱撤掉也照常能管。
+
+#### 3.7.2 机制：零新名词
+
+**`user.passport.verify` 是 `public: true`**（`api/core/user/handlers/introspection.js:204`）
+⇒ 主箱**不需要在子箱有 bot 账号、不需要配 permit**，直接 POST 子箱 Router 换 session。凭据只有 deviceToken。
+
+```
+人 → 主箱 user 登录（现成）
+   → 主箱取出该人在子箱 X 的 deviceToken（主箱侧 secret 存储）
+   → POST 子箱X / user.passport.verify { anchor, deviceId, deviceToken }      ← public，无需任何 token
+   → 子箱 resolveAuthority(entity, anchor)  (passport.js:77-89)
+       entity.bot → 抄 bot account 的 permit + 注入 $owner=anchor
+   → 子箱自己的 session（各箱各发各的，不共享 session store）
+```
+
+**按 §3.0 的判据计分**——「箱子 owner 为了联邦要学的新名词数量」：**零**。
+passport 与 bot account 都是 v1.1 原语，子箱 owner 要做的只是「建一张 passport，绑一个 bot」。
+bot 在这里的角色是**权限模板**而非身份（`spec-passport-identity-line.md:14` 那张表的原始定义），
+所以用户最初设想的 `user → bot` 链条要写成 **`user → passport → bot`**：
+中间这层 passport 提供 per-person 的审计与吊销粒度，而 bot uid 强制 `system.` 前缀、是共享 bearer 身份
+（`logic/bot.js:62`），人直接映射成 bot 会让审计里的 actor 全是 `system.*`。
+
+#### 3.7.3 frame 要补的一处（只加不破，v1.x）
+
+**`user.passport.register` 不支持绑 bot** —— 管理员因此没有路径直接建一张绑 bot 的 passport：
+
+- 声明里没有 `bot` 参数：`handlers/introspection.js:200`
+- logic 强制 `roleName`：`logic/passport.js:141`（`if (!anchor || !roleName || !deviceToken) throw`）
+- 而底层 `_provision` **本就支持** `bot`（`logic/passport.js:119`），设计意图也是「绑 bot **或** role」
+  （`spec-passport-identity-line.md` §2.1）——**只有管理员入口漏了**
+
+绕法是配 `config.passport.defaultBot.byApp` + 走 public 自助面（`otp.verify` / `device.issue`），
+但那是把内部协作者塞进面向匿名访客的自助发证通道，形状是错的。
+
+⇒ **给 `register` 加 `bot` 参数**，`role` / `bot` 二选一校验；声明 ↔ logic 同步（CLAUDE.md §5 红线）。
+⇒ 顺带修一处现有漂移：`user.passport.verify` 的 `returns_schema` 缺 `bot` 字段
+（`introspection.js:204`），而 logic 确实返回它（`passport.js:220`），`device.issue` / `upgrade` 的 schema 都有。
+
+#### 3.7.4 爆炸半径与治理
+
+主箱持有 O(人 × 箱) 个 deviceToken，是「能变成 N 个人」的单点（§2.3 那个判断点的由来）。
+
+🔴 **持 deviceToken 比给子箱加「代发 session」的方法更窄**，这是本节最关键的取舍：
+一个 `user.passport.session.issue({anchor})` 式的方法看起来省掉了金库，实际把权力从
+「冒充**它确实持有凭据的**那些人」放大成「对**任意** anchor 发 session」——包括子箱自己建的、
+主箱根本不该碰的那些。**⇒ 明确不做。** 凭据矩阵的笨重是特性：它按人枚举，也按人吊销。
+
+缓解手段全部在现有原语内：
+
+- **一 (人, 箱) 一把独立 deviceToken** → 吊销粒度精确到人×箱
+- **passport 的 `app` 字段标记来源**（如 `app:'mesh'`）→ 子箱 owner 随时
+  `user.passport.list {app:'mesh'}` 看清「主箱能冒充我这儿的谁」，这是子箱的知情权，不是可选装饰
+- **主箱侧存储**复用 §3.0 已认可的「发方存 key 的地方」形状（steward 为 `steward.variable` secret）
+- **治理**：§2.3 末尾那条「跨网格配置变更接 approval（多签）+ orchestrator 分层审批」
+  对这组凭据比对 gateway 的 solo 目标配置**更适用**——后者是「能调对方几个方法」，前者是「能成为对方的几个人」
+
+#### 3.7.5 撤除无痕验收（对齐交互规格 §1.4）
+
+| 侧 | 动作 | 效果 |
+|---|---|---|
+| 子箱 | `user.passport.disable {anchor}` | 实体 `DISABLED` + **立即吊销其 live session**（`passport.js:166-184`）。零代码回滚 |
+| 主箱 | 删那条 secret | 扇出时该箱直接跳过 |
+| 子箱本地登录 | 不受影响 | ⇒ §1「子箱是完整生命体」成立 |
+
+#### 3.7.6 落地顺序
+
+1. **frame**（v1.x 只加不破）：`register` 加 `bot` 参数 + `verify` 的 `returns_schema` 补 `bot`。
+2. **每子箱一次性配置**：`user.bot.create`（权限模板，永不 `allow_all`——`logic/bot.js:23-27` 已 assert）
+   → `user.passport.register { anchor:<email>, bot:'system.<角色>', app:'mesh' }` → deviceToken 交主箱。
+3. **主箱**：secret 存储 + 一个「登录扇出」动作。**逐箱隔离失败，拉不到 = 显式异常**
+   （交互规格 §1.3：「没消息」永不解释成「没事」）。
+4. **验收**：撤除演练走一遍 + 每箱 `passport.list {app:'mesh'}` 对账。
+
+#### 3.7.7 明确不做
+
+- **不加 `passport.session.issue`** 之类的代发方法（§3.7.4 的权力放大）。
+- **不做 mesh 签名断言换 session** —— §2.3 已把签名信任模型裁为跨运营方档，同运营者重新引入它会新增
+  「断言信封 / 公钥带外登记 / 新方法」三个名词，按 §3.0 判据是负分。**重启条件与 §2.3 那条共用**。
+- **不代登录内部 user account**（§3.7.1 依据 4：须持 user_hash）。
+- **不共享 session store** —— 每箱各发各的 session，前端持一组；共享等于把箱子焊死。
+
+#### 3.7.8 何时才值得做
+
+价值是 N（箱数）× M（人数）的函数。**当前 N≈6、M=1（全是自己的箱），手工给每箱配一次 passport 就够，
+不值得上机制。** 触发点两个，哪个先到都算：
+
+1. 出现第一个需要跨箱受限视图的**协作者**（不是本人）——更早到，且它同时把 §2.3 那个信息隔离判断点变成活的；
+2. **B 线落地后 N 按人头增长**（§2.3 2026-09-05 补第 2 条：「每个员工 + AI 一套网格，N 就是员工数」）。
+
+⇒ 本节是**规格先行**：先把形状与边界定死，避免届时临时设计时重新发明签名断言那条已被裁掉的路。
 
 ---
 

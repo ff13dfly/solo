@@ -944,7 +944,16 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
 
         /**
          * Permanently destroy an entity (Hard Delete).
-         * @on_demand Use with caution. Bypasses soft-delete logic.
+         * @on_demand Bypasses soft-delete logic: purges the data key AND its index entries.
+         * @when Not merely "dangerous, avoid it" — for entities carrying LARGE PAYLOADS
+         *       (html/content/sample fields of 100KB+) this is the CORRECT cleanup path.
+         *       `delete` on a softDelete entity only flips `status`: the payload keeps
+         *       costing memory and keeps landing in backups, with no error and nothing
+         *       in `list` to hint at it (measured once: 85 tombstones = 81% of an entity's
+         *       10.39MB; hard-deleting them took the whole DB 44.64MB -> 24.03MB).
+         *       Legitimate uses: records evicted by a retention cap, data already migrated
+         *       elsewhere, raw material nobody will restore.
+         *       See docs/authoring/modeling.md (要不要软删) + service.md §6.6 (c).
          */
         async destroy({ id }) {
             if (!id) throw jsonrpc.MISSING_PARAM('id');
