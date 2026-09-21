@@ -129,7 +129,7 @@ git checkout main
   **为什么值得成规矩**:① `git describe` 能直接答「这个 bug 在哪版之间引入」;② CHANGELOG 每个版本节都对应真实坐标;
   ③ `upgrade.sh` 的 ACTION REQUIRED 横幅按版本号扫 CHANGELOG 节,默认每个节都真发过;④ 消费者 `.solo-version`
   指向的 bundle 只有从 tag 才能复现(`release-bundle.sh`),没 tag 的版本号 = 复现不出来的产物。
-- **补丁升级已验证**:`v1.1.1` → `v1.1.2` 用一次性消费者真跑通(8/8 断言),做法见 [`upgrade-patch.md`](./upgrade-patch.md)。同 minor 补丁 = 一条 `deploy/scaffold/upgrade.sh`,零手动步骤。**2026-09-04 起这件事每次 push 都由 CI 做**:`upgrade-path` job 跑 `deploy/check-upgrade-path.sh`(init 一次性消费者 → [Project]/[Solo]/[Solo→Project] 三区放哨兵 → 伪装成上一 patch 版 → upgrade `--dry-run` / 真跑 / 再跑 → 49 条断言 + doctor/precheck ✗ 0),人工那次只剩历史记录价值。
+- **补丁升级已验证**:`v1.1.1` → `v1.1.2` 用一次性消费者真跑通(8/8 断言),做法见 [`upgrade-patch.md`](./upgrade-patch.md)。同 minor 补丁 = 一条 `deploy/scaffold/upgrade.sh`,零手动步骤。**2026-09-04 起这件事每次 push 都由 CI 做**:`upgrade-path` job 跑 `deploy/check-upgrade-path.sh`(init 一次性消费者 → [Project]/[Solo]/[Solo→Project] 三区放哨兵 → 伪装成上一 patch 版 → upgrade `--dry-run` / 真跑 / 再跑 → 逐条断言 + doctor/precheck ✗ 0;**断言条数随规则增减,以实跑输出末行为准**,别在文档里维护那个数字),人工那次只剩历史记录价值。
 - **仍待人触发的发布尾步**(§3-4/3-6,需基建/对外权限):从 tag build 的 bundle 归档到 Release/对象存储 + 通知消费者对齐 `.solo-version`。
 - **之后**:阶段一(trunk+tags)继续推 v1.x;真要动破坏性架构时,再切 `release/v1.x` + main 转 v2。
 

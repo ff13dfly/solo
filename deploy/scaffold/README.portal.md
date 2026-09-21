@@ -43,8 +43,8 @@ VITE_ROUTER_URL=http://localhost:8600
 > 初始化时 `init.sh` 已默认从 Solo 当下源码构建并下发当前版本 bundle（`FRONTEND_BUILD=auto|force|skip`）。以下是后续手动升级到新版的步骤。
 
 ```bash
-# 1. 在 Solo 源码目录重新构建（自动清掉同名旧版本 tarball）
-bash deploy/build-frontend.sh
+# 1. 在 Solo 源码仓重新构建（自动清掉同名旧版本 tarball）——本项目不带这个脚本
+cd <solo 仓> && bash deploy/build-frontend.sh
 
 # 2. 复制新 bundle 到本项目
 cp portal/publish/system.v{new}.tar.gz /path/to/{{PROJECT_NAME}}/portal/publish/

@@ -7,12 +7,12 @@ portal you actually own here.
 ## Quick start
 
 ```bash
-# 1. Backend up (in another terminal)
-bash ../deploy/run.sh
+# 1. Backend up (in another terminal) — this dir is e2e/ui/, so the stack is two levels up
+bash ../../deploy/run.sh
 
 # 2. Serve the operator portal (pick one):
 #    a) built tarball via run.sh → already on PORTAL_OPERATOR_PORT (3600)
-#    b) live source:  cd ../portal/operator && npm install && npm run dev   # vite, e.g. :5173
+#    b) live source:  cd ../../portal/operator && npm install && npm run dev   # vite, e.g. :5173
 
 # 3. Configure + install + run
 cp .env.example .env          # set OPERATOR_URL + auth (SOLO_E2E_TOKEN is easiest)

@@ -59,7 +59,7 @@ command -v rsync >/dev/null || { echo "rsync missing (init.sh needs it)"; exit 1
 echo "▶ solo $VER · probe pretends to be $PREV_VER · work dir $WORK"
 
 # ── 1. scaffold ────────────────────────────────────────────────────────────────
-echo "▶ 1/6 init.sh (frontend skipped)"
+echo "▶ 1/7 init.sh (frontend skipped)"
 if ! FRONTEND_BUILD=skip SOLO_PORT_BASE="${PROBE_PORT_BASE:-8900}" FE_PORT_BASE="${PROBE_FE_BASE:-3900}" \
      REDIS_PORT="${PROBE_REDIS_PORT:-6390}" bash "$SOLO_DIR/deploy/scaffold/init.sh" probe "$PROJ" > "$WORK/init.log" 2>&1; then
     tail -40 "$WORK/init.log"; echo "init.sh failed"; exit 1
@@ -77,7 +77,7 @@ assert_grep '<!-- solo:begin -->' "$PROJ/CLAUDE.md" "CLAUDE.md carries the solo:
 assert_grep '<!-- solo:end -->'   "$PROJ/CLAUDE.md" "CLAUDE.md carries the solo:end marker"
 
 # ── 2. plant sentinels in each ownership zone ──────────────────────────────────
-echo "▶ 2/6 planting sentinels"
+echo "▶ 2/7 planting sentinels"
 #   [Project] — must survive byte-for-byte
 printf "\n# probe\nPROBE_SENTINEL='keep-me'\n" >> "$PROJ/.env"
 mkdir -p "$PROJ/api/apps/probe" && echo "module.exports = 'probe-project-zone';" > "$PROJ/api/apps/probe/index.js"
@@ -96,7 +96,7 @@ mv "$PROJ/api/publish/solo.v$VER.js" "$PROJ/api/publish/solo.v$PREV_VER.js"
 HASH_BEFORE_DRY="$(tree_hash "$PROJ")"
 
 # ── 3. dry run must not touch the tree ─────────────────────────────────────────
-echo "▶ 3/6 upgrade.sh --dry-run"
+echo "▶ 3/7 upgrade.sh --dry-run"
 if ! FRONTEND_BUILD=skip bash "$SOLO_DIR/deploy/scaffold/upgrade.sh" "$PROJ" --dry-run > "$WORK/dry.log" 2>&1; then
     tail -40 "$WORK/dry.log"; bad "upgrade.sh --dry-run exited non-zero"
 fi
@@ -104,7 +104,7 @@ assert_eq "$(tree_hash "$PROJ")" "$HASH_BEFORE_DRY" "--dry-run leaves the projec
 assert_eq "$(tr -d '[:space:]' < "$PROJ/.solo-version")" "v$PREV_VER" ".solo-version untouched by --dry-run"
 
 # ── 4. real upgrade ────────────────────────────────────────────────────────────
-echo "▶ 4/6 upgrade.sh"
+echo "▶ 4/7 upgrade.sh"
 if ! FRONTEND_BUILD=skip bash "$SOLO_DIR/deploy/scaffold/upgrade.sh" "$PROJ" > "$WORK/up.log" 2>&1; then
     tail -60 "$WORK/up.log"; echo "upgrade.sh failed"; exit 1
 fi
@@ -148,7 +148,7 @@ assert_grep "Post-upgrade self-check" "$WORK/up.log" "self-check ran"
 assert_grep ".solo-version = v$VER" "$WORK/up.log" "self-check saw the new version"
 
 # ── 5. idempotency: a second upgrade is a no-op ────────────────────────────────
-echo "▶ 5/6 upgrade.sh again (must be a no-op)"
+echo "▶ 5/7 upgrade.sh again (must be a no-op)"
 HASH_AFTER_FIRST="$(tree_hash "$PROJ")"; tree_list "$PROJ" > "$WORK/tree1.txt"
 if ! FRONTEND_BUILD=skip bash "$SOLO_DIR/deploy/scaffold/upgrade.sh" "$PROJ" > "$WORK/up2.log" 2>&1; then
     tail -40 "$WORK/up2.log"; bad "second upgrade.sh exited non-zero"
@@ -158,9 +158,59 @@ if [ "$(tree_hash "$PROJ")" = "$HASH_AFTER_FIRST" ]; then ok "second upgrade cha
 assert_nogrep "was missing" "$WORK/up2.log" "no deploy script reported as missing on re-run"
 
 # ── 6. the project's own health tools must be green ────────────────────────────
-echo "▶ 6/6 doctor.sh + precheck.sh on the upgraded project"
+echo "▶ 6/7 doctor.sh + precheck.sh on the upgraded project"
 if bash "$PROJ/deploy/doctor.sh" > "$WORK/doctor.log" 2>&1; then ok "doctor.sh exit 0 (✗ 0)"; else bad "doctor.sh reported ✗:"; grep -E '✗' "$WORK/doctor.log" | head -8 | sed 's/^/      /'; fi
 if bash "$PROJ/deploy/precheck.sh" > "$WORK/precheck.log" 2>&1; then ok "precheck.sh exit 0"; else bad "precheck.sh failed"; tail -10 "$WORK/precheck.log" | sed 's/^/      /'; fi
+
+# ── 7. 下发文档里的 shell 命令必须真的能跑 ────────────────────────────────────
+# @why docs/feedback/upgrade-sh-path-wrong-in-shipped-docs.md：五份下发文档（含**每轮会话都
+#   自动加载**的项目根 CLAUDE.md）教人 `bash deploy/upgrade.sh`，而任何派生项目里都没有这个
+#   文件——升级入口住在 solo 仓的 deploy/scaffold/upgrade.sh，在消费者侧从没存在过
+#   （git log --all 空，不是被删的）。它偏偏是「别改 [Solo] 只读区」这条纪律的唯一执行手段：
+#   读者想验证、或真要升一次，拿到的是 No such file，纪律就只剩信任、不剩机制。
+#   本断言首跑当场又抓出同构的两处：e2e/ui/README.md 的 `bash ../deploy/run.sh` 少算一层
+#   （那份文档在 e2e/ui/ 下），portal/client 的 `bash deploy/build-frontend.sh` 同样是 solo
+#   仓里的脚本、不随脚手架下发。⇒ 这不是一次性的笔误，是下发面固有的一类。
+#
+# 判据零成本：抓出下发文档里所有 `bash <相对路径>` 形态的命令，路径必须在**它所处的那个
+#   上下文**里真实存在——① 相对文档自己所在的目录（Quick start 通常就地起跑），或 ② 相对
+#   项目根；③ 只在 solo 仓存在的，同一行必须写明 `cd <solo …>`（升级/构建本就是「solo 仓 →
+#   项目」的单向动作，跨仓合法，但"从哪跑"必须写出来）。
+#   只抓命令形态，所以「本项目里没有 `deploy/upgrade.sh`」这类**解释性提及**不会误伤。
+echo "▶ 7/7 shipped docs: every 'bash <path>' command resolves"
+while IFS=$'\t' read -r verdict msg; do
+    [ -n "$verdict" ] || continue
+    [ "$verdict" = "OK" ] && ok "$msg" || bad "$msg"
+done < <(node -e '
+const fs = require("fs"), path = require("path");
+const [PROJ, SOLO] = process.argv.slice(1);
+const out = [];
+const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    if (e.name === "node_modules" || e.name === ".git") continue;
+    const p = path.join(d, e.name);
+    if (e.isDirectory()) walk(p); else if (e.name.endsWith(".md")) scan(p);
+} };
+const scan = (f) => {
+    const rel = path.relative(PROJ, f);
+    fs.readFileSync(f, "utf8").split("\n").forEach((line, i) => {
+        for (const m of line.matchAll(/bash\s+`?([A-Za-z0-9_./-]+\.(?:sh|js))`?/g)) {
+            const p = m[1], where = `${rel}:${i + 1} bash ${p}`;
+            if ([path.resolve(path.dirname(f), p), path.resolve(PROJ, p)].some(fs.existsSync)) {
+                out.push(["OK", `doc command resolves: ${where}`]);
+            } else if (fs.existsSync(path.resolve(SOLO, p))) {
+                out.push(/cd\s+<solo/i.test(line)
+                    ? ["OK", `doc command resolves in the solo repo, and says so: ${where}`]
+                    : ["BAD", `${where} — lives in the SOLO repo, not here; the line must read "cd <solo ...> && bash ${p}"`]);
+            } else {
+                out.push(["BAD", `${where} — this path exists NOWHERE (not in the project, not in the solo repo)`]);
+            }
+        }
+    });
+};
+walk(PROJ);
+if (!out.length) out.push(["BAD", "no `bash <path>` command found in any shipped doc (grep broke?)"]);
+out.forEach(([k, v]) => console.log(k + "\t" + v));
+' "$PROJ" "$SOLO_DIR")
 
 echo ""
 echo "upgrade-path: $pass passed, $fail failed"

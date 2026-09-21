@@ -53,8 +53,8 @@ client/
 后续手动升级：
 
 ```bash
-# 在 Solo 源码目录重新构建（自动清掉同名旧版本 tarball）
-bash deploy/build-frontend.sh
+# 在 Solo 源码仓重新构建（自动清掉同名旧版本 tarball）——本项目不带这个脚本
+cd <solo 仓> && bash deploy/build-frontend.sh
 
 # 复制到本项目 + 对齐 .solo-version，重启
 cp client/publish/mobile.v{version}.tar.gz /path/to/{{PROJECT_NAME}}/client/publish/

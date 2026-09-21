@@ -11,9 +11,12 @@ provides the Router, core services, and the shared `api/library/`. Your code liv
 forgive a service that breaks the wire contract: it just won't route to it. This skill keeps you
 inside the contract and ends on a gate that proves it.
 
-> **The bundle and `api/library/` are NOT yours to edit.** They're re-synced on every
-> `bash deploy/upgrade.sh` and your changes would be lost. Work only in `api/apps/`,
-> `deploy/services.json`, and (if you have one) your portal/client app.
+> **The bundle and `api/library/` are NOT yours to edit.** They're re-synced on every upgrade
+> and your changes would be lost. Work only in `api/apps/`, `deploy/services.json`, and
+> (if you have one) your portal/client app.
+>
+> The upgrade runs **from the Solo source repo**, not from here — this project ships no
+> upgrade entry point: `cd <solo repo> && bash deploy/scaffold/upgrade.sh <this project dir>`.
 
 ## Step 0 — read the contract first (don't reinvent it)
 
