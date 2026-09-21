@@ -11,10 +11,9 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
-⚠️ **下面的代码注释与 scaffold 文档里已写死 `v1.2.15`**（`bot-permits.js` 头注、
-`scaffold/docs/authoring/events.md §0.5`、fulfillment `GUIDE.md`，
-以及 `../feedback/done/{redisearch-cjk-both-paths-blocked,no-sanctioned-exit-for-external-store}.md`
-的「落地（v1.2.15）」小标题）——发版时若不是这个号，先把那几处改掉。
+---
+
+## [v1.2.15] — 2026-09-21
 
 ### 软删不释放载荷：autocheck 补载荷维度 + 建模判据成文（清 `../feedback/done/soft-delete-keeps-large-payloads.md`）
 
@@ -144,6 +143,32 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 3. 中文项目升级前先量一下当前召回：若在用 `TAG WITHSUFFIXTRIE` + `@f:{*词*}`，
    此前很可能一直在静默截断（判据见 `service.md` §6.7 的对照表），升级后结果会变多——
    那是修复，不是回归。
+
+### autocheck mock-data 的 Base58 误报 + 下发文档里跑不了的命令（清 `../feedback/done/{mock-data-id-base58-vs-business-codes,upgrade-sh-path-wrong-in-shipped-docs}.md`）
+
+- **`autocheck mockData` 的 Base58 ID 检查收窄三层**：只查播种数据文件（`tests/utils/`、
+  `fixtures/`、`seeds/`，或文件名含 `mock|seed|fixture`）、只查 `config.js` 声明了 `idLengths`
+  的服务（= 本服务自己生成 ID）、注释一律不参与。此前它按字面形状抓任何 `id: '…'`，把 catalog
+  单测里两个 ERP 发的业务编码（`C1108`/`C2804`，含 `0`）判成 ERROR、`precheck.sh` 当场挡住部署，
+  而唯一的自救是把 `toMatchObject({ id: 'C1108' })` 改写成 `expect(...id).toBe('C1108')`——
+  **规则的红绿取决于断言的句式，而不是数据对不对**。同时给正则补了词边界（旧的没有边界，
+  `uid: 'uid0abc9'` / `order_id: 'AB0CD9'` 都会被当成 `id` 抓走）。
+  ⚠️ 剥注释在读 `config.js` 时同样必需：镜像型服务的 `idLengths` 往往只出现在「刻意没有」
+  那句注释里，不剥就会把说明读成声明。新增 `autocheck/tests/mock-data-rule.test.js`（5 条，
+  做过变异验证：关掉收窄 → 2 红，不剥注释 → 1 红）。
+- **下发文档里的升级入口三处改对**：`docs/README.md`、项目根 `CLAUDE.md`（每轮 AI 会话自动加载）、
+  `.claude/skills/solo-service/SKILL.md` 原本教人 `bash deploy/upgrade.sh`，而那个路径在消费者仓和
+  solo 仓都**从未存在过**（脚本自诞生就在 `deploy/scaffold/upgrade.sh`，是「solo 仓 → 项目」的
+  单向动作）。它偏偏是「别改 `[Solo]` 只读区」这条纪律的唯一执行手段：读者想验证、或真要升一次，
+  拿到的是 `No such file`，纪律就只剩信任、不剩机制。现统一为
+  `cd <solo 仓> && bash deploy/scaffold/upgrade.sh <项目路径>`，并说明它为什么不在本仓。
+- **`check-upgrade-path.sh` 新增第 7 段**（断言总数 56 → 73）：下发文档里每条 `bash <path>` 命令
+  必须在它所处的上下文里真实存在，跨仓引用须同行写明 `cd <solo …>`。首跑即抓出同构的两处并一并
+  修掉——`e2e/ui/README.md` 的 `bash ../deploy/run.sh` 少算一层（那份文档下发到 `e2e/ui/`）、
+  `README.portal.md` 与 `README.client.md` 的 `bash deploy/build-frontend.sh` 同样只住在 solo 仓。
+
+下游 action：**无**。这三项都是放宽或改文档，不改运行时行为。此前为绕开 Base58 误报而改过断言
+句式的项目（catalog 那类），升级后可以把 `toBe` 改回 `toMatchObject`，不改也没问题。
 
 ---
 
