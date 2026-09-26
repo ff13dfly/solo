@@ -11,7 +11,13 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
-⚠️ **下一版改了默认存储位置（见下）⇒ 按「改存储位置 = 有人要跟着动」属于 minor，发版前先确认版本号。**
+---
+
+## [v1.3.0] — 2026-09-26
+
+> **为什么是 minor**：本版改了 storage 的**默认落盘位置**——已经用默认配置存过文件的项目，升级前必须先迁移或钉住旧位置，
+> 否则 storage 拒绝启动。「下游必须跟着动」即 minor（判据见 `../runbook/release-and-branching.md` §6）。
+> 除此之外只加不破：没有删方法、没有缩公开面、library API 只加。
 
 ### 🔴 storage default root moved into the project：默认落盘目录移进项目（清 `../feedback/done/bundle-upload-dir-escapes-project-root.md`）
 
@@ -133,7 +139,7 @@ N100 上实测已有 1049 个对象 / 263MB 落在 `/home/web/AI/uploads/assets`
   （路径本身一直在 `Local OSS mounted in-process … root=…` 那行里，只是没人会觉得一个路径有问题。）
 - `init.sh` 生成的 `.env` 在 storage 一节写明此事，附一行注释掉的 `UPLOAD_DIR='<项目>/uploads/assets'`。
 
-下游 action：升级后若 storage 日志出现 `OUTSIDE the project`，在 `.env` 里显式设 `UPLOAD_DIR`——
+下游 action：（⚠️ 已被 v1.3.0 取代：该告警已移除、默认值已修正，直接升到 v1.3.0 的以 v1.3.0 条目为准）升级后若 storage 日志出现 `OUTSIDE the project`，在 `.env` 里显式设 `UPLOAD_DIR`——
 **已有资产的项目先钉到当前那个路径**（`<父目录>/uploads/assets`，行为不变、告警消失），并确认备份覆盖它；
 还没有资产的项目直接钉到 `<项目>/uploads/assets`。默认值本身的修正与迁移留待后续版本。
 

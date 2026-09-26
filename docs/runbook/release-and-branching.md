@@ -117,7 +117,9 @@ git checkout main
 
   逐版本内容看 [`../planning/CHANGELOG.md`](../planning/CHANGELOG.md)(每个 tag 一条,含"下游 action")。
 - **minor 与 patch 的判据**:**多了一个新的交付物** → minor(`v1.2.0` = 新增
-  `client/extension-kit/` 浏览器插件半边);只加不破的修补 → patch。两者都仍受阶段一纪律约束
+  `client/extension-kit/` 浏览器插件半边);**或者下游必须跟着动**(改了默认存储位置 / 投递目标 / 对外契约,
+  不跟着处理就会出错或把数据落错地方)→ 同样是 minor(`v1.3.0` = storage 默认落盘目录移进项目,已有文件的项目
+  升级前必须迁移);只加不破的修补 → patch。两者都仍受阶段一纪律约束
   (不删方法、不缩公开面、library API 只加)。破坏性的一律进 v2。
 - **三者一致**:`package.json.version` = bundle 文件名 `solo.v{ver}.js` = 消费者 `.solo-version` = tag。
   发版后当场核一遍,对不上就是"忘了部署或忘了打 tag"。
