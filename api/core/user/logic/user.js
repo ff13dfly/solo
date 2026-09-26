@@ -5,6 +5,7 @@ const jsonrpc = require('../handlers/jsonrpc');
 const { STATUS } = require('../../../library/constants');
 const { resolvePaging } = require('../../../library/pagination');
 const { optimisticUpdate } = require('../../../library/optimistic');
+const createSessions = require('./sessions');
 
 /**
  * User Business Logic
@@ -12,6 +13,11 @@ const { optimisticUpdate } = require('../../../library/optimistic');
  */
 module.exports = (redisClient, config) => {
     const CHUNK = 200;
+
+    // Session minting + revocation — shared with bot.js (logic/sessions.js). Human logins
+    // MUST go through persistSession(): a bare setEx leaves the session out of the
+    // USER:SESSIONS index, and anything that revokes by uid then silently misses it.
+    const { persistSession, killSessions } = createSessions(redisClient, config);
 
     // Non-blocking id enumeration — SSCAN instead of SMEMBERS. SMEMBERS returns the whole
     // set in one reply and blocks Redis for it; SSCAN walks it in bounded, cursor-resumable
@@ -248,8 +254,14 @@ module.exports = (redisClient, config) => {
                 permit: user.permit, // CRITICAL: Pass permissions to Router
                 role: user.role || (user.permit?.allow_all ? (config.roles?.admin || 'admin') : 'user'),
                 ttl: SESSION_TTL,    // tells Router's sliding-expiry window to match this policy
+                // Principal kind, mirroring bot ('bot') and passport ('external'). The Router
+                // keys its account-lifecycle gate off this: an internal session whose user:{uid}
+                // record has vanished is a hard-deleted account, not an externally-anchored one.
+                type: 'internal',
             };
-            await redisClient.setEx(`${config.redis.sessionPrefix}${token}`, SESSION_TTL, JSON.stringify(sessionData));
+            // Indexed under the uid so user.token.revoke / account deletion can actually reach
+            // it. This used to be a bare setEx — see logic/sessions.js for why that mattered.
+            await persistSession(user.id, token, SESSION_TTL, sessionData);
 
             // Ensure permit is returned (normalize legacy format)
             let permit = user.permit;
@@ -351,8 +363,11 @@ module.exports = (redisClient, config) => {
             await redisClient.del(`${config.redis.userNamePrefix}${user.name}`);
         }
         await redisClient.del(key);
+        // Deletion implies revocation. Without this the account record is gone while its
+        // live sessions keep working off the permit frozen into them at login time.
+        const revoked = await killSessions(targetId);
 
-        return { success: true, id: targetId };
+        return { success: true, id: targetId, revoked };
     },
 
     /**
@@ -594,13 +609,20 @@ module.exports = (redisClient, config) => {
             if (!userDataStr) throw jsonrpc.USER_NOT_FOUND();
 
             const userData = JSON.parse(userDataStr);
-            if (userData.status === STATUS.DELETED) return { success: true, message: 'Already deleted' };
+            // Re-run the kill even when already DELETED: makes the call idempotent in effect
+            // rather than just in status, so a retry after a partial failure still converges.
+            if (userData.status === STATUS.DELETED) {
+                return { success: true, message: 'Already deleted', revoked: await killSessions(id) };
+            }
 
             userData.status = STATUS.DELETED;
             userData.deletedAt = new Date().toISOString();
 
             await redisClient.set(`${config.redis.userPrefix}${id}`, JSON.stringify(userData));
-            return { success: true, id };
+            // Deletion implies revocation — loginRequest() already refuses NEW logins for a
+            // DELETED account, but sessions handed out BEFORE the delete outlived it.
+            const revoked = await killSessions(id);
+            return { success: true, id, revoked };
         } catch (err) {
             if (err.code) throw err;
             throw jsonrpc.INTERNAL_ERROR('Internal error');

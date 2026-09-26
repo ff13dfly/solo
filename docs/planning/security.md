@@ -36,7 +36,8 @@
 | 问题 | 修复 | 位置 |
 |------|------|------|
 | `system.report` public 端点不经统一限流（本地分发表绕过限流闸） | 2026-06（本地分发前补限流闸 + config 收紧 30/分 by IP；`router/tests/ratelimit.test.js` 守护） | `router/index.js` / `router/config.js` |
-| 外部 token 无主动吊销（泄露后只能等 TTL） | 2026-06（方案 b：`USER:SESSIONS:{uid}` 反向索引 + `user.token.revoke`(admin) 按 uid 吊销其全部 live session；`core/user/tests/bot-revoke.test.js` 守护） | `core/user/logic/bot.js` |
+| 外部 token 无主动吊销（泄露后只能等 TTL） | 2026-06（方案 b：`USER:SESSIONS:{uid}` 反向索引 + `user.token.revoke`(admin) 按 uid 吊销其全部 live session）——⚠️ **当时只覆盖 bot / passport 两条路**，人类登录是裸 `setEx`、不写索引，revoke 对浏览器账号删 0 条并返回成功；**2026-09-22 补齐**：登录改走 `logic/sessions.js` 的 `persistSession`（三条路共用一份原语），`account.remove`/`destroy` 调 `killSessions` 使删号即吊销；`core/user/tests/bot-revoke.test.js` 现同时守护 bot 与**人类** uid（此前只有 `system.test-bot`，所以它一直绿） | `core/user/logic/sessions.js` / `bot.js` / `user.js` |
+| 账号生命周期不咬活 session（删号/停用后旧 token 仍授权） | 2026-09-22（Router `resolveSessionUser` 人类分支补 status 闸 + 硬删闸，与 bot 分支对称；外部 passport 按 `type:'external'` 排除；特权 tier 的 permit 刷新失败改为 fail-closed）；`router/tests/auth.test.js` 守护 | `router/handlers/auth.js` |
 | `workflow.create` 直接建 ACTIVE 绕过审核 | 2026-06（C1：create 默认 PENDING_REVIEW；`workflow.approve` 落地，e2e suite 52 验证） | `core/orchestrator/logic/workflow.js:206` |
 | `workflow.restore` 直接恢复 ACTIVE 绕过审核 | 2026-06（C5：restore 只回到 PENDING_REVIEW，不再直达 ACTIVE） | `core/orchestrator/logic/workflow.js:383` |
 | `condition` 字段 `new Function` 代码注入 | 2026-04-27 | `core/orchestrator/logic/runner.js` |

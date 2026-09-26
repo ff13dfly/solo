@@ -257,13 +257,73 @@ describe('Auth Handler', () => {
             expect(user.permit.constraints).toEqual(userConstraints);
         });
 
-        test('[Scheme F] falls back to session permit when user record missing', async () => {
+        // ── Account lifecycle gates (docs/feedback/account-deletion-does-not-revoke-
+        //    live-sessions.md) ─────────────────────────────────────────────────
+        // This block used to assert the opposite: an internal session whose user record
+        // was gone "fell back" to the permit frozen in at login. That fallback WAS the
+        // hole — deleting an account left every already-issued token authorized until
+        // TTL, and admin/operator tokens renew their own TTL on every request.
+
+        test('[lifecycle] hard-deleted internal account resolves to guest (record gone)', async () => {
             const sessionPermit = { allow_all: false, services: { erp: ['erp.stock.query'] } };
-            await mockRedis.set('session:tok2', JSON.stringify({ uid: '99', username: 'bob', permit: sessionPermit }));
-            // user:99 not set
+            await mockRedis.set('session:tok2', JSON.stringify({
+                uid: '99', username: 'bob', type: 'internal', permit: sessionPermit,
+            }));
+            // user:99 deliberately absent — this is what destroy() leaves behind
             const user = await authHandlers.resolveSessionUser('tok2', mockRedis);
-            expect(user.permit.services.erp).not.toContain('*');
-            expect(user.permit.services.erp).toContain('erp.stock.query');
+            expect(user.username).toBe('guest');
+            expect(user.permit.allow_all).toBe(false);
+            expect(user.permit.services).toEqual({});
+        });
+
+        test('[lifecycle] soft-deleted account resolves to guest even with a live token', async () => {
+            await mockRedis.set('session:delTok', JSON.stringify({
+                uid: 'd1', username: 'deleted-dave', permit: { allow_all: true, services: {} },
+            }));
+            await mockRedis.set('user:d1', JSON.stringify({
+                status: 'DELETED', deletedAt: '2026-09-22T00:00:00.000Z',
+                permit: { allow_all: true, services: {} },
+            }));
+            const user = await authHandlers.resolveSessionUser('delTok', mockRedis);
+            expect(user.username).toBe('guest');
+            expect(user.permit.allow_all).toBe(false);
+        });
+
+        test('[lifecycle] any non-ACTIVE status rejects, not just DELETED', async () => {
+            await mockRedis.set('session:dormTok', JSON.stringify({ uid: 'd2', username: 'dora' }));
+            await mockRedis.set('user:d2', JSON.stringify({ status: 'DORMANT', permit: { allow_all: true, services: {} } }));
+            const user = await authHandlers.resolveSessionUser('dormTok', mockRedis);
+            expect(user.username).toBe('guest');
+        });
+
+        test('[lifecycle] record WITHOUT a status field still works (pre-STATUS accounts)', async () => {
+            // Truthiness guard, same as the bot branch. A strict !== 'ACTIVE' would lock
+            // out every account created before the status field existed.
+            await mockRedis.set('session:legacyUsr', JSON.stringify({ uid: 'L1', username: 'legacy' }));
+            await mockRedis.set('user:L1', JSON.stringify({ permit: { allow_all: false, services: { erp: ['*'] } } }));
+            const user = await authHandlers.resolveSessionUser('legacyUsr', mockRedis);
+            expect(user.username).toBe('legacy');
+            expect(user.permit.services.erp).toContain('*');
+        });
+
+        test('[lifecycle] ACTIVE account is unaffected', async () => {
+            await mockRedis.set('session:okTok', JSON.stringify({ uid: 'a1', username: 'alice' }));
+            await mockRedis.set('user:a1', JSON.stringify({ status: 'ACTIVE', permit: { allow_all: false, services: { erp: ['*'] } } }));
+            const user = await authHandlers.resolveSessionUser('okTok', mockRedis);
+            expect(user.username).toBe('alice');
+            expect(user.permit.services.erp).toContain('*');
+        });
+
+        test('[lifecycle] external passport keeps its permit — it has no user:{uid} record', async () => {
+            // Passport anchors live under USER:PASSPORT:, so "no user record" is their
+            // NORMAL state and must not be read as "deleted".
+            const permit = { allow_all: false, services: { storage: ['*'] }, constraints: { $owner: { value: 'anchor-1' } } };
+            await mockRedis.set('session:extTok', JSON.stringify({
+                uid: 'anchor-1', name: 'device-1', type: 'external', kind: 'external', role: 'user', permit,
+            }));
+            const user = await authHandlers.resolveSessionUser('extTok', mockRedis);
+            expect(user.permit.services.storage).toContain('*');
+            expect(user.permit.constraints.$owner.value).toBe('anchor-1');
         });
 
         test('[Scheme F] falls back to session permit when user record JSON is corrupted', async () => {
@@ -273,6 +333,27 @@ describe('Auth Handler', () => {
             const user = await authHandlers.resolveSessionUser('tok3', mockRedis);
             expect(user.username).toBe('carol');
             expect(user.permit.services.erp).toContain('erp.stock.query');
+        });
+
+        test('[refresh-fail] privileged session fails CLOSED when the permit refresh throws', async () => {
+            // Continuing on a refresh error means "authorize at the last known privilege
+            // level" — for admin/operator that turns a Redis blip into a full bypass.
+            await mockRedis.set('session:admBroken', JSON.stringify({
+                uid: '88', username: 'root', role: 'admin', permit: { allow_all: true, services: {} },
+            }));
+            await mockRedis.set('user:88', '{{broken}}');
+            const user = await authHandlers.resolveSessionUser('admBroken', mockRedis);
+            expect(user.username).toBe('guest');
+            expect(user.permit.allow_all).toBe(false);
+        });
+
+        test('[refresh-fail] operator tier from categories.POWER also fails closed', async () => {
+            await mockRedis.set('session:opBroken', JSON.stringify({
+                uid: '89', username: 'op', power: 'operator', permit: { allow_all: false, services: { erp: ['*'] } },
+            }));
+            await mockRedis.set('user:89', '{{broken}}');
+            const user = await authHandlers.resolveSessionUser('opBroken', mockRedis);
+            expect(user.username).toBe('guest');
         });
 
         // ── Session TTL (Sliding Expiration) ───────────────────────────────

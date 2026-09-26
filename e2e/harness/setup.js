@@ -229,9 +229,19 @@ module.exports = async function globalSetup() {
     //    让 assertNoErrors 只测"测试引发"的错误.
     const redis = mkClient();
     await redis.connect();
+    const ADMIN_PERMIT = { allow_all: true, services: {} };
     await redis.set(
         `session:${ADMIN_TOKEN}`,
-        JSON.stringify({ uid: 'e2e-admin', username: 'e2e-admin', role: 'admin', permit: { allow_all: true, services: {} } }),
+        JSON.stringify({ uid: 'e2e-admin', username: 'e2e-admin', role: 'admin', permit: ADMIN_PERMIT }),
+        { EX: 6 * 3600 },
+    );
+    // 配套的账号记录 —— 不是可选的。Router 的账号生命周期闸把"session 带 uid 却查不到
+    // user:{uid}"判为已硬删并降级 guest(2026-09-22,docs/feedback/done/account-deletion-
+    // does-not-revoke-live-sessions.md);少了这条,整个 harness 的 admin 身份当场失效。
+    // 顺带也让 harness 更贴近生产:Scheme F 从这条记录热刷 permit,和真实登录同一条路。
+    await redis.set(
+        `user:e2e-admin`,
+        JSON.stringify({ id: 'e2e-admin', name: 'e2e-admin', status: 'ACTIVE', permit: ADMIN_PERMIT }),
         { EX: 6 * 3600 },
     );
     // Seed the _tasks whitelist superset ONCE, before any service boots. Kept at a single

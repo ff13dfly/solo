@@ -79,10 +79,27 @@
 有每锚固定窗口限流，超了抛 `-32029`（带 `retry_after`）。`user.passport.upgrade` 前必须先
 `user.passport.otp.request`。
 
+## 配方四：切断一个已泄露的凭据（三类 principal 通用）
+
+`user.token.revoke { uid }`（admin）删掉该 uid **全部** live session，返回 `{ uid, revoked }`。
+三类 principal 都覆盖：内部账号、bot（`system.*`）、passport 锚。
+
+**删账号即吊销**，不用再单独调一次：`user.account.remove`（软删）与 `user.account.destroy`（硬删）
+都会顺手 `killSessions`，返回里带 `revoked` 条数。停 bot 用 `user.bot.suspend`（可逆，同样杀活 session）。
+
+**兜底：就算漏了上面这些，Router 也不会让它继续授权。** 每次请求解析身份时会重查账号记录：
+`status` 不是 `ACTIVE`（软删/停用）或记录已不存在（硬删）一律降级成 guest——**追溯生效**，
+对"修复前就已经发出去"的 token 同样有效，不依赖任何索引被正确维护过。
+
+⚠️ `revoked: 0` 的含义是"该 uid 当前没有活着的 session"，**不再**意味着"这类账号不在覆盖范围内"
+（2026-09-22 之前是后者：人类登录不写反向索引，revoke 对浏览器账号永远删 0 条还报成功。
+见 `docs/feedback/done/account-deletion-does-not-revoke-live-sessions.md`）。
+
 ## 坑与约定
 
 - **软删**：`user.account.remove` 置 `status='DELETED'` 保留记录、排除出默认 list；`user.account.restore` 复活。
-  永久删不可逆：先 `user.account.check` 再 `user.account.destroy`。`DELETED` 账号无法登录。
+  永久删不可逆：先 `user.account.check` 再 `user.account.destroy`。`DELETED` 账号无法登录，
+  **且已发出的 session 当场失效**（删时吊销 + Router 每请求校 status 双保险）。
 - **时间**：`createdAt/updatedAt/last/deletedAt` 都是 **ISO-8601 字符串**（唯一例外：category item 的 `createdAt` 是毫秒数字）。
 - **登录 handle 存在 `name` 字段，没有 `username`**——profile 里找不到 `username`（旧自省曾骗人）。
 - **敏感字段** `salt`/`hash` 永不下发（profile / list 已剥离）；`user.hash` 服务端不透明，只做哈希比对。

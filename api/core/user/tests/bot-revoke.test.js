@@ -1,13 +1,21 @@
 /**
  * bot-revoke.test.js — token 主动吊销(security.md 方案 b:USER:SESSIONS:{uid} 反向索引)。
  * hermetic:注入 Map 支撑的 fake redis,验"签发即入索引 / revoke 杀全部 session + 清索引"。
+ *
+ * 🔴 两类 principal 都要覆盖。这份文件原先只有 `system.test-bot` 一个 uid,于是
+ * security.md 把"按 uid 吊销其全部 live session"记为已修复、并拿它当守护——而人类账号
+ * 的登录路径根本没写那个反向索引,revoke 对浏览器账号删 0 条还返回成功。测试只测了
+ * 已经工作的那一半,所以它一直是绿的。下面的 human 组就是当初缺的那一半。
+ * 见 docs/feedback/account-deletion-does-not-revoke-live-sessions.md
  * WAL 审计写盘 → LOG_DIR 指临时目录,避免污染 api/logs(须在 require logic 之前)。
  */
 const os = require('os');
 const path = require('path');
 process.env.LOG_DIR = path.join(os.tmpdir(), `solo-bot-revoke-${process.pid}`);
 
+const crypto = require('crypto');
 const createBot = require('../logic/bot');
+const createUser = require('../logic/user');
 const config = require('../config');
 
 function makeFakeRedis() {
@@ -91,5 +99,67 @@ describe('bot token revocation (USER:SESSIONS reverse index)', () => {
 
     test('revoke 无 session 的 uid → revoked 0', async () => {
         expect((await bot.revoke({ uid: 'system.nobody' })).revoked).toBe(0);
+    });
+});
+
+// ── 人类账号:登录即入索引,revoke / 删号都要真的断掉 ────────────────────────
+describe('human account revocation (the half that used to be missing)', () => {
+    const NAME = 'alice';
+    const SALT = 'a'.repeat(32);
+    const HASH = 'b'.repeat(64);
+    let redis, user, bot, uid;
+
+    // 真实走一遍挑战-响应握手,而不是直接塞 session:——捷径会把"登录是否写索引"
+    // 这个正要验的东西绕过去。
+    async function login() {
+        const { challenge } = await user.loginRequest({ name: NAME });
+        const response = crypto.createHash('sha256').update(challenge + HASH).digest('hex');
+        const r = await user.loginVerify({ name: NAME, challenge, response, deviceId: 'dev-1' });
+        return r.token;
+    }
+
+    beforeEach(async () => {
+        redis = makeFakeRedis();
+        user = createUser(redis, config);
+        bot = createBot(redis, config);
+        ({ uid } = await user.register({ name: NAME, salt: SALT, hash: HASH }));
+    });
+
+    test('登录写入 USER:SESSIONS 反向索引(此前是裸 setEx)', async () => {
+        const token = await login();
+        expect(await redis.get(sKey(token))).toBeTruthy();
+        expect(await redis.sMembers(`${config.redis.userSessionsPrefix}${uid}`)).toContain(token);
+    });
+
+    test('user.token.revoke 对人类 uid 真的删 session(此前返回 revoked:0 + 成功)', async () => {
+        const t1 = await login();
+        const t2 = await login();
+        const res = await bot.revoke({ uid });
+        expect(res.revoked).toBe(2);
+        expect(await redis.get(sKey(t1))).toBeNull();
+        expect(await redis.get(sKey(t2))).toBeNull();
+        expect(await redis.sMembers(`${config.redis.userSessionsPrefix}${uid}`)).toEqual([]);
+    });
+
+    test('软删账号 = 吊销:remove 之后旧 token 的 session 不复存在', async () => {
+        const token = await login();
+        const res = await user.remove({ id: uid });
+        expect(res.revoked).toBe(1);
+        expect(await redis.get(sKey(token))).toBeNull();
+    });
+
+    test('硬删账号 = 吊销:destroy 之后旧 token 的 session 不复存在', async () => {
+        const token = await login();
+        const res = await user.destroy({ id: uid });
+        expect(res.revoked).toBe(1);
+        expect(await redis.get(sKey(token))).toBeNull();
+    });
+
+    test('remove 幂等:重复调用不炸,且仍报告吊销条数', async () => {
+        await login();
+        await user.remove({ id: uid });
+        const again = await user.remove({ id: uid });
+        expect(again.success).toBe(true);
+        expect(again.revoked).toBe(0);
     });
 });

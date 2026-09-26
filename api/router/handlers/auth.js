@@ -37,6 +37,9 @@ async function resolveSessionUser(token, redisClient) {
     }
     sessionUser = session;
 
+    const adminRole = config.roles?.admin || 'admin';
+    const operatorRole = config.roles?.operator || 'operator';
+
     // --- SCHEME F: Dynamic Permission Loading ---
     // Fetch the latest user record to ensure permissions are up-to-date.
     // This fixes the issue where session data becomes stale after a permit update.
@@ -44,10 +47,23 @@ async function resolveSessionUser(token, redisClient) {
     // a bot kept its issuance-time permit snapshot until token TTL, i.e. permit
     // changes bit humans instantly but not machines (the higher-risk principal).
     if (sessionUser.uid) {
+        // External passports are anchored under USER:PASSPORT:, never user:{uid} — the
+        // account-lifecycle gates below must not read their missing user record as "deleted".
+        const isExternal = sessionUser.type === 'external' || sessionUser.kind === 'external';
         try {
             const userStr = await redisClient.get(`user:${sessionUser.uid}`);
             if (userStr) {
                 const userData = JSON.parse(userStr);
+                // Account lifecycle bites live sessions immediately — symmetric with the bot
+                // branch below. Deleting/suspending an account used to leave every already
+                // issued token authorized until TTL, and admin/operator tokens self-renew
+                // (see the sliding-expiry block), so "until TTL" could mean indefinitely.
+                // Truthiness guard, as for bots: records predating STATUS carry no `status`
+                // field and must keep working.
+                if (userData.status && userData.status !== 'ACTIVE') {
+                    console.warn(`[Auth] User ${sessionUser.uid} is ${userData.status} — rejecting live session`);
+                    return { username: 'guest', permit: { allow_all: false, services: {} } };
+                }
                 if (userData.permit) {
                     sessionUser.permit = userData.permit;
                 }
@@ -72,16 +88,30 @@ async function resolveSessionUser(token, redisClient) {
                         sessionUser.permit = botData.permit;
                     }
                 }
+            } else if (!isExternal) {
+                // Hard-deleted internal account: the record is gone, so there is nothing left
+                // to refresh from and the permit frozen into the session at login time would
+                // otherwise keep working. Only reachable for internal principals — bots took
+                // the branch above, passports are excluded by isExternal, and the administrator
+                // service mints sessions with no uid at all (this whole block is skipped).
+                console.warn(`[Auth] User ${sessionUser.uid} has no account record — rejecting live session`);
+                return { username: 'guest', permit: { allow_all: false, services: {} } };
             }
         } catch (err) {
             console.error('[Auth] Dynamic permit loading failed:', err.message);
+            // Fail closed for privileged tiers. Falling through here means "authorize at the
+            // last known privilege level", which turns a Redis blip into an admin bypass.
+            // Normal users keep the degraded path — their blast radius is their own permit.
+            const claimed = sessionUser.power || sessionUser.role;
+            if (claimed === adminRole || claimed === operatorRole) {
+                console.warn(`[Auth] Refusing ${claimed} session for ${sessionUser.uid}: permit refresh failed`);
+                return { username: 'guest', permit: { allow_all: false, services: {} } };
+            }
         }
     }
 
     // SLIDING EXPIRATION: Auto-renew admin/operator sessions — keyed off the POWER tier
     // (fallback to legacy top-level role so the bootstrap admin, role:'admin', stays recognized).
-    const adminRole = config.roles?.admin || 'admin';
-    const operatorRole = config.roles?.operator || 'operator';
     const tier = sessionUser.power || sessionUser.role;
 
     if (redisClient.isOpen && (tier === adminRole || tier === operatorRole)) {

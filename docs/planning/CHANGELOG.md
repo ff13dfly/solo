@@ -11,6 +11,50 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+### 🔴 删账号不吊销已发出的 session，而唯一的吊销原语对人类账号是空转（清 `../feedback/done/account-deletion-does-not-revoke-live-sessions.md`）
+
+**修复前实测**（真栈复现，见下「实测对照」）：软删/硬删一个账号后，**删之前发出的 token 照常授权**；
+`user.token.revoke` 对一个有 2 个活会话的人类 uid 返回 **`revoked: 0` 并报成功**。
+三件事叠在一起：① 两条删除路径都不碰 session；② Router 的身份解析对 bot 判 `status`、对人**不判**；
+③ `killSessions` 依赖的 `USER:SESSIONS:{uid}` 反向索引由 bot / passport 两条路写，**唯独人类登录不写**。
+
+- **`api/core/user/logic/sessions.js`（新）**——session 的落库与吊销收敛成**一份**原语
+  （`persistSession` / `killSessions`），`bot.js` 与 `user.js` 共用。此前是每个模块一份私有拷贝，
+  第三条路（人类登录）就是这么漂成裸 `setEx` 的：session 能用，只有吊销够不着它，**静默**。
+- **人类登录写反向索引**（`logic/user.js`）+ session blob 标 `type: 'internal'`
+  ⇒ `user.token.revoke` 对内部账号真的生效。
+- **删除即吊销**：`user.account.remove` / `destroy` 返回前各调一次 `killSessions`，返回里多一个 `revoked`。
+- 🔴 **Router 账号生命周期闸**（`router/handlers/auth.js`，经授权修改只读区外的保护区）：
+  人类分支补上 bot 分支早就有的检查——`status` 非 ACTIVE ⇒ guest；记录已不存在（硬删）⇒ guest。
+  **它是无状态、追溯生效的**：对「修复前就已经发出、不在任何索引里」的 token 同样有效（实测场景 D）。
+  外部 passport 按 `type:'external'` 排除（它们**本来就没有** `user:{uid}` 记录）；
+  administrator 服务的 session 不带 uid，整段不经过。
+- **特权 tier 的 permit 刷新失败改为 fail-closed**：此前 catch 吞掉错误后**继续用旧 permit**，
+  等于把 Redis 抖动变成「按上一次已知权限放行」。admin/operator 现降级 guest，普通用户维持原行为。
+- **台账更正**：`security.md` 曾把这条记为 2026-06 已修复、并以 `bot-revoke.test.js` 为守护——
+  而那个文件里只有 `system.test-bot` 一个 uid，**测试恰好只覆盖了已经工作的那一半**，所以一直是绿的。
+  `toFix.md` 自称的「三类 principal 硬吊销」同一句里也只点得出两个机制。两处都已改。
+
+**实测对照**（同一段复现脚本，同一套真栈，仅代码不同）：
+
+| | 修复前（v1.2.15） | 修复后 |
+|---|---|---|
+| 软删后旧 token 仍授权 | ✅ 是（洞） | ❌ 否 |
+| 硬删后旧 token 仍授权 | ✅ 是（洞） | ❌ 否 |
+| `token.revoke` 对人类 uid（2 个活会话） | `revoked: 0` + 成功 | `revoked: 2`，两个 token 当场失效 |
+| 未进索引的历史 session + 软删 | 仍授权 | `revoked: 0`，但 Router 仍挡住 |
+
+**守护**：`router/tests/auth.test.js` 新增 8 例（status 闸 / 硬删闸 / 无 status 字段的存量记录 /
+passport 不误伤 / 特权刷新失败 fail-closed）；`core/user/tests/bot-revoke.test.js` 新增人类 uid 一组
+5 例（**对旧代码全红**，实测确认）。
+
+下游 action：**多数项目无需改动**，但升级后有两类会立刻现形，都属于"本来就不该成立"的用法——
+① **直接往 Redis 塞 `session:{token}`、却不建配套 `user:{uid}` 记录**的运维/测试脚本：
+那种 session 现在一律解析成 guest（框架自己的 e2e harness 就踩了这条，已同步修）。
+判据：`redis-cli --scan --pattern 'session:*'` 逐条取 `uid`，确认 `user:<uid>` 存在，或该 session 带 `type:'external'`。
+② 依赖「软删账号的人还能继续用旧 token」的流程——那正是本次要堵的洞。
+`user.account.remove` / `destroy` 的返回值**新增** `revoked` 字段（只增不改，订阅方无需动）。
+
 ---
 
 ## [v1.2.15] — 2026-09-21

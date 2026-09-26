@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const jsonrpc = require('../handlers/jsonrpc');
 const logger = require('../../../library/logger');
 const { walContext } = require('../../../library/entity');
+const createSessions = require('./sessions');
 
 const BOT_UID_PREFIX = 'system.';
 const BOT_TOKEN_TTL_SEC = 24 * 60 * 60; // 24 hours
@@ -40,19 +41,13 @@ module.exports = (redisClient, config) => {
         return { token, expiresAt, sessionData };
     }
 
-    const sessionKey = (token) => `${config.redis.sessionPrefix}${token}`;
-    const userSessionsKey = (uid) => `${config.redis.userSessionsPrefix}${uid}`;
-
-    // Persist a session AND index it under the uid so it can be actively revoked.
-    // The reverse-index set carries the same TTL (refreshed on each issue) to bound
-    // growth; stale token refs are harmless — DEL on an already-expired session is a no-op.
-    async function persistSession(uid, token, sessionData) {
-        const multi = redisClient.multi();
-        multi.setEx(sessionKey(token), BOT_TOKEN_TTL_SEC, JSON.stringify(sessionData));
-        multi.sAdd(userSessionsKey(uid), token);
-        multi.expire(userSessionsKey(uid), BOT_TOKEN_TTL_SEC);
-        await multi.exec();
-    }
+    // Session persistence + revocation live in logic/sessions.js — ONE copy, shared with
+    // the human login path. They used to be private to this module, which is exactly how
+    // the human path ended up minting sessions nobody could revoke.
+    const sessions = createSessions(redisClient, config);
+    const killSessions = sessions.killSessions;
+    const persistSession = (uid, token, sessionData) =>
+        sessions.persistSession(uid, token, BOT_TOKEN_TTL_SEC, sessionData);
 
     return {
         // ── CRUD ────────────────────────────────────────────────────────────
@@ -253,20 +248,4 @@ module.exports = (redisClient, config) => {
             return { id: uid, status: 'ACTIVE' };
         },
     };
-
-    // Kill every live session of a uid via the USER:SESSIONS reverse index.
-    // Shared by revoke (leak response) and suspend (reversible stop).
-    async function killSessions(uid) {
-        const idxKey = userSessionsKey(uid);
-        const tokens = await redisClient.sMembers(idxKey);
-        let revoked = 0;
-        if (tokens.length) {
-            const multi = redisClient.multi();
-            for (const t of tokens) multi.del(sessionKey(t));
-            const res = await multi.exec();
-            revoked = res.filter((r) => r === 1).length;   // count actually-live sessions killed
-        }
-        await redisClient.del(idxKey);
-        return revoked;
-    }
 };

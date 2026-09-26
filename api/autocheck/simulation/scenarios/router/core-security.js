@@ -142,6 +142,11 @@ async function testSessionIsolation(redis) {
         await redis.set(`session:${s.token}`, JSON.stringify({
             uid: s.uid, name: s.name, permit: s.permit,
         }));
+        // 账号记录必须一起建：Router 的账号生命周期闸会把"有 uid 却查不到记录"判为
+        // 已硬删并降级 guest。本场景验的是并发隔离，不是账号语义，所以夹具要建全。
+        await redis.set(`user:${s.uid}`, JSON.stringify({
+            id: s.uid, name: s.name, status: 'ACTIVE', permit: s.permit,
+        }));
     }
 
     // 并发解析所有 session

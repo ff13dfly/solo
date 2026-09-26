@@ -16,10 +16,10 @@
 - **nexus 动态订阅流**:`discoverStreams()` 并默认流 ∪ 每个 ACTIVE Sentinel 的订阅,自动建组 + NOGROUP 自愈(`stream.js:147-208`)。→ 旧"消费流硬编码"**已闭**。
 - **orchestrator C1 单签审批闸 + H6 footprint 预审**:自审禁止、PENDING_REVIEW→ACTIVE、非 ACTIVE 拒跑、足迹静态并集预检 —— 已在 CI 绿色子集。
 - **Router 事件总线**:`event.emit` RPC + `_event` 夹带 + `EVENT:WEBHOOK:*` glob 订阅 + `trustEventActor`(`router/handlers/events.js`)。→ 旧"router _event 缺失"**已闭**;node-redis v5 scheduler 回归(`zPopMinCount`)已修。
-- **三类 principal 硬吊销**:`USER:SESSIONS:{uid}` 反向索引,`bot.revoke`/`passport.disable` 直删活 session。
+- **三类 principal 硬吊销**:`USER:SESSIONS:{uid}` 反向索引,`bot.revoke`/`passport.disable` 直删活 session。→ ⚠️ 这句写于 2026-06,当时**只点得出两个机制,第三类(人类账号)其实没有对应动作**——措辞里就看得出来。**2026-09-22 补齐**:人类登录改走共用的 `logic/sessions.js` 写索引,`account.remove`/`destroy` 即吊销。
 - **凭证脱敏**:`logger.redactSensitive` 在入 `ERROR:QUEUE` 前打码,hermetic 测试入 CI。
 
-> **贯穿主题(比逐条更重要)**:① **内部调用无超时** ✅(2026-06-07)→ 一.1;② **投递死信漏斗** ✅(2026-06-10:webhook.send 落地 + sse fail-closed + payload/地址解析链 + 永久错误分类 + DLQ 上限)→ 一.3 / 二.notification;③ **写/act 侧半成品**(emit 闭环已通,autorun 结构化产出契约仍欠)→ 二.nexus;④ **事件总线无幂等 + token 可重放** ✅(2026-06-10:event_id SETNX 去重 + iat 新鲜度门;jti 级反重放仍欠)→ 二.router;⑤ **治理链断桩**(approval/C1/NEEDS_GRANT 各自跑没串成链)——**当前最大的未动主题**;⑥ **机器身份控制比人弱** ✅(2026-06-10:bot permit 热刷咬活 session + 可逆 suspend/resume)→ 二.identity;⑦ **全队基础硬化未做**(CORS/Redis/metrics);⑧ **自治联动护栏补了两块**(✅ trace 全链传递 + ✅ depth 预算刹车,2026-06-10;**仍缺**:触发来源≠动作授权的 confused deputy、AI 置信兜底失效)→ 二.事件链。
+> **贯穿主题(比逐条更重要)**:① **内部调用无超时** ✅(2026-06-07)→ 一.1;② **投递死信漏斗** ✅(2026-06-10:webhook.send 落地 + sse fail-closed + payload/地址解析链 + 永久错误分类 + DLQ 上限)→ 一.3 / 二.notification;③ **写/act 侧半成品**(emit 闭环已通,autorun 结构化产出契约仍欠)→ 二.nexus;④ **事件总线无幂等 + token 可重放** ✅(2026-06-10:event_id SETNX 去重 + iat 新鲜度门;jti 级反重放仍欠)→ 二.router;⑤ **治理链断桩**(approval/C1/NEEDS_GRANT 各自跑没串成链)——**当前最大的未动主题**;⑥ **机器身份控制比人弱** ✅(2026-06-10:bot permit 热刷咬活 session + 可逆 suspend/resume)→ 二.identity——⚠️ 就「status 咬活 session」这一项,2026-06 之后其实**反了过来**:bot 有而人没有,删号/停用不影响已发出的 token。2026-09-22 给 Router 人类分支补上对称的闸,两边齐平;⑦ **全队基础硬化未做**(CORS/Redis/metrics);⑧ **自治联动护栏补了两块**(✅ trace 全链传递 + ✅ depth 预算刹车,2026-06-10;**仍缺**:触发来源≠动作授权的 confused deputy、AI 置信兜底失效)→ 二.事件链。
 
 ---
 
