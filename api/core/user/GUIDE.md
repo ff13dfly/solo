@@ -102,6 +102,10 @@
   **且已发出的 session 当场失效**（删时吊销 + Router 每请求校 status 双保险）。
 - **时间**：`createdAt/updatedAt/last/deletedAt` 都是 **ISO-8601 字符串**（唯一例外：category item 的 `createdAt` 是毫秒数字）。
 - **登录 handle 存在 `name` 字段，没有 `username`**——profile 里找不到 `username`（旧自省曾骗人）。
+  `name` 大小写与首尾空格不敏感（register / login.request / login.verify 同一套归一化）。
+- **同一个号可以并发登录**：每次 `user.login.request` 发一个独立的 challenge（120 秒），各验各的。
+  challenge **一次性、首次 verify 即烧掉**（答错也烧）——`INVALID_CHALLENGE`（`-32603`）就重新 request，
+  别拿同一个 challenge 重试。v1.2.16 之前按名字只存一份，同号并发登录必有一个报这个错。
 - **敏感字段** `salt`/`hash` 永不下发（profile / list 已剥离）；`user.hash` 服务端不透明，只做哈希比对。
 - **签名审批**（approval 消费者）：`user.key.generate { password }` 先建密钥，再 `user.key.sign { digest, password }`
   自签——**严格 self-only**（admin 也不能替签），私钥用密码派生加密、密码从不落库；`sign` 有每 uid 限流。

@@ -6,7 +6,7 @@
  *      was held by bot.js and passport.js but silently not by the human login path,
  *      so `user.token.revoke` deleted 0 sessions and returned success for every
  *      browser account — a security switch that reports success while doing nothing
- *      (docs/feedback/account-deletion-does-not-revoke-live-sessions.md).
+ *      (docs/feedback/done/account-deletion-does-not-revoke-live-sessions.md).
  *      Three private copies of the same five lines is what let the third one drift;
  *      this module exists so there is one copy to be right.
  * @attention Minting a session anywhere other than persistSession() re-opens that

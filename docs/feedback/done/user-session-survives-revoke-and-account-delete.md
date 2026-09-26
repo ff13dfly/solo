@@ -57,4 +57,18 @@
 
 ## 处理结论
 
-（待 triage）
+**2026-09-26 · 与 `done/account-deletion-does-not-revoke-live-sessions.md`（catalog，2026-09-21）是同一个洞，
+按重复归档；4 条建议全部已落地。**
+
+两家在 v1.2.14 的 bundle 上各自独立审出了同一处：catalog 那篇 09-22 已在真栈上双向复现并修完
+（`4a89cb7`，随 v1.2.16 发布）。本篇的根因 1–4 与那篇 §一 逐条对应，行号换算到源码后一致，没有夸大。
+
+| 本篇建议 | 落地 |
+|---|---|
+| 1 `loginVerify` 写 `USER:SESSIONS:{uid}` | `4a89cb7`：人类登录改走共用的 `logic/sessions.js` `persistSession` |
+| 2 `resolveSessionUser` 对普通用户查 status | `4a89cb7`：Router 人类分支补 status 闸 + 硬删闸（与 bot 分支对称，passport 按 `type:'external'` 排除） |
+| 3 删号顺带 `killSessions` | `4a89cb7`：`account.remove` / `destroy` 返回 `revoked` |
+| 4 `loginVerify` 检查 `DELETED` | **那篇没覆盖，本篇独有**。已实测坐实（先 request、再软删、再 verify ⇒ 照样发 token）。有 Router 闸兜底，发出的 token 会解析成 guest、不可利用，但会作为活 session 挂在索引里直到 TTL。随 `user-login-challenge-one-slot-per-name.md` 一并修（同一个函数） |
+
+**steward 侧**：v1.2.16 之前，唯一即时有效的应急手段仍是 `user.permit.update` 把 permit 清空（本篇原文已指出）。
+升到 v1.2.16 后 `user.token.revoke` / 删号即生效，且对升级前就已发出的 token 同样有效（Router 闸无状态、追溯生效）。

@@ -55,6 +55,25 @@ passport 不误伤 / 特权刷新失败 fail-closed）；`core/user/tests/bot-re
 ② 依赖「软删账号的人还能继续用旧 token」的流程——那正是本次要堵的洞。
 `user.account.remove` / `destroy` 的返回值**新增** `revoked` 字段（只增不改，订阅方无需动）。
 
+steward 在 2026-09-25 独立审出了同一个洞（`../feedback/done/user-session-survives-revoke-and-account-delete.md`），
+按重复归档；它多出的一条（`loginVerify` 不查 `DELETED`）随下一节一并修。
+
+### 同一个号并发登录必有一个报「Invalid or expired challenge」（清 `../feedback/done/user-login-challenge-one-slot-per-name.md`）
+
+**修复前实测**（hermetic，直接驱动 `logic/user.js`）：两次 `user.login.request` 只要交错，先发的那个 verify **必失败**
+（按用户名只存一个 challenge 槽，后发的覆盖先发的；先 verify 的那个成功后还会把槽删掉）；
+`request('Ops')` 后 `verify('Ops')` **恒失败**（request 归一化成小写、verify 用原样的名字拼键）。
+顺带：`user.login.request` 是匿名方法，单槽设计让任何人都能靠刷某个名字的 request 把那个账号挡在登录之外。
+
+- **challenge 按值分键**（`logic/user.js`）：`challenge:<name>:<challenge>`，值为签发时的 uid；verify 用 **`GETDEL`** 原子消费
+  ⇒ 同号并发登录各验各的，一次性不再有 GET→DEL 之间的并发窗口。与 administrator `identity.js` 同一种做法。
+- **一套名字归一化**：`normalizeName()`，register / loginRequest / loginVerify 共用。
+- **verify 补三道检查**：challenge 格式（`/^[0-9a-f]{32}$/`，畸形输入不碰 Redis）；签发 uid 与当前 uid 一致
+  （名字在 TTL 内易主时旧 challenge 作废）；账号已 `DELETED` ⇒ `-32001`（此前 request 后删号、verify 照样发 token）。
+- ⚠️ **行为收紧**：challenge 首次 verify 即烧掉，**答错也烧**。此前 120 秒内可以拿同一个 challenge 反复试密码。
+- **守护**：新增 `core/user/tests/login-challenge.test.js` 10 例（进 CI 白名单），**对旧代码 7 例红**（实测）。
+  `core/user/GUIDE.md`「坑与约定」补并发登录与 challenge 一次性的说明。
+
 ---
 
 ## [v1.2.15] — 2026-09-21

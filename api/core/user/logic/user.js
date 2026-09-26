@@ -19,6 +19,20 @@ module.exports = (redisClient, config) => {
     // USER:SESSIONS index, and anything that revokes by uid then silently misses it.
     const { persistSession, killSessions } = createSessions(redisClient, config);
 
+    // Login handles are case/space-insensitive. ONE normaliser for register / loginRequest /
+    // loginVerify — verify used to key on the raw name, so request('Ops') stored the challenge
+    // under `ops` while verify('Ops') looked under `Ops` and failed every time.
+    const normalizeName = (name) => name?.toLowerCase().trim();
+
+    // One key per outstanding challenge, not one slot per name. The per-name slot meant two
+    // concurrent logins of the same account overwrote each other (one always failed with
+    // "Invalid or expired challenge"), and anyone could keep a victim locked out by spamming
+    // user.login.request for their name. Same shape as administrator/logic/identity.js, which
+    // keys by the challenge itself (docs/feedback/done/user-login-challenge-one-slot-per-name.md).
+    const CHALLENGE_TTL_SEC = 120;
+    const CHALLENGE_RE = /^[0-9a-f]{32}$/;   // what loginRequest mints: randomBytes(16) hex
+    const challengeKey = (name, challenge) => `${config.redis.challengePrefix}${name}:${challenge}`;
+
     // Non-blocking id enumeration — SSCAN instead of SMEMBERS. SMEMBERS returns the whole
     // set in one reply and blocks Redis for it; SSCAN walks it in bounded, cursor-resumable
     // batches. Same total ids returned, just never holds Redis hostage for one giant set.
@@ -67,7 +81,7 @@ module.exports = (redisClient, config) => {
      */
     async register(params) {
         const { email, phone, salt, hash } = params;
-        const name = params.name?.toLowerCase().trim();
+        const name = normalizeName(params.name);
         if (!name) throw jsonrpc.MISSING_PARAM('name');
         if (!salt || !hash) {
             throw jsonrpc.INVALID_PARAMS(
@@ -131,7 +145,7 @@ module.exports = (redisClient, config) => {
      *   3. Generate 16-byte random challenge and store in Redis with TTL.
      */
     async loginRequest(params) {
-        const name = params.name?.toLowerCase().trim();
+        const name = normalizeName(params.name);
         if (!name) throw jsonrpc.MISSING_PARAM('name');
 
         try {
@@ -162,8 +176,10 @@ module.exports = (redisClient, config) => {
 
             // Generate Challenge
             const challenge = crypto.randomBytes(16).toString('hex');
-            // Store challenge with short TTL (e.g. 2 mins)
-            await redisClient.setEx(`${config.redis.challengePrefix}${name}`, 120, challenge);
+            // Short TTL. The value is the uid it was issued for: verify checks it, so a
+            // challenge can't be redeemed against a different account that took over the
+            // name (destroy + re-register) inside the TTL.
+            await redisClient.setEx(challengeKey(name, challenge), CHALLENGE_TTL_SEC, uid);
 
             return {
                 challenge,
@@ -180,31 +196,41 @@ module.exports = (redisClient, config) => {
      * loginVerify
      * @why Step 2 of identity verification: validates the challenge response and issues a session token.
      * @process
-     *   1. Verify challenge exists and matches.
+     *   1. Consume the challenge (atomic GETDEL — one attempt per challenge).
      *   2. Compare provided response against expected hash (SHA256(challenge + user_hash)).
      *   3. Update device activity and prune stale sessions.
      *   4. Generate 32-byte session token and store in Redis.
-     * @side_effects 
+     * @side_effects
      *   - Updates `user.devices` metadata.
      *   - Updates `user.last` activity timestamp.
+     * @attention A challenge is burned on the first verify, pass or fail: a wrong response
+     *   means request a new one. Concurrent logins of the same account are fine — each
+     *   request mints its own challenge key.
      */
     async loginVerify(params) {
-        const { name, challenge, response, deviceId } = params;
+        const { challenge, response, deviceId } = params;
+        const name = normalizeName(params.name);
         if (!name || !challenge || !response) throw jsonrpc.INVALID_PARAMS('Missing params');
 
         try {
-            // 1. Verify Challenge
-            const storedChallenge = await redisClient.get(`${config.redis.challengePrefix}${name}`);
-            if (!storedChallenge || storedChallenge !== challenge) {
-                throw jsonrpc.INVALID_CHALLENGE();
-            }
+            // 1. Consume Challenge. GETDEL, not GET-then-DEL: two verifies racing on the same
+            //    challenge must not both pass the check. Malformed input never touches Redis.
+            if (!CHALLENGE_RE.test(challenge)) throw jsonrpc.INVALID_CHALLENGE();
+            const issuedFor = await redisClient.getDel(challengeKey(name, challenge));
+            if (!issuedFor) throw jsonrpc.INVALID_CHALLENGE();
 
             // 2. Get User
             const uid = await redisClient.get(`${config.redis.userNamePrefix}${name}`);
             if (!uid) throw jsonrpc.USER_NOT_FOUND();
+            if (uid !== issuedFor) throw jsonrpc.INVALID_CHALLENGE();   // name changed hands inside the TTL
 
             const str = await redisClient.get(`${config.redis.userPrefix}${uid}`);
+            if (!str) throw jsonrpc.USER_NOT_FOUND();
             const user = JSON.parse(str);
+
+            // Deleted between request and verify: loginRequest refused DELETED accounts, but
+            // the challenge it handed out before the delete outlived it for up to the TTL.
+            if (user.status === STATUS.DELETED) throw jsonrpc.ACCOUNT_DELETED();
 
             // Bot accounts have no password and cannot log in via Z-Handshake
             if (user.type === 'bot') throw jsonrpc.AUTH_FAILED();
@@ -242,7 +268,6 @@ module.exports = (redisClient, config) => {
             user.last = now; // Global last login
 
             await redisClient.set(`${config.redis.userPrefix}${uid}`, JSON.stringify(user));
-            await redisClient.del(`${config.redis.challengePrefix}${name}`); // One-time use
 
             const SESSION_TTL = 86400 * 7; // 7 days
             // Store Session

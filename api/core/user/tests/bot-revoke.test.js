@@ -6,7 +6,7 @@
  * security.md 把"按 uid 吊销其全部 live session"记为已修复、并拿它当守护——而人类账号
  * 的登录路径根本没写那个反向索引,revoke 对浏览器账号删 0 条还返回成功。测试只测了
  * 已经工作的那一半,所以它一直是绿的。下面的 human 组就是当初缺的那一半。
- * 见 docs/feedback/account-deletion-does-not-revoke-live-sessions.md
+ * 见 docs/feedback/done/account-deletion-does-not-revoke-live-sessions.md
  * WAL 审计写盘 → LOG_DIR 指临时目录,避免污染 api/logs(须在 require logic 之前)。
  */
 const os = require('os');
@@ -37,6 +37,7 @@ function makeFakeRedis() {
     };
     return {
         async get(k) { return kv.has(k) ? kv.get(k) : null; },
+        async getDel(k) { const v = kv.has(k) ? kv.get(k) : null; kv.delete(k); return v; },
         async set(k, v) { return apply.set(k, v); },
         async setEx(k, s, v) { return apply.setEx(k, s, v); },
         async del(k) { return apply.del(k); },

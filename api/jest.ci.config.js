@@ -30,6 +30,7 @@ module.exports = {
         '<rootDir>/core/administrator/tests/handlers.test.js',
         '<rootDir>/core/user/tests/introspection.test.js',
         '<rootDir>/core/user/tests/bot-revoke.test.js',
+        '<rootDir>/core/user/tests/login-challenge.test.js',
         '<rootDir>/core/user/tests/bot-suspend.test.js',
         '<rootDir>/core/gateway/tests/webhook.test.js',
         '<rootDir>/core/gateway/tests/sms-provider.test.js',
