@@ -72,6 +72,7 @@ disabled by default (`ENABLE_STATIC_ASSETS` opt-in).
 | `LOCAL_OSS_IN_PROCESS` | *(auto)* | force the in-process mount on/off |
 | `LOCAL_OSS_MOUNT_PATH` | `/_oss` | mount path on this service's port |
 | `LOCAL_OSS_ROOT` | `UPLOAD_DIR` | disk directory backing the bucket |
+| `UPLOAD_DIR` | `<project>/uploads/assets` | default for `LOCAL_OSS_ROOT`. ⚠️ Bundles before the fix resolved it to `<project>/../uploads/assets` (one level too high — shared by every project on the machine, outside project backups). A stack whose own assets are still there **refuses to start** with a one-line fix; pin `UPLOAD_DIR` to keep the old location |
 | `LOCAL_OSS_PUBLIC_READ` | follows `STORAGE_ACCESS` | allow unsigned GET |
 | `LOCAL_OSS_OUTWARD_ORIGIN` | — | scheme+host(+mount) **others** should use to reach the store (a reverse proxy mapping to `LOCAL_OSS_ENDPOINT`). Swapped into every URL handed out — signed URLs in `private` mode, `publicBase` default in `public` mode. Does **not** change self-access and does **not** skip the in-process mount |
 | `LOCAL_OSS_PUBLIC_BASE` | `<outward-or-endpoint>/<bucket>` | **`public` mode only**: full base for unsigned URLs, bucket segment included. Ignored in `private` mode — that's what `LOCAL_OSS_OUTWARD_ORIGIN` is for (boot warns if you set only this under `private`) |

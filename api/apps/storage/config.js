@@ -20,12 +20,14 @@ const STORAGE_ACCESS = process.env.STORAGE_ACCESS || 'public';
 // Project root: the bundle sets global.__SOLO_ROOT__ (deploy/gen-entry.js); from source
 // this file sits at <root>/api/apps/storage.
 const PROJECT_ROOT = global.__SOLO_ROOT__ || path.resolve(__dirname, '../../..');
-// ⚠️ KNOWN: from the bundle (__dirname = <root>/api/publish) this default resolves to the
-// project's PARENT directory — shared by every Solo project on the machine and outside
-// every project backup. Kept as-is in v1.2.x on purpose: live stacks already hold assets
-// there, and silently moving the default would orphan them. index.js warns at startup
-// instead; set UPLOAD_DIR explicitly. See docs/feedback/bundle-upload-dir-escapes-project-root.md.
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '../../../uploads/assets');
+// Default root is INSIDE the project, anchored on PROJECT_ROOT rather than __dirname. It used
+// to be path.join(__dirname, '../../../uploads/assets'): right from source, but from the
+// bundle (__dirname = <root>/api/publish) one level too high — the machine-wide
+// <root>/../uploads/assets, shared by every Solo project and outside every project backup.
+// Stacks that already have assets up there are caught at startup by oss/legacy-root.js
+// (index.js refuses to boot rather than serve an empty root).
+// See docs/feedback/done/bundle-upload-dir-escapes-project-root.md.
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(PROJECT_ROOT, 'uploads', 'assets');
 const LOCAL_OSS_SECRET = process.env.LOCAL_OSS_SECRET || DEV_OSS_SECRET;
 // The driver talks to the mount over loopback. A wildcard bind (or none) means
 // "reach me on 127.0.0.1"; an explicit per-service bind address is honoured.

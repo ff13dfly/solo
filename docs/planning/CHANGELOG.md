@@ -11,6 +11,32 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+⚠️ **下一版改了默认存储位置（见下）⇒ 按「改存储位置 = 有人要跟着动」属于 minor，发版前先确认版本号。**
+
+### 🔴 storage default root moved into the project：默认落盘目录移进项目（清 `../feedback/done/bundle-upload-dir-escapes-project-root.md`）
+
+v1.2.16 只加了告警，本版修正默认值本身。`storage/config.js` 的默认 `UPLOAD_DIR` 由
+`__dirname/../../../uploads/assets`（源码下是项目根，从 bundle 跑却是**项目的父目录**，同机所有项目共用、
+项目备份不含它）改为 `<项目根>/uploads/assets`，项目根取 v1.2.16 起 bundle 自带的 `global.__SOLO_ROOT__`。
+源码模式下两者相同，行为不变。
+
+- **迁移守卫**（新 `storage/oss/legacy-root.js`）：`UPLOAD_DIR` / `LOCAL_OSS_ROOT` 都没设时，storage 启动前抽样
+  **本项目自己**最新 20 条资产记录——字节不在新位置、却在旧位置（`<项目>/../uploads/assets`）⇒ **拒绝启动**，
+  报错里直接给出两种修法。判定只看本项目的记录，**绝不**按「旧目录非空」判：那个目录是共享的，
+  里面有别家的文件与本项目无关。没有资产的项目、已迁完的项目、两边都没字节的旧丢失记录，一律放行。
+- 删掉 v1.2.16 的 `OUTSIDE the project` 告警（默认值已在项目内，不再会越界；显式配到项目外是有意选择）。
+- `init.sh` 生成的 `.env`、storage README 同步说明；`uploads/` 早已在 scaffold 的 `.gitignore` 里（现扫 10 个派生项目全部有）。
+- **守护**：`apps/storage/tests/legacy-root.test.js` 9 例（进 CI 白名单）；用新 bundle 在沙箱项目里实跑四种情形：
+  无记录 ⇒ 正常启动；资产只在旧位置 ⇒ `Refusing to start` 且进程退出 1；显式钉旧位置 ⇒ 启动且对象 GET 200；
+  `mv` 进项目后默认配置 ⇒ 启动且 GET 200。
+
+下游 action：**只影响「没设 `UPLOAD_DIR` / `LOCAL_OSS_ROOT`、且已经用 storage 存过文件」的项目**
+（2026-09-26 现查：本机与 N100 上只有 steward）。升级前二选一：
+① 把 `<项目父目录>/uploads/assets` 下属于本项目的文件（含 `.meta/`）移到 `<项目>/uploads/assets`——
+**整个目录直接 `mv` 只在同机没有别的项目往里写时成立**；② 不迁，在 `.env` 里写
+`UPLOAD_DIR='<项目父目录>/uploads/assets'` 钉住旧位置。两样都没做就升级，storage 会拒绝启动并打印这两条。
+移进项目后，项目自己的备份（打包项目目录的那类）会自动覆盖这些文件，注意备份体积随之变大。
+
 ---
 
 ## [v1.2.16] — 2026-09-26
@@ -94,7 +120,7 @@ steward 在 2026-09-25 独立审出了同一个洞（`../feedback/done/user-sess
 ② `e2e/lib/context.js` 的 `writeFileSync` 加 `{ mode: 0o600 }` 并跟一句 `fs.chmodSync(CONTEXT_FILE, 0o600)`。
 可直接对照 solo 仓 `deploy/scaffold/e2e/` 下的两份文件。
 
-### storage 默认落盘目录逃出项目根：先告警，不改行为（`../feedback/bundle-upload-dir-escapes-project-root.md`，部分）
+### storage 默认落盘目录逃出项目根：先告警，不改行为（`../feedback/done/bundle-upload-dir-escapes-project-root.md`，部分）
 
 `storage/config.js` 的默认 `UPLOAD_DIR` 按源码深度写成 `__dirname/../../../uploads/assets`；从 bundle 跑
 （`__dirname = <项目>/api/publish`）它落在**项目的父目录**——同机所有 Solo 项目共用一个目录，项目自己的备份也不含它。

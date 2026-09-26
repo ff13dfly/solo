@@ -70,7 +70,8 @@ catalog 已在 `.env` 里显式指定 `UPLOAD_DIR='<项目>/uploads/assets'`（�
 
 ## 处理结论
 
-**2026-09-26 · 部分落地（v1.2.16：只告警、不改行为）；默认值的改动与存量迁移待定，本篇留在顶层。**
+**2026-09-26 · 全部落地，已归档。** 分两轮：v1.2.16 先加告警、不改行为；同日第二轮修正默认值本身，并加迁移守卫
+（见文末「第二轮」）。steward 那 263MB 由 steward 自己迁。
 
 ### 核实：根因属实，影响比原文写的大；原文给的修法有一处不对
 
@@ -104,7 +105,7 @@ catalog 已在 `.env` 里显式指定 `UPLOAD_DIR='<项目>/uploads/assets'`（�
   `Local OSS root /Users/fuu/Desktop/AI/uploads/assets is OUTSIDE the project (/Users/fuu/Desktop/AI/solo) …`；
   设了 `UPLOAD_DIR`（哪怕在项目外）不打；源码模式下默认值解析到 `<solo>/uploads/assets`、判为项目内、不打。
 
-### 待定（需要拍板，所以没做）
+### 当时的待定项（第二轮已处理，留作过程记录）
 
 1. **默认值改成 `path.join(projectRoot, 'uploads/assets')`**。这改的是**存储位置**，
    存量栈升级后会切到一个空目录，而 `resolve` 照样返回 URL，但字节已经不在了，这正是最坏的那种静默失败。
@@ -114,3 +115,26 @@ catalog 已在 `.env` 里显式指定 `UPLOAD_DIR='<项目>/uploads/assets'`（�
    给每个用到 storage 的项目各建一份目录项，之后再按各自 Redis 里的引用做 GC；也可以先在这些项目的 `.env`
    里把 `UPLOAD_DIR` 显式钉到**现在的共享路径**，行为不变、告警消失，再单独排迁移。
 3. **这些项目的备份要不要先把共享目录纳进去**：与上面独立，越早越好。
+
+### 第二轮（同日）：归属查清，默认值修正 + 迁移守卫
+
+**归属**（N100，只读，按各项目 Redis 里的 `STORAGE:SHA256:*` 与磁盘文件逐一对账）：
+共享目录里的 1049 个对象**全部属于 steward**，没有别的项目引用，也没有孤儿对象。finance 显式配了 `LOCAL_OSS_ROOT`；
+colony / overview / runner / solo-demo 没有资产记录；trend 已下线。所以待定项 2 里设想的「按项目 `cp -al`」用不上。
+另外两处是 steward 自己的事，已转给 steward 处理：
+- steward 的 `backup.sh` 只打包项目目录和一份 Redis 快照 ⇒ 这 263MB 图片**不在任何备份里**；
+- steward 另有 117 条资产记录（创建于 2026-08-25 09–10 点，早于 N100 共享目录的建立时间 11:25）
+  在 N100 全盘和本机都找不到字节：栈迁到 N100 时只迁了 Redis，文件没跟过去。与本篇无关。
+
+**落地**：
+- `storage/config.js`：默认 `UPLOAD_DIR` 改为 `path.join(PROJECT_ROOT, 'uploads', 'assets')`，
+  `PROJECT_ROOT` 取 bundle 的 `global.__SOLO_ROOT__`，源码下取 `__dirname/../../..`（与旧值相同，源码行为不变）。
+- **迁移守卫** `storage/oss/legacy-root.js` + `index.js`：只在默认配置下生效。抽样本项目最新 20 条资产记录，
+  字节不在新位置、却在旧位置 ⇒ 拒绝启动，报错里给出两种修法（钉 `UPLOAD_DIR` 到旧位置 / 把文件移进项目）。
+  🔴 **判定依据是本项目自己的记录，不是「旧目录非空」**：那个目录同机共享，别家的文件在里面，
+  不能因此挡住一个与它无关的项目。这是「后面的项目不受影响」的关键。
+- 删掉 v1.2.16 的 `OUTSIDE the project` 告警；`init.sh` 的 `.env` 注释与 storage README 同步。
+- 守护：`apps/storage/tests/legacy-root.test.js` 9 例；新 bundle 在沙箱项目里实跑四种情形（无记录 / 只在旧位置 /
+  显式钉旧位置 / `mv` 进项目后），结果依次是正常启动、拒绝启动且退出码 1、GET 200、GET 200。
+
+**未动**：`api/router/config.js:192` 有同样的旧式默认值，但那是没人读的死配置，且在 Router 保护区。

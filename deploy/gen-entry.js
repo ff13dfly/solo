@@ -87,7 +87,7 @@ ${guideLines}
 // config.js defaults written as __dirname-relative paths were computed against their
 // SOURCE depth (api/apps/<svc>/ is three levels deep, api/publish/ only two), so from
 // the bundle they land one level too high. Code that needs the root reads this first.
-// See docs/feedback/bundle-upload-dir-escapes-project-root.md.
+// See docs/feedback/done/bundle-upload-dir-escapes-project-root.md.
 global.__SOLO_ROOT__ = require('path').resolve(__dirname, '..', '..');
 
 function resolveConfig() {

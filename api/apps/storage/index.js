@@ -1,6 +1,5 @@
 const express = require('express');
 const fs = require('fs');
-const path = require('path');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const { corsOptionsFromEnv } = require('../../library/cors');
@@ -67,6 +66,27 @@ async function bootstrap() {
     if (config.storage.provider === 'local' && config.storage.local.inProcess) {
         const { createLocalOssServer } = require('./oss');
         const ossRoot = config.storage.local.root;
+
+        // The built-in default root moved from <project>/../uploads/assets (what the bundle
+        // used to resolve) into the project. If THIS project's assets are still up there,
+        // booting would serve an empty root: resolve() keeps handing out URLs, every byte is
+        // missing, nothing errors. Refuse instead — one .env line or one mv fixes it.
+        // Explicit UPLOAD_DIR / LOCAL_OSS_ROOT is never second-guessed.
+        if (config.storage.local.rootFrom === 'default') {
+            const { legacyRootOf, findStrandedAssets } = require('./oss/legacy-root');
+            const legacyRoot = legacyRootOf(config.storage.local.projectRoot);
+            const stranded = await findStrandedAssets({ redisClient, redisKeys: config.redis, root: ossRoot, legacyRoot });
+            if (stranded.length) {
+                throw new Error(
+                    `Refusing to start: this project's assets are in ${legacyRoot} (the old built-in default, ` +
+                    `one directory ABOVE the project) but the default root is now ${ossRoot}; ` +
+                    `${stranded.length} of the newest asset records have no bytes there (e.g. ${stranded[0]}). ` +
+                    `Either keep the old location — set UPLOAD_DIR='${legacyRoot}' in .env — or move the bytes ` +
+                    `into the project (mv the files, .meta/ included; only move the whole directory if no other ` +
+                    `project on this machine uses it). See the CHANGELOG entry "storage default root moved into the project".`
+                );
+            }
+        }
         fs.mkdirSync(ossRoot, { recursive: true });
         const oss = createLocalOssServer({
             root: ossRoot,
@@ -78,21 +98,6 @@ async function bootstrap() {
         });
         app.use(config.storage.local.mountPath, oss.app);
         log(`Local OSS mounted in-process at ${config.storage.local.mountPath} (bucket=${config.storage.local.bucket}, root=${ossRoot}, publicRead=${config.storage.local.publicRead})`);
-
-        // The root above was always logged, and nobody noticed it pointed outside the
-        // project: a bare path doesn't say "this is wrong". Say it. Only for the built-in
-        // default — an explicit UPLOAD_DIR / LOCAL_OSS_ROOT outside the project is a choice.
-        const projectRoot = config.storage.local.projectRoot;
-        const rel = path.relative(projectRoot, path.resolve(ossRoot));
-        if (config.storage.local.rootFrom === 'default' && (rel.startsWith('..') || path.isAbsolute(rel))) {
-            logger.warn(
-                `Local OSS root ${path.resolve(ossRoot)} is OUTSIDE the project (${projectRoot}). ` +
-                'It is the built-in default, which from the bundle resolves one directory too high: every Solo ' +
-                'project on this machine writes into it, and project backups do not include it. ' +
-                'Pin it with UPLOAD_DIR in .env — keep this exact path if assets already live there, ' +
-                'or move them under the project first (see CHANGELOG v1.2.16).'
-            );
-        }
     }
 
     app.use(bodyParser.json({ limit: config.bodyLimit }));

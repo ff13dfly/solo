@@ -85,6 +85,7 @@ module.exports = {
         '<rootDir>/library/tests/filestore.test.js',
         '<rootDir>/apps/storage/tests/oss-keying.test.js',
         '<rootDir>/apps/storage/tests/oss-provider.test.js',
+        '<rootDir>/apps/storage/tests/legacy-root.test.js',
         '<rootDir>/apps/storage/tests/asset-authz.test.js',
         '<rootDir>/apps/storage/tests/asset-concurrency.test.js',
         '<rootDir>/apps/storage/tests/asset-external.test.js',

@@ -257,8 +257,8 @@ describe('Auth Handler', () => {
             expect(user.permit.constraints).toEqual(userConstraints);
         });
 
-        // ── Account lifecycle gates (docs/feedback/account-deletion-does-not-revoke-
-        //    live-sessions.md) ─────────────────────────────────────────────────
+        // ── Account lifecycle gates (docs/feedback/done/account-deletion-does-not-
+        //    revoke-live-sessions.md) ──────────────────────────────────────────
         // This block used to assert the opposite: an internal session whose user record
         // was gone "fell back" to the permit frozen in at login. That fallback WAS the
         // hole — deleting an account left every already-issued token authorized until
