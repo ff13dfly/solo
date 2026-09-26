@@ -17,6 +17,14 @@ const STORAGE_PORT = portFor('storage', 8750);
 const DEV_OSS_SECRET = 'solo-local-oss-dev-secret';
 const LOCAL_OSS_MOUNT = process.env.LOCAL_OSS_MOUNT_PATH || '/_oss';
 const STORAGE_ACCESS = process.env.STORAGE_ACCESS || 'public';
+// Project root: the bundle sets global.__SOLO_ROOT__ (deploy/gen-entry.js); from source
+// this file sits at <root>/api/apps/storage.
+const PROJECT_ROOT = global.__SOLO_ROOT__ || path.resolve(__dirname, '../../..');
+// ⚠️ KNOWN: from the bundle (__dirname = <root>/api/publish) this default resolves to the
+// project's PARENT directory — shared by every Solo project on the machine and outside
+// every project backup. Kept as-is in v1.2.x on purpose: live stacks already hold assets
+// there, and silently moving the default would orphan them. index.js warns at startup
+// instead; set UPLOAD_DIR explicitly. See docs/feedback/bundle-upload-dir-escapes-project-root.md.
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '../../../uploads/assets');
 const LOCAL_OSS_SECRET = process.env.LOCAL_OSS_SECRET || DEV_OSS_SECRET;
 // The driver talks to the mount over loopback. A wildcard bind (or none) means
@@ -169,6 +177,9 @@ module.exports = {
         : !process.env.LOCAL_OSS_ENDPOINT,
       mountPath: LOCAL_OSS_MOUNT,
       root: process.env.LOCAL_OSS_ROOT || UPLOAD_DIR,
+      // Which knob `root` came from — 'default' is the one that can escape the project.
+      rootFrom: process.env.LOCAL_OSS_ROOT ? 'LOCAL_OSS_ROOT' : (process.env.UPLOAD_DIR ? 'UPLOAD_DIR' : 'default'),
+      projectRoot: PROJECT_ROOT,
       // Unsigned GET must be allowed exactly when this service hands out
       // unsigned urls (access=public), or every public asset url 403s.
       publicRead: process.env.LOCAL_OSS_PUBLIC_READ

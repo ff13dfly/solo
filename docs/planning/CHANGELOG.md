@@ -90,6 +90,23 @@ steward 在 2026-09-25 独立审出了同一个洞（`../feedback/done/user-sess
 ② `e2e/lib/context.js` 的 `writeFileSync` 加 `{ mode: 0o600 }` 并跟一句 `fs.chmodSync(CONTEXT_FILE, 0o600)`。
 可直接对照 solo 仓 `deploy/scaffold/e2e/` 下的两份文件。
 
+### storage 默认落盘目录逃出项目根：先告警，不改行为（`../feedback/bundle-upload-dir-escapes-project-root.md`，部分）
+
+`storage/config.js` 的默认 `UPLOAD_DIR` 按源码深度写成 `__dirname/../../../uploads/assets`；从 bundle 跑
+（`__dirname = <项目>/api/publish`）它落在**项目的父目录**——同机所有 Solo 项目共用一个目录，项目自己的备份也不含它。
+N100 上实测已有 1049 个对象 / 263MB 落在 `/home/web/AI/uploads/assets`，10 个项目里只有 finance 显式配置过。
+
+- **本版不改默认值**（存量栈的字节就在那里，悄悄换目录 = `resolve` 照样返回 URL 而字节不在）。
+- `deploy/gen-entry.js`：bundle 新增 `global.__SOLO_ROOT__`（项目根）；`storage/config.js` 的 `storage.local`
+  多出 `projectRoot` / `rootFrom`。
+- **启动告警**：root 来自默认值且落在项目根之外时，storage 打一条 `Local OSS root … is OUTSIDE the project …` 的 warn。
+  （路径本身一直在 `Local OSS mounted in-process … root=…` 那行里，只是没人会觉得一个路径有问题。）
+- `init.sh` 生成的 `.env` 在 storage 一节写明此事，附一行注释掉的 `UPLOAD_DIR='<项目>/uploads/assets'`。
+
+下游 action：升级后若 storage 日志出现 `OUTSIDE the project`，在 `.env` 里显式设 `UPLOAD_DIR`——
+**已有资产的项目先钉到当前那个路径**（`<父目录>/uploads/assets`，行为不变、告警消失），并确认备份覆盖它；
+还没有资产的项目直接钉到 `<项目>/uploads/assets`。默认值本身的修正与迁移留待后续版本。
+
 ---
 
 ## [v1.2.15] — 2026-09-21

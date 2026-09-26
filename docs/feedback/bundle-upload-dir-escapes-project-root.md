@@ -70,4 +70,47 @@ catalog 已在 `.env` 里显式指定 `UPLOAD_DIR='<项目>/uploads/assets'`（�
 
 ## 处理结论
 
-（待 triage）
+**2026-09-26 · 部分落地（v1.2.16：只告警、不改行为）；默认值的改动与存量迁移待定，本篇留在顶层。**
+
+### 核实：根因属实，影响比原文写的大；原文给的修法有一处不对
+
+- **根因属实**：`api/apps/storage/config.js:20` 的 `path.join(__dirname, '../../../uploads/assets')`
+  按源码深度写（`api/apps/storage/` 往上三级 = 项目根），打包后 `__dirname = api/publish/` 只有两级深，
+  于是落到项目的父目录。catalog、steward 装的 v1.2.14 bundle 里都是这一行。
+- 🔴 **线上已经真实发生**（2026-09-26 只读查看）：N100 的 `/home/web/AI/uploads/assets` 有
+  **1049 个对象（加 `.meta` 共 2098 个文件）、263MB**，写入时间 2026-08 到 2026-09-24，仍在写。
+  N100 上 10 个 Solo 项目里**只有 finance** 显式设了（`LOCAL_OSS_ROOT`）。`.meta` 里只有
+  `contentType/etag/size`，**看不出每个对象属于哪个项目**，要按项目归属得去各自的 Redis 里对 `STORAGE:` 记录。
+  ⇒ 原文后果 1（项目备份备不到它）在线上是现在进行时，不是假设。
+- 本机 `~/Desktop/AI/uploads/assets` 目前只剩 catalog 那次测试留下的空目录。
+- ⚠️ **原文建议 1 的写法在源码模式下是错的**：改成 `../../uploads/assets`，从源码跑（monolith、单服务、
+  jest）会落进 `api/uploads/`。路径必须与运行形态无关——照 `__SOLO_PORTS__` / `__SOLO_GUIDES__` 的现成做法，
+  由 `gen-entry.js` 在 bundle 里写入项目根。
+- ⚠️ **原文建议 2 的前提不准**：解析后的路径**一直在打**——`storage/index.js` 挂载时的
+  `Local OSS mounted in-process at /_oss (… root=<绝对路径> …)`（catalog 的 `api/debug/SOLO_BUNDLE_debug.log` 里就有）。
+  缺的不是这一行，是「它在项目外面」这个判断：一个裸路径不会让人觉得哪里不对。
+- `api/router/config.js:192` 有同一个错误路径（源码模式下也错，`api/router/` 往上三级已是父目录），
+  但那是没人读的死配置，且在 Router 保护区，未动。
+
+### v1.2.16 落地（不改任何行为）
+
+- `deploy/gen-entry.js`：bundle 里新增 `global.__SOLO_ROOT__ = <bundle 所在目录>/../..`。
+- `storage/config.js`：`storage.local` 多出 `projectRoot`（bundle 取上面的全局，源码取 `__dirname/../../..`）
+  与 `rootFrom`（`LOCAL_OSS_ROOT` / `UPLOAD_DIR` / `default`）。**默认值本身保持不变**，并在旁边写明原因。
+- `storage/index.js`：进程内挂载后，若 root 来自默认值且落在项目根之外 ⇒ `logger.warn` 一条，
+  说清楚后果与怎么钉住。显式配到项目外的不报（那是有意的选择）。
+- `init.sh` 写的 `.env` 在 storage 一节加注释 + 一行注释掉的 `UPLOAD_DIR='<项目>/uploads/assets'`。
+- **实测**：用新 bundle 单起 storage（`SOLO_SERVICES_JSON` 只含 storage），默认配置下打出
+  `Local OSS root /Users/fuu/Desktop/AI/uploads/assets is OUTSIDE the project (/Users/fuu/Desktop/AI/solo) …`；
+  设了 `UPLOAD_DIR`（哪怕在项目外）不打；源码模式下默认值解析到 `<solo>/uploads/assets`、判为项目内、不打。
+
+### 待定（需要拍板，所以没做）
+
+1. **默认值改成 `path.join(projectRoot, 'uploads/assets')`**。这改的是**存储位置**，
+   存量栈升级后会切到一个空目录，而 `resolve` 照样返回 URL，但字节已经不在了，这正是最坏的那种静默失败。
+   按「改存储位置 = 有人要跟着动」的判据属于 **minor（v1.3.0）**，需要先确认。
+   配套要有：启动守卫（旧的父目录非空、新目录为空、又没显式配置 ⇒ 拒绝启动并给出命令）+ 迁移说明。
+2. **N100 那 263MB 的归属**：迁移前要先知道哪些项目在往里写。可行的零拷贝做法是 `cp -al`（同一文件系统上的硬链接）
+   给每个用到 storage 的项目各建一份目录项，之后再按各自 Redis 里的引用做 GC；也可以先在这些项目的 `.env`
+   里把 `UPLOAD_DIR` 显式钉到**现在的共享路径**，行为不变、告警消失，再单独排迁移。
+3. **这些项目的备份要不要先把共享目录纳进去**：与上面独立，越早越好。

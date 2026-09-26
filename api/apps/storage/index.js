@@ -1,5 +1,6 @@
 const express = require('express');
 const fs = require('fs');
+const path = require('path');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const { corsOptionsFromEnv } = require('../../library/cors');
@@ -77,6 +78,21 @@ async function bootstrap() {
         });
         app.use(config.storage.local.mountPath, oss.app);
         log(`Local OSS mounted in-process at ${config.storage.local.mountPath} (bucket=${config.storage.local.bucket}, root=${ossRoot}, publicRead=${config.storage.local.publicRead})`);
+
+        // The root above was always logged, and nobody noticed it pointed outside the
+        // project: a bare path doesn't say "this is wrong". Say it. Only for the built-in
+        // default — an explicit UPLOAD_DIR / LOCAL_OSS_ROOT outside the project is a choice.
+        const projectRoot = config.storage.local.projectRoot;
+        const rel = path.relative(projectRoot, path.resolve(ossRoot));
+        if (config.storage.local.rootFrom === 'default' && (rel.startsWith('..') || path.isAbsolute(rel))) {
+            logger.warn(
+                `Local OSS root ${path.resolve(ossRoot)} is OUTSIDE the project (${projectRoot}). ` +
+                'It is the built-in default, which from the bundle resolves one directory too high: every Solo ' +
+                'project on this machine writes into it, and project backups do not include it. ' +
+                'Pin it with UPLOAD_DIR in .env — keep this exact path if assets already live there, ' +
+                'or move them under the project first (see CHANGELOG v1.2.16).'
+            );
+        }
     }
 
     app.use(bodyParser.json({ limit: config.bodyLimit }));

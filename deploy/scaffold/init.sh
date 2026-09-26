@@ -479,6 +479,10 @@ GATEWAY_SECRET_KEY=$GATEWAY_SECRET_KEY
 # 要把对象存储放到独立进程/独立机器：起 deploy/local-oss.js 并设 LOCAL_OSS_ENDPOINT
 # （设了它就不再进程内挂载）。生产上云走 STORAGE_PROVIDER=aliyun + OSS_* 那组。
 LOCAL_OSS_SECRET='$LOCAL_OSS_SECRET'
+# 字节落盘目录（LOCAL_OSS_ROOT 设了则以它为准）。⚠️ 不设时 v1.2.x 的 bundle 会落到**项目的上一级**
+# （<父目录>/uploads/assets）：同机所有 Solo 项目共用一个目录，项目自己的备份也不含它；
+# 启动日志会打一条 "OUTSIDE the project" 告警。新项目建议取消下一行注释，把它钉在项目里：
+# UPLOAD_DIR='$NEW_DIR/uploads/assets'
 
 # Email —— channel: auto | smtp | api | mock
 # auto = api if EMAIL_API_KEY set, smtp if EMAIL_SMTP_HOST set, else mock
