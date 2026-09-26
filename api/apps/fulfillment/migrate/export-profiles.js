@@ -18,6 +18,7 @@
 
 const fs   = require('fs');
 const path = require('path');
+const { redactUrl } = require('../../../library/env');
 
 function requireRedis() {
     const candidates = [
@@ -41,14 +42,14 @@ const PREFIXES = [
 ];
 
 (async () => {
-    console.log(`🔗 Redis  : ${REDIS_URL}`);
+    console.log(`🔗 Redis  : ${redactUrl(REDIS_URL)}`);
     console.log(`📄 Output : ${OUT}`);
 
     const client = Redis.createClient({ url: REDIS_URL });
     client.on('error', e => console.error('Redis error:', e));
     await client.connect();
 
-    const exported = { meta: { exportedAt: new Date().toISOString(), source: REDIS_URL }, keys: [] };
+    const exported = { meta: { exportedAt: new Date().toISOString(), source: redactUrl(REDIS_URL) }, keys: [] };
 
     try {
         for (const prefix of PREFIXES) {

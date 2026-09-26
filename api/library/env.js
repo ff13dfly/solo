@@ -1,7 +1,8 @@
 //
-// library/env.js — 环境配置的两件事：
+// library/env.js — 环境配置的三件事：
 //   ① `.env` **文本解析**（零依赖），给"自己读 .env 的脚本"用 —— 下面大半篇讲的是它；
-//   ② `process.env` 的**类型化读取**（`intFromEnv`），给各服务 config.js 用 —— 见文件末尾。
+//   ② `process.env` 的**类型化读取**（`intFromEnv`），给各服务 config.js 用 —— 见文件末尾；
+//   ③ 带凭据的连接串**打码**（`redactUrl`），给要把 `REDIS_URL` 之类打进日志的脚本用 —— 见文件末尾。
 //
 // ── 为什么存在 ────────────────────────────────────────────────────────────
 // 一份 `.env` 有三类互不相同的消费者，各自的解析语义**并不一致**：
@@ -128,7 +129,22 @@ function intFromEnv(name, fallback) {
     return fallback;
 }
 
-module.exports = { parse, read, intFromEnv };
+/**
+ * 把连接串里的凭据段打码，供**打印/落盘**用：`redis://:pw@127.0.0.1:6385` → `redis://***@127.0.0.1:6385`。
+ *
+ * @why v1.1.14 起 `REDIS_URL` 按规矩带密码（`redis://:<REDIS_PASSWORD>@…`），而脚本/harness
+ *      习惯把它原样打进启动日志——每跑一次，密码就落进一处新地方（终端回滚、CI 日志、
+ *      AI 会话记录）。`run.sh` 早就刻意避开了同类出口（`REDISCLI_AUTH`、不用 `-a`），
+ *      打印这一侧此前没有共同原语，于是各写各的、多数没写（docs/feedback/done/e2e-harness-prints-redis-password.md）。
+ * @attention 只动 `//` 与第一个 `/` 之间最后一个 `@` 之前的部分：密码里未转义的 `@` 也整段盖住。
+ *      没有凭据段、或不是字符串时原样返回——拿它包一切要打印的 URL 都安全。
+ */
+function redactUrl(url) {
+    if (typeof url !== 'string') return url;
+    return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/i, '$1***@');
+}
+
+module.exports = { parse, read, intFromEnv, redactUrl };
 
 // ── CLI：给 shell 调用方用 ────────────────────────────────────────────────
 //   node api/library/env.js <file> <KEY>   → 打印该键的值（不存在则打印空）

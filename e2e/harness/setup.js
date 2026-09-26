@@ -19,6 +19,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { createClient } = require('redis');
+const { redactUrl } = require('../../api/library/env');
 
 const { API_DIR, SERVICES, PROFILES, PORT_OFFSET } = require('./catalog');
 const ctxFile = require('../lib/context');
@@ -136,7 +137,7 @@ function runNodeOnce(label, entryPath, env = {}, args = []) {
 }
 
 async function startRedisIfNeeded(dataDir) {
-    if (await redisAlive()) { pids.redis = 'external'; console.log(`[E2E] Redis already up at ${REDIS_URL}.`); return; }
+    if (await redisAlive()) { pids.redis = 'external'; console.log(`[E2E] Redis already up at ${redactUrl(REDIS_URL)}.`); return; }
     const port = (REDIS_URL.match(/:(\d+)/) || [])[1] || '6699';
     // 优先 redis-stack(RedisJSON)——即便 lite,user/collection 的 SYSTEM:SEMANTIC 也走 JSON.SET,
     // 纯 redis-server 会让 boot 期 JSON.SET 失败、污染 ERROR:QUEUE.
@@ -165,7 +166,7 @@ async function startRedisIfNeeded(dataDir) {
             if (!failed) { /* started but never became ready — try next */ }
         }
     }
-    throw new Error(`[E2E] Redis not reachable at ${REDIS_URL} and could not start redis-server/redis-stack-server.\n  Start it: redis-server --port ${port} --save "" --daemonize yes`);
+    throw new Error(`[E2E] Redis not reachable at ${redactUrl(REDIS_URL)} and could not start redis-server/redis-stack-server.\n  Start it: redis-server --port ${port} --save "" --daemonize yes`);
 }
 
 // ── full-profile bot tokens(§6 step 4 / §13 决策 1:RPC 真链路) ───────────────

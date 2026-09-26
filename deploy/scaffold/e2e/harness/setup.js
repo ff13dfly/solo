@@ -98,7 +98,9 @@ async function waitFor(label, probe, timeoutMs = 30_000) {
 // ── main ────────────────────────────────────────────────────────────────────
 
 module.exports = async function globalSetup() {
-    console.log(`\n[E2E] setup — redis=${REDIS_URL}  router=${ROUTER_URL}`);
+    // 打码：REDIS_URL 带 REDIS_PASSWORD（v1.1.14+），原样打印 = 每跑一次 e2e 密码落进一处新地方
+    // （终端回滚 / CI 日志 / AI 会话记录）。docs/feedback/done/e2e-harness-prints-redis-password.md
+    console.log(`\n[E2E] setup — redis=${env.redactUrl(REDIS_URL)}  router=${ROUTER_URL}`);
 
     // 1. Wait for Router
     await waitFor(`router (${ROUTER_URL})`, () => pingRpc(ROUTER_URL));

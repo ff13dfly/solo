@@ -22,6 +22,7 @@
  */
 const crypto = require('crypto');
 const { createClient } = require('redis');
+const { redactUrl } = require('../../../library/env');
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6699';
 const BOT_UID = 'system.orchestrator';
@@ -71,7 +72,7 @@ async function main() {
     await client.quit();
 
     console.log('[seed_bot] seeded OK');
-    console.log('  redis     :', REDIS_URL);
+    console.log('  redis     :', redactUrl(REDIS_URL));
     console.log('  bot uid   :', BOT_UID);
     console.log('  permit    :', JSON.stringify(PERMIT));
     console.log('  token     :', token.slice(0, 12) + '… (session:' + token.slice(0, 12) + '…)');

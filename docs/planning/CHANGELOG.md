@@ -74,6 +74,22 @@ steward 在 2026-09-25 独立审出了同一个洞（`../feedback/done/user-sess
 - **守护**：新增 `core/user/tests/login-challenge.test.js` 10 例（进 CI 白名单），**对旧代码 7 例红**（实测）。
   `core/user/GUIDE.md`「坑与约定」补并发登录与 challenge 一次性的说明。
 
+下游 action：无。若有客户端在 verify 失败后拿**同一个** challenge 重试，改成重新 `user.login.request`。
+
+### e2e harness 把带密码的 `REDIS_URL` 打进输出（清 `../feedback/done/e2e-harness-prints-redis-password.md`）
+
+- **`library/env.js` 新增 `redactUrl()`**：`redis://:<pw>@host:port` → `redis://***@host:port`，无凭据段原样返回。
+- 模板 `deploy/scaffold/e2e/harness/setup.js` 的启动打印改用它；solo 自己的 `e2e/harness/setup.js` 两处同改。
+- 同类出口一并收掉：`apps/fulfillment/migrate/export-profiles.js` **把原样 URL 写进导出文件的 `meta.source`**（已打码），
+  以及 `export/import-profiles.js`、`seeds/seed-demo.js`、`orchestrator/scripts/seed_bot.js` 的启动打印。
+- **e2e 上下文文件 `solo-e2e-context.json` 改为 0600**（`e2e/lib/context.js`，模板同改）：它装着真实的 `redisUrl` 与
+  `adminToken`，落在 `os.tmpdir()`——Linux 上是全机共享的 `/tmp`，此前 0644 同机任何账号可读。
+
+下游 action：**`e2e/` 归项目所有、升级不覆盖，存量项目要自己补两处**（新 init 的项目已自带）：
+① `e2e/harness/setup.js` 里打印 `REDIS_URL` 的那行包一层 `env.redactUrl(...)`（该文件已 `require` 了 `api/library/env`）；
+② `e2e/lib/context.js` 的 `writeFileSync` 加 `{ mode: 0o600 }` 并跟一句 `fs.chmodSync(CONTEXT_FILE, 0o600)`。
+可直接对照 solo 仓 `deploy/scaffold/e2e/` 下的两份文件。
+
 ---
 
 ## [v1.2.15] — 2026-09-21

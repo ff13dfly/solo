@@ -325,3 +325,37 @@ describe('intFromEnv', () => {
         expect(env.intFromEnv(KEY, 7)).toBe(42);
     });
 });
+
+describe('redactUrl', () => {
+    const PW = 'a'.repeat(48);
+
+    test('🔴 v1.1.14+ 的 REDIS_URL 形态：密码整段盖住', () => {
+        const out = env.redactUrl(`redis://:${PW}@127.0.0.1:6385`);
+        expect(out).toBe('redis://***@127.0.0.1:6385');
+        expect(out).not.toContain(PW);
+    });
+
+    test('user:pass、带路径/库号', () => {
+        expect(env.redactUrl('redis://default:secret@host:6379/15')).toBe('redis://***@host:6379/15');
+        expect(env.redactUrl('https://u:p@example.com/a?b=c')).toBe('https://***@example.com/a?b=c');
+    });
+
+    test('密码里未转义的 @ 也整段盖住，不漏半截', () => {
+        const out = env.redactUrl('redis://:p@ss@127.0.0.1:6385');
+        expect(out).toBe('redis://***@127.0.0.1:6385');
+        expect(out).not.toContain('ss@127');
+    });
+
+    test('没有凭据段 → 原样返回', () => {
+        expect(env.redactUrl('redis://localhost:6699')).toBe('redis://localhost:6699');
+        expect(env.redactUrl('http://localhost:8600/')).toBe('http://localhost:8600/');
+        // 路径或查询里的 @ 不是凭据段，不能被误伤
+        expect(env.redactUrl('http://host/a@b')).toBe('http://host/a@b');
+        expect(env.redactUrl('http://host?x=a@b')).toBe('http://host?x=a@b');
+    });
+
+    test('非字符串原样返回（拿它包一切要打印的值都安全）', () => {
+        expect(env.redactUrl(undefined)).toBeUndefined();
+        expect(env.redactUrl(null)).toBeNull();
+    });
+});

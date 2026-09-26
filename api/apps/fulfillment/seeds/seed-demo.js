@@ -9,6 +9,7 @@
  */
 
 const redis = require('redis');
+const { redactUrl } = require('../../../library/env');
 
 const REDIS_URL = process.argv.includes('--url')
     ? process.argv[process.argv.indexOf('--url') + 1]
@@ -389,7 +390,7 @@ const DEMO_INSTANCES = [
 // --- Main ---
 
 async function main() {
-    console.log(`\n🌱 Seeding fulfillment demo data → ${REDIS_URL}\n`);
+    console.log(`\n🌱 Seeding fulfillment demo data → ${redactUrl(REDIS_URL)}\n`);
 
     const client = redis.createClient({ url: REDIS_URL });
     client.on('error', err => console.error('Redis error:', err.message));

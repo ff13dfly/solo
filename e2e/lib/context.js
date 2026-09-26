@@ -14,7 +14,11 @@ const CONTEXT_FILE = path.join(os.tmpdir(), 'solo-e2e-context.json');
 let _cache = null;
 
 function write(ctx) {
-    fs.writeFileSync(CONTEXT_FILE, JSON.stringify(ctx, null, 2));
+    // 0600：内容含 redisUrl（带 REDIS_PASSWORD）与 adminToken。os.tmpdir() 在 Linux 上是
+    // 全机共享的 /tmp，默认 0644 = 同机任何账号都读得到。mode 只在新建时生效，已存在的
+    // 旧文件（此前以 0644 建的）靠 chmod 收回。
+    fs.writeFileSync(CONTEXT_FILE, JSON.stringify(ctx, null, 2), { mode: 0o600 });
+    fs.chmodSync(CONTEXT_FILE, 0o600);
     _cache = ctx;
 }
 

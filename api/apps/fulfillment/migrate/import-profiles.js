@@ -16,6 +16,7 @@
 
 const fs   = require('fs');
 const path = require('path');
+const { redactUrl } = require('../../../library/env');
 
 function requireRedis() {
     const candidates = [
@@ -43,7 +44,7 @@ const DRY_RUN   = args.includes('--dry-run');
 
     const data = JSON.parse(fs.readFileSync(IN, 'utf8'));
     console.log(`📄 Input  : ${IN}`);
-    console.log(`🔗 Redis  : ${REDIS_URL}`);
+    console.log(`🔗 Redis  : ${redactUrl(REDIS_URL)}`);
     console.log(`📦 Keys   : ${data.keys.length}`);
     console.log(`📅 Exported at: ${data.meta?.exportedAt || 'unknown'}`);
     if (DRY_RUN) console.log(`🔍 DRY RUN — no writes`);
