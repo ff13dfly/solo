@@ -84,6 +84,7 @@ async function setUserPermit(redis, uid, permit) {
     const uid = generateId(16);
     const userToken = 'e2e-user-' + generateId(8);
     const adminToken = 'e2e-admin-' + generateId(8);
+    const adminUid = 'e2e-mock-admin-' + generateId(8);
     const orderId = 'E2E-ORD-' + generateId(6);
 
     console.log(`E2E workflow run  (router=${ROUTER_URL}, uid=${uid}, order=${orderId})\n`);
@@ -94,7 +95,12 @@ async function setUserPermit(redis, uid, permit) {
         await redis.set(`user:name:e2e-test-${uid}`, uid);
         await redis.sAdd('user:ids', uid);
         await redis.set(`session:${userToken}`, JSON.stringify({ uid, username: 'e2e-test', permit: PERMIT_MIN }), { EX: 1800 });
-        await redis.set(`session:${adminToken}`, JSON.stringify({ uid: 'e2e-admin', username: 'e2e-admin', permit: { allow_all: true } }), { EX: 1800 });
+        await redis.set(`session:${adminToken}`, JSON.stringify({ uid: adminUid, username: 'e2e-admin', permit: { allow_all: true } }), { EX: 1800 });
+        // The admin session needs a matching account record: the Router's account-lifecycle gate
+        // resolves "session has a uid but user:{uid} is gone" as a hard-deleted account ⇒ guest
+        // (docs/feedback/done/account-deletion-does-not-revoke-live-sessions.md). Own uid, not the
+        // harness's 'e2e-admin', so a concurrent e2e run's record is never overwritten or deleted.
+        await redis.set(`user:${adminUid}`, JSON.stringify({ id: adminUid, name: 'e2e-admin', permit: { allow_all: true, services: {} }, status: 'ACTIVE' }), { EX: 1800 });
         console.log('  · injected test user (minimal permit) + admin session');
 
         // 2. make sure collection is registered with the Router (idempotent handshake)
@@ -144,7 +150,7 @@ async function setUserPermit(redis, uid, permit) {
 
     } finally {
         if (!KEEP) {
-            await redis.del(`user:${uid}`, `user:name:e2e-test-${uid}`, `session:${userToken}`, `session:${adminToken}`, WF_KEY);
+            await redis.del(`user:${uid}`, `user:name:e2e-test-${uid}`, `session:${userToken}`, `session:${adminToken}`, `user:${adminUid}`, WF_KEY);
             await redis.sRem('user:ids', uid);
             console.log('\n· cleaned up injected user/sessions/workflow (use --keep to retain)');
         }
