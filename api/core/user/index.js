@@ -9,6 +9,7 @@ const { initializeRedis, ensureDefaultCategories } = require('./handlers/bootstr
 const authHandlers = require('./handlers/auth');
 const introspectionMethods = require('./handlers/introspection');
 const createLogic = require('./logic');
+const { migrateLiveSessions } = require('./logic/session-migrate');
 const jsonrpc = require('./handlers/jsonrpc');
 const { mountHealth } = require('../../library/health');
 const { createRelay } = require('../../library/relay');
@@ -80,6 +81,16 @@ let Methods;
         // (otpRequest swallows relay errors), so absence never blocks self-service issuance.
         const relay = createRelay({ redis: redisClient, serviceName: config.serviceName, routerUrl: config.routerUrl });
         Methods = createLogic(redisClient, config, { serviceName: config.serviceName, relay });
+
+        // One-shot: index live sessions minted by older code + purge passport sessions on
+        // reserved anchors (logic/session-migrate.js). Never blocks boot — a failure is logged
+        // and retried on the next start.
+        try {
+            const m = await migrateLiveSessions(redisClient, config);
+            if (m) logger.info(`[sessions] migrated live sessions: indexed=${m.indexed} purged(reserved anchor)=${m.purged} skipped=${m.skipped}`);
+        } catch (e) {
+            logger.warn(`[sessions] live-session migration failed, will retry next boot: ${e.message}`);
+        }
 
         // Start Server
         app.listen(PORT, bindAddr('user'), () => {

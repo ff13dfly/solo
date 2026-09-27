@@ -18,15 +18,37 @@ module.exports = (redisClient, config) => {
 
     /**
      * Persist a session AND index it under the uid so it can be actively revoked.
-     * The reverse-index set carries the same TTL (refreshed on each issue) to bound
-     * growth; stale token refs are harmless — DEL on an already-expired session is a no-op.
+     *
+     * The index carries NO TTL. It used to share the session's TTL, refreshed only when this uid
+     * minted another session — but the Router slides admin/operator sessions on every request,
+     * so a token in continuous use outlived its index entry after a week: token.revoke then
+     * returned `revoked: 0` and the leaked admin token kept working (docs/planning/security.md,
+     * 2026-09-27). PERSIST also clears a TTL left on an existing index by older code.
+     *
+     * Who deletes the index: killSessions (revoke / suspend / account remove & destroy) drops
+     * it whole; every mint prunes members whose session is already gone, so it stays bounded
+     * by the uid's live sessions. A uid that never mints again keeps one small set.
      */
     async function persistSession(uid, token, ttlSec, sessionData) {
         const multi = redisClient.multi();
         multi.setEx(sessionKey(token), ttlSec, JSON.stringify(sessionData));
         multi.sAdd(userSessionsKey(uid), token);
-        multi.expire(userSessionsKey(uid), ttlSec);
+        multi.persist(userSessionsKey(uid));
         await multi.exec();
+        await pruneIndex(uid);
+    }
+
+    /** Drop index members whose session key no longer exists (expired or deleted). */
+    async function pruneIndex(uid) {
+        const idxKey = userSessionsKey(uid);
+        const tokens = await redisClient.sMembers(idxKey);
+        if (!tokens.length) return 0;
+        const multi = redisClient.multi();
+        for (const t of tokens) multi.exists(sessionKey(t));
+        const alive = await multi.exec();
+        const dead = tokens.filter((_, i) => Number(alive[i]) === 0);
+        if (dead.length) await redisClient.sRem(idxKey, dead);
+        return dead.length;
     }
 
     /**
@@ -48,5 +70,5 @@ module.exports = (redisClient, config) => {
         return revoked;
     }
 
-    return { sessionKey, userSessionsKey, persistSession, killSessions };
+    return { sessionKey, userSessionsKey, persistSession, pruneIndex, killSessions };
 };

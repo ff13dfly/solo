@@ -45,10 +45,12 @@ function makeFakeRedis() {
         setEx: (k, _ttl, v) => { kv.set(k, v); return 'OK'; },
         del: (k) => { const had = kv.delete(k) || sets.delete(k) || hashes.delete(k); return had ? 1 : 0; },
         sAdd: (k, m) => { const s = sOf(k); const had = s.has(m); s.add(m); return had ? 0 : 1; },
-        sRem: (k, m) => { const s = sets.get(k); return s && s.delete(m) ? 1 : 0; },
+        sRem: (k, m) => { const s = sets.get(k); if (!s) return 0; let n = 0; for (const x of [].concat(m)) if (s.delete(x)) n++; return n; },
         zAdd: (k, { score, value }) => { zOf(k).set(value, score); return 1; },
         zRem: (k, m) => { const z = zsets.get(k); return z && z.delete(m) ? 1 : 0; },
         expire: () => 1,
+        persist: () => 1,
+        exists: (k) => (kv.has(k) ? 1 : 0),
         hSet: (k, f, v) => { hOf(k).set(f, v); return 1; },
     };
     const redis = {
@@ -76,6 +78,8 @@ function makeFakeRedis() {
         async zRem(k, m) { return apply.zRem(k, m); },
         async zCard(k) { return zsets.has(k) ? zsets.get(k).size : 0; },
         async expire(k, ttl) { return apply.expire(k, ttl); },
+        async exists(k) { return apply.exists(k); },
+        async persist(k) { return apply.persist(k); },
         async incr(k) { const n = Number(kv.get(k) || 0) + 1; kv.set(k, String(n)); return n; },
         async hSet(k, f, v) { return apply.hSet(k, f, v); },
         async hGet(k, f) { const h = hashes.get(k); return h && h.has(f) ? h.get(f) : null; },
@@ -91,6 +95,8 @@ function makeFakeRedis() {
                 zRem(k, m) { ops.push(['zRem', k, m]); return chain; },
                 del(k) { ops.push(['del', k]); return chain; },
                 expire(k, ttl) { ops.push(['expire', k, ttl]); return chain; },
+                persist(k) { ops.push(['persist', k]); return chain; },
+                exists(k) { ops.push(['exists', k]); return chain; },
                 hSet(k, f, v) { ops.push(['hSet', k, f, v]); return chain; },
                 async exec() { return ops.map(([op, ...args]) => apply[op](...args)); },
             };

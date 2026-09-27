@@ -11,6 +11,35 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+### 🔴 安全复评（2026-09-27，`/security-review` 审 `e1f5306..HEAD`）查出的三处，均在 user 服务内修复
+
+复评本身的结论：v1.2.16 / v1.3.0 那批改动**没有**引入 High/Medium 问题。下面三处中，前两处是**更早就存在**、
+顺着这批改动的代码读出来的；第三处是 v1.2.16 吊销修复没做完的部分。每条都经独立验证者只读代码复核（置信度 8/10）。
+
+- **passport anchor 撞进内部账号 / bot 的解析空间 ⇒ 权限提升**（新 `core/user/logic/anchors.js`）。
+  护照会话的 uid 就是 anchor，而 Router 对任何 uid 都读 `user:<uid>` 并**整体替换** permit（`$owner` 行隔离随之丢失），
+  `system.*` 则进 bot 分支。开了 `device` 发证的项目，匿名者取 anchor=`system.<bot>` 即得该 bot 的权限，
+  再调 `user.token.refresh` 能换到真正可续期的 bot token；知道某 admin 的 uid 就是 allow_all。
+  现在 anchor 以 `system.` 开头、含 `:`、或等于已存在的内部账号 uid，所有签发路径与 `verify` 都拒。
+  检查对着 Router 实际读的字面前缀 `user:`，不依赖配置（测试里就撞见过配置缺字段让检查静默失效）。
+- **`device` 发证对已有 anchor 照样签发 ⇒ 任意护照接管**：追加攻击者设备，并顺带把 DISABLED 的护照重新激活。
+  `deviceIssue` 改为只认首次（已有护照 ⇒ `-32005`）。同一个病还在自助 `otp.verify` 上：被管理员停用的人能用 OTP 自己解封。
+  现在只有管理员 `user.passport.register` 能重新激活 DISABLED 实体，自助路径一律 `-32003`。
+- **滑动续期的 admin/operator session 跑出吊销索引**（`core/user/logic/sessions.js`）：索引 TTL 只随再次登录刷新，
+  Router 却每次请求续 session ⇒ 一直在用的 admin token 一周后 `token.revoke` 删 0 条、仍能用。索引改为不带 TTL，
+  签发时剪掉已失效成员。
+- **升级后首次启动的一次性迁移**（新 `core/user/logic/session-migrate.js`，marker `USER:SESSIONS:MIGRATED:v1`）：
+  把此前发出、不在索引里的活 session 补进索引（v1.2.16 前的人类登录从未进过索引，其中的 admin token 若一直在用，永远不会过期），
+  并删掉 anchor 落在保留空间里的活 passport session。失败只记日志、下次启动重试，不阻塞启动。
+- **守护**：`passport-otp.test.js` +10、`bot-revoke.test.js` +3、新 `session-migrate.test.js` 7 例（进 CI 白名单）；
+  前两个文件的新用例**对旧代码 11 例红**（实测）。user GUIDE、`spec-passport-identity-line.md`、`security.md` 台账同步。
+- 没做：Router 侧对外部会话跳过 `user:` / bot 读取（纵深防御，Router 保护区，需另行授权）。
+
+下游 action：多数项目无需改动，升级后首次启动 user 服务时日志会有一行 `[sessions] migrated live sessions: …`。
+开过 `device` 发证的项目留意两点：① 已有护照的 anchor 不能再 `device.issue`（设备令牌丢了 = 换新设备 anchor）；
+② 升级前可以自查有没有被利用过：`redis-cli --scan --pattern 'USER:PASSPORT:system.*'`，以及列出 `USER:PASSPORT:IDS` 里含 `:` 的成员——
+有输出就说明有人用过保留 anchor，迁移会删掉它们的活会话，实体本身建议 `user.passport.disable`。
+
 ---
 
 ## [v1.3.0] — 2026-09-26

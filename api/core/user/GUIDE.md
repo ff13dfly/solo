@@ -67,13 +67,21 @@
 **fail-closed** 门控（缺省 `closed` = 全拒；要 `device` / `otp` / `pending` 模式才放行）：
 
 1. 设备签发（TOFU，无 OTP）：`user.passport.device.issue { anchor, app }` → `{ deviceToken, deviceId }`。
-   `anchor` 由设备自己生成；需 `issuance=device`。
+   `anchor` 由设备自己生成；需 `issuance=device`。**只认首次**：该 anchor 已有护照就 `-32005`——
+   丢了设备令牌 = 换一个新设备 anchor（否则任何人都能给别人的 anchor 追加自己的设备）。
 2. 换会话：`user.passport.verify { anchor, deviceId, deviceToken }` → 受限 session（24h）。
    权限来自**实体绑定**的 bot/role，**绝不信客户端传的 role**；且必须行隔离（`$owner`），否则服务端拒发（`INTERNAL_ERROR`）。
 3. 升级到邮箱/手机锚：先 `user.passport.otp.request { anchor:<新锚>, channel }` 拿 OTP，
    再 `user.passport.upgrade { anchor:<旧设备锚>, deviceId, deviceToken, newAnchor, otp }`
    —— 需**同时**握有设备证明 + 新锚 OTP。成功后旧锚置 `DISABLED`（记 `upgradedTo`），
    身份（role/bot/meta）迁到新锚并发新设备令牌。
+
+**anchor 的保留命名空间**（所有签发路径 + `verify` 都拒，`-32602` / `-32003`）：以 `system.` 开头、
+含 `:`、或等于某个内部账号的 uid。护照会话的 uid 就是 anchor，而 Router 按同一个 keyspace 解析 uid——
+撞上就会被当成那个内部账号或 bot（2026-09-27 之前确实会）。正常的邮箱 / 手机号 / 设备 id 不受影响。
+
+**被管理员 `disable` 的护照**，自助路径（`otp.verify` / `device.issue` / `upgrade` 到它）**不能**把它重新激活
+（`-32003`）；只有管理员 `user.passport.register` 能。
 
 **次序 / 幂等**：OTP 一次性消费，验证成功即删；错次累加到上限触发锁定；`user.passport.otp.request`
 有每锚固定窗口限流，超了抛 `-32029`（带 `retry_after`）。`user.passport.upgrade` 前必须先
@@ -94,6 +102,9 @@
 ⚠️ `revoked: 0` 的含义是"该 uid 当前没有活着的 session"，**不再**意味着"这类账号不在覆盖范围内"
 （2026-09-22 之前是后者：人类登录不写反向索引，revoke 对浏览器账号永远删 0 条还报成功。
 见 `docs/feedback/done/account-deletion-does-not-revoke-live-sessions.md`）。
+2026-09-27 再补一处：反向索引曾带 7 天 TTL，而 admin/operator 的 session 每次请求都被 Router 续期，
+一直在用的 admin token 一周后就掉出索引、revoke 删 0 条。现在索引不带 TTL（签发时顺手清掉已失效成员），
+升级后首次启动还会把此前发出、不在索引里的活 session 补进去。
 
 ## 坑与约定
 

@@ -27,6 +27,7 @@ function fakeRedis() {
         async sAdd(k, v) { sOf(k).add(v); return 1; },
         async sRem(k, v) { sOf(k).delete(v); return 1; },
         async sMembers(k) { return [...sOf(k)]; },
+        async exists(k) { return (await this.get(k)) === null ? 0 : 1; },
         async hSet(k, f, v) { hOf(k).set(f, v); return 1; },
         async hGet(k, f) { return hOf(k).has(f) ? hOf(k).get(f) : null; },
         async hKeys(k) { return [...hOf(k).keys()]; },

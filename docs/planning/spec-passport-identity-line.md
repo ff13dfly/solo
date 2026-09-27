@@ -33,7 +33,7 @@ passport 实体可绑 `bot`（bot account id）**或** `role`（现状，role st
 - fail-closed：`issuanceMode(app) === 'device'` 才放行；否则 `FORBIDDEN`。
 - 路由到 `defaultBotFor(app)`（或 `defaultRoleFor(app)`），`_provision` 写实体（绑 bot）+ 发 `deviceToken`/`deviceId`。
 - 返回 `{ deviceToken, deviceId, anchor, bot }`。客户端存好 → 之后走 `passport.verify` 拿 session。
-- **安全**：device token 是 bearer；anchor 客户端自选（碰撞是客户端自己的事）。**留项**：per-IP 请求级限流防批量造号（同 otp.request 的请求限流，本规格不阻塞）。
+- **安全**：device token 是 bearer；anchor 客户端自选——但**不能**落进保留命名空间（`system.*`、含 `:`、等于内部账号 uid），也**只认首次**：已有护照的 anchor 不再签发（2026-09-27 修正：原文「碰撞是客户端自己的事」只考虑了护照之间的碰撞，没考虑护照会话的 uid 与内部账号 / bot 共用 Router 的解析 keyspace，也没考虑无凭据的 TOFU 对**已有** anchor 等于接管）。**留项**：per-IP 请求级限流防批量造号（同 otp.request 的请求限流，本规格不阻塞）。
 
 ### 2.3 upgrade（device → email/手机）—— 匿名→注册不丢
 新 public 方法 `user.passport.upgrade`：

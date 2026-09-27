@@ -23,6 +23,7 @@ function makeFakeRedis() {
     const sets = new Map();
     const zsets = new Map();
     const counters = new Map();
+    const ttlKeys = new Set();   // keys that currently carry a TTL (expire sets, persist clears)
     const getSet = (k) => (sets.has(k) ? sets.get(k) : sets.set(k, new Set()).get(k));
     const getZset = (k) => (zsets.has(k) ? zsets.get(k) : zsets.set(k, new Map()).get(k));
     const apply = {
@@ -30,12 +31,15 @@ function makeFakeRedis() {
         setEx: (k, _s, v) => { kv.set(k, v); return 'OK'; },
         del: (k) => { const had = kv.delete(k); sets.delete(k); return had ? 1 : 0; },
         sAdd: (k, m) => { const s = getSet(k); const had = s.has(m); s.add(m); return had ? 0 : 1; },
-        sRem: (k, m) => { const s = sets.get(k); return s && s.delete(m) ? 1 : 0; },
+        sRem: (k, m) => { const s = sets.get(k); if (!s) return 0; let n = 0; for (const x of [].concat(m)) if (s.delete(x)) n++; return n; },
         zAdd: (k, { score, value }) => { getZset(k).set(value, score); return 1; },
         zRem: (k, m) => { const z = zsets.get(k); return z && z.delete(m) ? 1 : 0; },
-        expire: () => 1,
+        expire: (k) => { ttlKeys.add(k); return 1; },
+        persist: (k) => { ttlKeys.delete(k); return 1; },
+        exists: (k) => (kv.has(k) ? 1 : 0),
     };
     return {
+        _ttlKeys: ttlKeys,
         async get(k) { return kv.has(k) ? kv.get(k) : null; },
         async getDel(k) { const v = kv.has(k) ? kv.get(k) : null; kv.delete(k); return v; },
         async set(k, v) { return apply.set(k, v); },
@@ -48,6 +52,8 @@ function makeFakeRedis() {
         async zAdd(k, entry) { return apply.zAdd(k, entry); },
         async zRem(k, m) { return apply.zRem(k, m); },
         async expire(k, s) { return apply.expire(k, s); },
+        async exists(k) { return apply.exists(k); },
+        async persist(k) { return apply.persist(k); },
         multi() {
             const ops = [];
             const chain = {
@@ -56,6 +62,8 @@ function makeFakeRedis() {
                 sAdd(k, m) { ops.push(['sAdd', k, m]); return chain; },
                 zAdd(k, entry) { ops.push(['zAdd', k, entry]); return chain; },
                 expire(k, s) { ops.push(['expire', k, s]); return chain; },
+                persist(k) { ops.push(['persist', k]); return chain; },
+                exists(k) { ops.push(['exists', k]); return chain; },
                 del(k) { ops.push(['del', k]); return chain; },
                 async exec() { return ops.map(([op, ...args]) => apply[op](...args)); },
             };
@@ -162,5 +170,30 @@ describe('human account revocation (the half that used to be missing)', () => {
         const again = await user.remove({ id: uid });
         expect(again.success).toBe(true);
         expect(again.revoked).toBe(0);
+    });
+
+    // ── 滑动续期的 session 不能跑出索引(docs/planning/security.md 2026-09-27)──────
+    // Router 对 admin/operator 每次请求把 session 续回 7 天,但索引的 TTL 只在该 uid 再次登录时
+    // 才刷新 ⇒ 持续在用、一周没重新登录的 admin token 跑出索引,revoke 删 0 条、token 照样能用。
+    const idx = () => `${config.redis.userSessionsPrefix}${uid}`;
+
+    test('🔴 反向索引不带 TTL(否则滑动续期的 session 会活过它)', async () => {
+        await login();
+        expect(redis._ttlKeys.has(idx())).toBe(false);
+    });
+
+    test('🔴 旧代码留下的带 TTL 索引,下一次登录时被 PERSIST 掉', async () => {
+        redis._ttlKeys.add(idx());   // v1.2.16–v1.3.0 的索引带 7 天 TTL
+        await login();
+        expect(redis._ttlKeys.has(idx())).toBe(false);
+    });
+
+    test('每次签发顺手清掉已失效的成员:索引只随活 session 增长', async () => {
+        const t1 = await login();
+        const t2 = await login();
+        await redis.del(sKey(t1));                           // t1 过期
+        const t3 = await login();
+        expect((await redis.sMembers(idx())).sort()).toEqual([t2, t3].sort());
+        expect((await bot.revoke({ uid })).revoked).toBe(2);
     });
 });

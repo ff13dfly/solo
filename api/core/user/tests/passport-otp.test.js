@@ -51,6 +51,7 @@ function fakeRedis() {
         async ttl(k) { if (!live(k)) return -2; if (!exp.has(k)) return -1; return Math.ceil((exp.get(k) - now()) / 1000); },
         async sAdd(k, v) { sOf(k).add(v); return 1; },
         async sMembers(k) { return [...sOf(k)]; },
+        async exists(k) { return (await this.get(k)) === null ? 0 : 1; },
         async hSet(k, f, v) { hOf(k).set(f, v); return 1; },
         async hGet(k, f) { return hOf(k).has(f) ? hOf(k).get(f) : null; },
         async hKeys(k) { return [...hOf(k).keys()]; },
@@ -270,5 +271,87 @@ describe('full self-service round-trip', () => {
         const stored = JSON.parse(await r.get(`session:${sess.token}`));
         expect(stored.kind).toBe('external');
         expect(stored.permit.constraints.$owner.value).toBe('round@x.com');   // row-isolated to the anchor
+    });
+});
+
+// ── Anchor namespace + takeover (docs/planning/security.md, 2026-09-27) ──────────────────
+// A passport session's uid IS its anchor, and the Router resolves every session uid against
+// the internal-account / bot keyspace. Anchors used to be taken verbatim, and device issuance
+// (no credential) would happily re-issue for an anchor that already had a passport.
+describe('passport anchor namespace + TOFU', () => {
+    function deviceConfig() {
+        const c = makeConfig();
+        c.passport.issuance.byApp.appdev = 'device';
+        c.passport.defaultRole.byApp.appdev = 'guest';
+        return c;
+    }
+    const make = () => {
+        const r = fakeRedis();
+        return { r, P: createPassport(r, deviceConfig(), { role: fakeRole(), relay: fakeRelay() }) };
+    };
+
+    test.each([
+        ['system.nexus', 'bot uid → Router bot branch'],
+        ['bot:system.nexus', 'user:bot:<id> is the bot record itself'],
+        ['name:alice', 'any user:<sub>:… path'],
+    ])('🔴 device issuance refuses reserved anchor %s (%s)', async (anchor) => {
+        const { r, P } = make();
+        await expectThrowCode(P.deviceIssue({ anchor, app: 'appdev' }), -32602);
+        expect(await r.get(`USER:PASSPORT:${anchor}`)).toBeNull();
+    });
+
+    test('🔴 anchor equal to an existing internal uid is refused — issuance AND admin register', async () => {
+        const { r, P } = make();
+        await r.set('user:7uAdminUid000001', JSON.stringify({ id: '7uAdminUid000001', permit: { allow_all: true } }));
+        await expectThrowCode(P.deviceIssue({ anchor: '7uAdminUid000001', app: 'appdev' }), -32602);
+        await expectThrowCode(P.register({ anchor: '7uAdminUid000001', role: 'external', deviceToken: 'dt' }), -32602);
+    });
+
+    test('🔴 verify refuses an entity provisioned BEFORE the check existed (mint-time chokepoint)', async () => {
+        const { r, P } = make();
+        const issued = await P.deviceIssue({ anchor: 'dev-abc', app: 'appdev' });
+        // Simulate a pre-fix collision: an internal account now holds this id.
+        await r.set('user:dev-abc', JSON.stringify({ id: 'dev-abc', permit: { allow_all: true } }));
+        await expectThrowCode(P.verify({ anchor: 'dev-abc', deviceId: issued.deviceId, deviceToken: issued.deviceToken }), -32003);
+    });
+
+    test('🔴 device issuance is first-use only: no second device on an existing anchor (takeover)', async () => {
+        const { r, P } = make();
+        const first = await P.deviceIssue({ anchor: 'dev-victim', app: 'appdev' });
+        await expectThrowCode(P.deviceIssue({ anchor: 'dev-victim', app: 'appdev' }), -32005);
+        expect(await r.hKeys('PASSPORT:PROOFS:dev-victim')).toEqual([first.deviceId]);   // attacker device not appended
+    });
+
+    test('🔴 device issuance cannot take over an email passport provisioned via OTP', async () => {
+        const { r, P } = make();
+        const { devCode } = await P.otpRequest({ anchor: 'alice@x.com', channel: 'email', app: 'app1' });
+        const owner = await P.otpVerify({ anchor: 'alice@x.com', otp: devCode, app: 'app1' });
+        await expectThrowCode(P.deviceIssue({ anchor: 'alice@x.com', app: 'appdev' }), -32005);
+        expect(await r.hKeys('PASSPORT:PROOFS:alice@x.com')).toEqual([owner.deviceId]);
+    });
+
+    test('🔴 self-service OTP cannot re-activate an admin-DISABLED passport', async () => {
+        const { r, P } = make();
+        const { devCode } = await P.otpRequest({ anchor: 'bob@x.com', channel: 'email', app: 'app1' });
+        await P.otpVerify({ anchor: 'bob@x.com', otp: devCode, app: 'app1' });
+        await P.disable({ anchor: 'bob@x.com' });
+        const again = await P.otpRequest({ anchor: 'bob@x.com', channel: 'email', app: 'app1' });
+        await expectThrowCode(P.otpVerify({ anchor: 'bob@x.com', otp: again.devCode, app: 'app1' }), -32003);
+        expect(JSON.parse(await r.get('USER:PASSPORT:bob@x.com')).status).toBe('DISABLED');
+    });
+
+    test('admin register CAN still re-activate a DISABLED passport (explicit admin intent)', async () => {
+        const { r, P } = make();
+        await P.register({ anchor: 'carol@x.com', role: 'external', deviceToken: 'dt1' });
+        await P.disable({ anchor: 'carol@x.com' });
+        await P.register({ anchor: 'carol@x.com', role: 'external', deviceToken: 'dt2' });
+        expect(JSON.parse(await r.get('USER:PASSPORT:carol@x.com')).status).toBe('ACTIVE');
+    });
+
+    test('ordinary anchors are unaffected (email / phone / device id)', async () => {
+        const { P } = make();
+        for (const anchor of ['dev-1f3a', '+8613800138000', 'u2@x.com']) {
+            await expect(P.deviceIssue({ anchor, app: 'appdev' })).resolves.toMatchObject({ anchor });
+        }
     });
 });

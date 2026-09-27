@@ -89,6 +89,21 @@ Router 是系统唯一入口，承载 auth / routing / permission / event 等核
 - **实体走 Entity Factory**(`api/library/entity.js`)：自带 CRUD + 索引 + MULTI/EXEC + WAL；`sensitiveFields` 要在 `entities.js` 显式声明。
 - **不要 `Date.now()` 散落**：用 `api/library/clock.js`（可注入、测试可冻结）。
 
+### 🔐 安全复评触发（规则本体在 `.agents/rules/security-cadence.md`）
+
+那份规则放在 `.agents/` 下，**Claude Code 会话不会自动读到它**——2026-09-26 改了 `router/handlers/auth.js`
+又发了 v1.3.0，两个触发条件都满足，一次都没提醒。所以在这里挂指针：**命中下列任一项，收尾时主动提醒用户做针对性复评**，
+细则和巡检节奏以那份文件为准。
+
+- 改了 `api/router/handlers/{auth,forward,ratelimit,service}.js`、网关端口 / CORS / `library/ports.js`；
+- 改了 `orchestrator/logic/runner.js`、`setPath`、resolver，或 `library/jsonlogic.js` 的算子白名单 / 守卫；
+- 改了 `agent/logic/decide.js` 的门控，或扩了 `core/mcp` 暴露的工具面；
+- 改了 OSS 预签名鉴权、MIME 映射、CSP / nosniff 响应头；
+- 升级了 `express` / `tweetnacl` / `json-logic-js` / `redis` 等核心依赖；
+- 发 minor（里程碑）版本前。
+
+用哪个工具：只审这批改动 → `/security-review`；要全面审计或一份报告 → `security-audit` skill（很重，别拿它审小 diff）。
+
 ---
 
 ## 6. 跑测试

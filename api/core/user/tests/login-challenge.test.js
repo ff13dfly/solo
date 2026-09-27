@@ -27,6 +27,8 @@ function makeFakeRedis() {
         del: (k) => { const had = kv.delete(k); sets.delete(k); return had ? 1 : 0; },
         sAdd: (k, m) => { const s = getSet(k); const had = s.has(m); s.add(m); return had ? 0 : 1; },
         expire: () => 1,
+        persist: () => 1,
+        exists: (k) => (kv.has(k) ? 1 : 0),
     };
     return {
         keys: () => [...kv.keys()],
@@ -37,7 +39,9 @@ function makeFakeRedis() {
         async del(k) { return apply.del(k); },
         async sAdd(k, m) { return apply.sAdd(k, m); },
         async sMembers(k) { return sets.has(k) ? [...sets.get(k)] : []; },
-        async sRem(k, m) { const s = sets.get(k); return s && s.delete(m) ? 1 : 0; },
+        async sRem(k, m) { const s = sets.get(k); if (!s) return 0; let n = 0; for (const x of [].concat(m)) if (s.delete(x)) n++; return n; },
+        async exists(k) { return kv.has(k) ? 1 : 0; },
+        async persist() { return 1; },
         async incr(k) { const n = (counters.get(k) || 0) + 1; counters.set(k, n); return n; },
         async expire(k, s) { return apply.expire(k, s); },
         multi() {
@@ -47,6 +51,8 @@ function makeFakeRedis() {
                 setEx(k, s, v) { ops.push(['setEx', k, s, v]); return chain; },
                 sAdd(k, m) { ops.push(['sAdd', k, m]); return chain; },
                 expire(k, s) { ops.push(['expire', k, s]); return chain; },
+                persist(k) { ops.push(['persist', k]); return chain; },
+                exists(k) { ops.push(['exists', k]); return chain; },
                 del(k) { ops.push(['del', k]); return chain; },
                 async exec() { return ops.map(([op, ...args]) => apply[op](...args)); },
             };

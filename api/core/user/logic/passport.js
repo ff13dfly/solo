@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const Passport = require('../../../library/passport');
 const jsonrpc = require('../handlers/jsonrpc');
+const { isReservedAnchor } = require('./anchors');
 
 /**
  * External-principal bridge + registry (authority.md §4.1) — lives in `user`, NOT a
@@ -116,9 +117,15 @@ module.exports = (redisClient, config, { role, relay } = {}) => {
     // Shared entity+salt+proof writer — admin `register` AND self-service `otpVerify` both call
     // this so the two paths can never drift. `deviceToken` optional (PENDING provisioning records
     // no device yet); `roleName` optional (PENDING binds no role until an admin elevates).
-    async function _provision({ anchor, roleName, bot, app, name, meta, deviceId, deviceToken, status = 'ACTIVE' }) {
+    // `reactivate`: only the admin path may bring a DISABLED principal back. Self-service paths
+    // (otpVerify / device issuance / upgrade) used to flip it to ACTIVE here, which let anyone
+    // who could pass issuance undo an admin's disable.
+    async function _provision({ anchor, roleName, bot, app, name, meta, deviceId, deviceToken, status = 'ACTIVE', reactivate = false }) {
+        // Anchor namespace: never an internal uid / bot id / `user:` sub-path (logic/anchors.js).
+        if (await isReservedAnchor(redisClient, anchor)) throw jsonrpc.INVALID_PARAMS('anchor is reserved');
         const now = new Date().toISOString();
         const existing = await getEntity(anchor);
+        if (existing?.status === 'DISABLED' && !reactivate) throw jsonrpc.UNAUTHORIZED();
         const entity = existing
             ? { ...existing, role: roleName ?? existing.role, bot: bot ?? existing.bot ?? null, app: app ?? existing.app ?? null, name: name ?? existing.name, meta: meta ?? existing.meta, status, updatedAt: now }
             : { id: anchor, role: roleName || null, bot: bot || null, app: app || null, name: name || anchor, meta: meta || {}, status, createdAt: now, updatedAt: now };
@@ -140,7 +147,7 @@ module.exports = (redisClient, config, { role, relay } = {}) => {
     async function register({ anchor, role: roleName, app, deviceId, deviceToken, name, meta } = {}) {
         if (!anchor || !roleName || !deviceToken) throw jsonrpc.MISSING_PARAM('anchor/role/deviceToken');
         await role.get({ role: roleName });   // role must exist (binds a real permit)
-        return _provision({ anchor, roleName, app, name, meta, deviceId, deviceToken, status: 'ACTIVE' });
+        return _provision({ anchor, roleName, app, name, meta, deviceId, deviceToken, status: 'ACTIVE', reactivate: true });
     }
 
     // Optional `app` filter → distinguish principals by external application/tenant.
@@ -189,6 +196,10 @@ module.exports = (redisClient, config, { role, relay } = {}) => {
 
         const entity = await getEntity(anchor);
         if (!entity || entity.status !== 'ACTIVE') throw jsonrpc.UNAUTHORIZED();   // unknown/disabled
+        // Mint-time chokepoint for the anchor namespace: also refuses entities provisioned before
+        // issuance checked it. Such a session would resolve at the Router as the internal account
+        // or bot whose id it shares (logic/anchors.js).
+        if (await isReservedAnchor(redisClient, anchor)) throw jsonrpc.UNAUTHORIZED();
 
         const salt = await redisClient.get(saltKey(anchor));
         const raw  = salt ? await redisClient.hGet(proofKey(anchor), deviceId) : null;
@@ -316,6 +327,12 @@ module.exports = (redisClient, config, { role, relay } = {}) => {
     async function deviceIssue({ anchor, app, name, meta } = {}) {
         if (!anchor) throw jsonrpc.MISSING_PARAM('anchor');
         if (issuanceMode(app) !== 'device') throw jsonrpc.FORBIDDEN('device issuance disabled for this app');
+        // Trust On FIRST Use. With no credential in play, issuing for an anchor that already has a
+        // passport would append the caller's device to someone else's identity (and, via
+        // _provision, used to re-ACTIVATE it if disabled) — a takeover of any known anchor, email
+        // anchors included. A lost device token means a new device anchor, by design.
+        // (Reveals that the anchor exists; acceptable — device anchors are random client ids.)
+        if (await getEntity(anchor)) throw jsonrpc.FORBIDDEN('device issuance is first-use only: this anchor already has a passport');
         return _issueAuthority({ anchor, app, name, meta });
     }
 

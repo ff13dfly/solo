@@ -24,10 +24,12 @@ function makeFakeRedis() {
         setEx: (k, _s, v) => { kv.set(k, v); return 'OK'; },
         del: (k) => { const had = kv.delete(k); sets.delete(k); return had ? 1 : 0; },
         sAdd: (k, m) => { const s = getSet(k); const had = s.has(m); s.add(m); return had ? 0 : 1; },
-        sRem: (k, m) => { const s = sets.get(k); return s && s.delete(m) ? 1 : 0; },
+        sRem: (k, m) => { const s = sets.get(k); if (!s) return 0; let n = 0; for (const x of [].concat(m)) if (s.delete(x)) n++; return n; },
         zAdd: (k, { score, value }) => { getZset(k).set(value, score); return 1; },
         zRem: (k, m) => { const z = zsets.get(k); return z && z.delete(m) ? 1 : 0; },
         expire: () => 1,
+        persist: () => 1,
+        exists: (k) => (kv.has(k) ? 1 : 0),
     };
     return {
         _kv: kv,
@@ -42,6 +44,8 @@ function makeFakeRedis() {
         async zAdd(k, entry) { return apply.zAdd(k, entry); },
         async zRem(k, m) { return apply.zRem(k, m); },
         async expire(k, s) { return apply.expire(k, s); },
+        async exists(k) { return apply.exists(k); },
+        async persist(k) { return apply.persist(k); },
         multi() {
             const ops = [];
             const chain = {
@@ -50,6 +54,8 @@ function makeFakeRedis() {
                 sAdd(k, m) { ops.push(['sAdd', k, m]); return chain; },
                 zAdd(k, entry) { ops.push(['zAdd', k, entry]); return chain; },
                 expire(k, s) { ops.push(['expire', k, s]); return chain; },
+                persist(k) { ops.push(['persist', k]); return chain; },
+                exists(k) { ops.push(['exists', k]); return chain; },
                 del(k) { ops.push(['del', k]); return chain; },
                 async exec() { return ops.map(([op, ...args]) => apply[op](...args)); },
             };
