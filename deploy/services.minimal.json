@@ -1,0 +1,22 @@
+[
+  {
+    "name": "router",
+    "path": "router/index.js",
+    "port": 8600
+  },
+  {
+    "name": "user",
+    "path": "core/user/index.js",
+    "port": 8710
+  },
+  {
+    "name": "nexus",
+    "path": "core/nexus/index.js",
+    "port": 8740
+  },
+  {
+    "name": "storage",
+    "path": "apps/storage/index.js",
+    "port": 8750
+  }
+]

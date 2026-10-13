@@ -73,3 +73,19 @@ bash deploy/dev.sh --ssl    # 额外起 local-ssl-proxy（8800 → Router 8600�
 ## services.json / services.dev.json
 
 `services.json` 是本地运行/打包的服务注册表，被 `build.sh`、`dashboard_*.sh`、`precheck.sh`、`check-doc-drift.js` 共同读取（运行权威）。`services.dev.json` 是仅在 dev 仪表盘里追加启动、**不进打包**的 overlay（business 测试夹具 collection/market，使框架 bundle 保持无业务）。服务器端各有独立的注册表副本，与本地独立维护。
+
+## services.minimal.json（单机单用户精简档）
+
+只含 `router + user + nexus + storage` 4 个 core 服务，供个人电脑 / 单用户部署通过 `SOLO_SERVICES_JSON=<path>` 懒启动（bundle 本身仍是全量，精简只是少起进程）。**不进打包、不被 `build.sh` / `precheck.sh` 读取**，`services.json` 仍是唯一运行权威。2026-10-13 实测：4 服务在空 Redis 上全部 `Ready`；`administrator` 缺席只在 Router 能力自省时打一条 `Failed to introspect service "administrator"` 警告。
+
+各服务缺席的影响：
+
+| 缺席服务 | 影响 |
+|---|---|
+| administrator | Router 仍把它作为默认注册项，自省失败只告警；`administrator.*` 管理类方法不可用 |
+| gateway | 仅 OTP 邮件/短信发不出（user 侧 best-effort 吞错，不阻塞启动；挑战-响应登录不受影响） |
+| notification | nexus 的 sentinel 事件投递（`notification.send`）失败并进重试/DLQ；`nexus.schedule` 的 `emit_event` 走 `event.emit`，不经 notification |
+| agent | `agent.*`（含 `agent.decide`）不可用；需要时在该文件追加 `{"name":"agent","path":"core/agent/index.js","port":8730}` |
+| ingress / orchestrator / approval / fulfillment / mcp / planner | 无硬依赖；用到其功能（webhook 入口、工作流、审批、履约）才需要 |
+
+注意：RedisJSON 缺失（普通 redis 无 `JSON.SET`）只让语义索引持久化报错，不阻断启动，但生产/个人版仍应用 Redis Stack。
