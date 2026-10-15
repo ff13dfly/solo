@@ -72,6 +72,23 @@ describe('collection.payment', () => {
         expect((await logic.payment.list({})).total).toBe(1);
     });
 
+    test('idempotency_key — cross-owner replay does not leak foreign owner record (P2-5)', async () => {
+        const { walContext } = require('../../../library/entity');
+        const key = 'idem-cross-owner-1';
+        const alicePayment = await walContext.run(
+            { actor: 'user:alice', owner: { field: '_owner', value: 'user:alice' } },
+            () => logic.payment.record({ orderId: 'o', amount: 50, idempotency_key: key })
+        );
+        expect(alicePayment._owner).toBe('user:alice');
+
+        await expect(
+            walContext.run(
+                { actor: 'user:bob', owner: { field: '_owner', value: 'user:bob' } },
+                () => logic.payment.record({ orderId: 'o', amount: 50, idempotency_key: key })
+            )
+        ).rejects.toMatchObject({ code: -32002 });
+    });
+
     test('get / list', async () => {
         const r = await logic.payment.record({ orderId: 'o', amount: 7 });
         expect((await logic.payment.get({ id: r.id })).id).toBe(r.id);

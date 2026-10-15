@@ -17,11 +17,32 @@ module.exports = (redis, config, relay = null) => {
     const PREFIX = config.redis.instancePrefix;
     const INDEX  = config.redis.instanceIndex;
 
-    async function getInstance(id) {
+    function getInstanceKey(id) {
         if (!id) throw jsonrpc.MISSING_PARAM('id');
-        const data = await redis.get(`${PREFIX}${id}`);
+        if (typeof id !== 'string' || id.includes(':') || /[\s*?\x00-\x1f]/.test(id)) {
+            throw jsonrpc.INVALID_PARAM('id must be a valid string without colons, whitespace, or control characters');
+        }
+        return `${PREFIX}${id}`;
+    }
+
+    function resolveOwner(req) {
+        return walContext.getStore()?.owner || req?.constraints?.$owner || null;
+    }
+
+    function assertOwner(instance, req) {
+        const owner = resolveOwner(req);
+        if (owner && owner.field && instance[owner.field] !== owner.value) {
+            throw jsonrpc.NOT_FOUND(`Instance ${instance.id}`);
+        }
+    }
+
+    async function getInstance(id, req) {
+        const key = getInstanceKey(id);
+        const data = await redis.get(key);
         if (!data) throw jsonrpc.NOT_FOUND(`Instance ${id}`);
-        return JSON.parse(data);
+        const instance = JSON.parse(data);
+        assertOwner(instance, req);
+        return instance;
     }
 
     async function loadProfile(profileId) {
@@ -57,7 +78,7 @@ module.exports = (redis, config, relay = null) => {
         if (!id)    throw jsonrpc.MISSING_PARAM('id');
         if (!event) throw jsonrpc.MISSING_PARAM('event');
 
-        const instance  = await getInstance(id);
+        const instance  = await getInstance(id, req);
         const fromState  = instance.state;
         const profile    = await loadProfile(instance.profileId);
 
@@ -115,7 +136,7 @@ module.exports = (redis, config, relay = null) => {
         if (reason) entry.reason = reason;
         instance.history.push(entry);
 
-        await redis.set(`${PREFIX}${id}`, JSON.stringify(instance));
+        await redis.set(getInstanceKey(id), JSON.stringify(instance));
 
         // Fire-and-forget: emit EVENT:FULFILLMENT:TRANSITIONED so orchestrator/nexus
         // sentinels can react to state changes. Emit failure must never abort the
@@ -181,6 +202,7 @@ module.exports = (redis, config, relay = null) => {
             const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
             const suffix = Math.floor(Math.random() * 9000 + 1000);
             const instanceId = `FL-${date}-${suffix}`;
+            const owner = resolveOwner(req);
 
             const instance = {
                 id:                instanceId,
@@ -191,12 +213,13 @@ module.exports = (redis, config, relay = null) => {
                 stateChangedAt:    Date.now(),
                 createdAt:         Date.now(),
                 createdBy:         req?.user || null,
+                ...(owner && owner.field ? { [owner.field]: owner.value } : {}),
                 meta,
                 pending_callbacks: [],
                 history: [{ state: 'DRAFT', event: null, reason: 'CREATED', user: req?.user || null, stamp: Date.now() }]
             };
 
-            await redis.set(`${PREFIX}${instanceId}`, JSON.stringify(instance));
+            await redis.set(getInstanceKey(instanceId), JSON.stringify(instance));
             await redis.sAdd(INDEX, instanceId);
 
             logger.info(`Instance created: ${instanceId} (profile: ${profileId})`);
@@ -206,14 +229,14 @@ module.exports = (redis, config, relay = null) => {
         /**
          * fulfillment.instance.get
          */
-        async get({ id }) {
-            return getInstance(id);
+        async get({ id } = {}, req) {
+            return getInstance(id, req);
         },
 
         /**
          * fulfillment.instance.list — paginated, optional state/sourceId filter.
          */
-        async list({ state, sourceId, limit = 50, offset = 0 } = {}) {
+        async list({ state, sourceId, limit = 50, offset = 0 } = {}, req) {
             const ids = await redis.sMembers(INDEX); // SAFE: bounded — one index entry per fulfillment instance
             if (!ids || ids.length === 0) return { items: [], total: 0 };
 
@@ -221,6 +244,8 @@ module.exports = (redis, config, relay = null) => {
             const results = await redis.mGet(keys);
 
             let items = results.filter(r => r !== null).map(r => JSON.parse(r));
+            const owner = resolveOwner(req);
+            if (owner && owner.field) items = items.filter(i => i[owner.field] === owner.value);
             if (state)    items = items.filter(i => i.state === state);
             if (sourceId) items = items.filter(i => i.sourceId === sourceId);
             items.sort((a, b) => b.createdAt - a.createdAt);
@@ -275,9 +300,14 @@ module.exports = (redis, config, relay = null) => {
          * fulfillment.instance.resume — restore the instance to its prevState. This
          * is a dynamic target (the held-from state) so it bypasses rule matching.
          */
-        async resume({ id }, req) {
-            const instance = await getInstance(id);
+        async resume({ id } = {}, req) {
+            const instance = await getInstance(id, req);
             if (!instance.prevState) throw jsonrpc.INVALID_PARAM(`Instance ${id} has no prevState to resume to`);
+
+            const profile = await loadProfile(instance.profileId);
+            if (profile && profile.reviewState && profile.reviewState !== 'APPROVED') {
+                throw jsonrpc.FORBIDDEN(`Profile ${instance.profileId} is not activated (reviewState: ${profile.reviewState}) — it must be (re-)approved before its instances can resume`);
+            }
 
             const fromState = instance.state;
             const toState   = instance.prevState;
@@ -291,7 +321,7 @@ module.exports = (redis, config, relay = null) => {
                 reason: `resumed from ${fromState}`, user: req?.user || null, stamp: Date.now()
             });
 
-            await redis.set(`${PREFIX}${id}`, JSON.stringify(instance));
+            await redis.set(getInstanceKey(id), JSON.stringify(instance));
             logger.info(`Instance ${id}: ${fromState} → ${toState} (resume, ${transitionId})`);
             return instance;
         },
@@ -309,25 +339,19 @@ module.exports = (redis, config, relay = null) => {
         /**
          * fulfillment.instance.update — metadata/field update (restricted fields blocked).
          */
-        async update({ id, meta, ...updates }, req) {
-            const instance = await getInstance(id);
-
-            delete updates.id;
-            delete updates.history;
-            delete updates.state;
-            delete updates.prevState;
-            delete updates.updatedBy;   // provenance is the Router's word, never the caller's
+        async update({ id, meta } = {}, req) {
+            const instance = await getInstance(id, req);
 
             // updatedBy: this is the ONLY write path for meta that leaves no history entry,
             // and meta is what the JsonLogic guards judge — so "a probe wrote this fact" vs
             // "a human edited it" was previously indistinguishable. create/advance both take
             // req and record createdBy / history[].user; update was the odd one out even
             // though index.js has been passing req in all along.
-            const updated = { ...instance, ...updates, updatedBy: req?.user || null, updatedAt: Date.now() };
+            const updated = { ...instance, updatedBy: req?.user || null, updatedAt: Date.now() };
             // meta is MERGED, not replaced — caching meta_fields.source values must
             // not drop other keys.
-            if (meta && typeof meta === 'object') updated.meta = { ...instance.meta, ...meta };
-            await redis.set(`${PREFIX}${id}`, JSON.stringify(updated));
+            if (meta && typeof meta === 'object' && !Array.isArray(meta)) updated.meta = { ...instance.meta, ...meta };
+            await redis.set(getInstanceKey(id), JSON.stringify(updated));
             logger.info(`Instance updated: ${id}`);
             return updated;
         }

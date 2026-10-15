@@ -197,7 +197,7 @@ app.post('/jsonrpc', async (req, res) => {
                 'orchestrator.workflow.deny':    (p) => Methods.workflow.deny(p, req.user),
                 'orchestrator.workflow.get': (p) => Methods.workflow.get(p),
                 'orchestrator.workflow.list': (p) => Methods.workflow.list(p),
-                'orchestrator.workflow.update': (p) => Methods.workflow.update(p),
+                'orchestrator.workflow.update': (p) => Methods.workflow.update(p, req.user),
                 'orchestrator.workflow.delete': (p) => Methods.workflow.delete(p),
                 'orchestrator.workflow.deprecate': (p) => Methods.workflow.deprecate(p, req.user),
                 'orchestrator.workflow.restore': (p) => Methods.workflow.restore(p),
@@ -207,11 +207,11 @@ app.post('/jsonrpc', async (req, res) => {
                 'orchestrator.workflow.version': (p) => Methods.workflow.getVersion(p),
                 // D5: sync RPC never pauses — NeedsGrantError converts to FORBIDDEN immediately.
                 'orchestrator.workflow.run': async (p) => {
-                    try { return await Methods.runner.run(p, req.headers, req.user); }
+                    try { return await Methods.runner.run({ workflowId: p && p.workflowId, input: p && p.input }, req.headers, req.user); }
                     catch (err) { if (err instanceof NeedsGrantError) throw jsonrpc.FORBIDDEN(err.message); throw err; }
                 },
                 'orchestrator.run': async (p) => {
-                    try { return await Methods.runner.run(p, req.headers, req.user); }
+                    try { return await Methods.runner.run({ workflowId: p && p.workflowId, input: p && p.input }, req.headers, req.user); }
                     catch (err) { if (err instanceof NeedsGrantError) throw jsonrpc.FORBIDDEN(err.message); throw err; }
                 },
                 // event.md §5 — enqueue a run-command for async execution (admin).

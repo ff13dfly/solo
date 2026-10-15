@@ -21,7 +21,54 @@ const clock = require('../../../library/clock');
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
-const LOOPBACK_RE = /^(localhost|127\.|0\.0\.0\.0|\[?::1\]?)/i;
+function isInternalOrReservedHost(hostname) {
+    if (!hostname || typeof hostname !== 'string') return true;
+    let h = hostname.trim().replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
+    if (!h) return true;
+
+    // Unwrap IPv4-mapped IPv6 (dotted-quad or canonical hex from WHATWG URL parser)
+    const mappedHex = h.match(/^(?:::ffff:|(?:0+:){5}ffff:)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (mappedHex) {
+        const hi = parseInt(mappedHex[1], 16);
+        const lo = parseInt(mappedHex[2], 16);
+        h = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    } else {
+        const mappedDot = h.match(/^(?:::ffff:|(?:0+:){5}ffff:)(\d+\.\d+\.\d+\.\d+)$/);
+        if (mappedDot) h = mappedDot[1];
+    }
+
+    if (h === 'localhost' || h.endsWith('.localhost') || h === 'metadata.google.internal') {
+        return true;
+    }
+
+    // IPv6 loopback, unspecified, link-local (fe80::/10), ULA (fc00::/7)
+    if (
+        h === '::1' ||
+        h === '::' ||
+        /^(?:0+:){7}0*[01]$/.test(h) ||
+        /^fe[89ab][0-9a-f]:/.test(h) ||
+        /^f[cd][0-9a-f]{2}:/.test(h)
+    ) {
+        return true;
+    }
+
+    // IPv4 loopback (127.0.0.0/8), unspecified (0.0.0.0/8), link-local/metadata (169.254.0.0/16),
+    // Alibaba metadata (100.100.100.200), RFC1918 private ranges (10/8, 192.168/16, 172.16/12)
+    if (
+        /^127\./.test(h) ||
+        /^0\./.test(h) ||
+        /^169\.254\./.test(h) ||
+        h === '100.100.100.200' ||
+        /^10\./.test(h) ||
+        /^192\.168\./.test(h) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(h)
+    ) {
+        return true;
+    }
+
+    return false;
+}
+
 // Test/dev escape hatch: e2e harnesses and the dev mock listener ARE loopback
 // targets. Default stays fail-closed for production posture.
 const ALLOW_LOOPBACK = process.env.WEBHOOK_ALLOW_LOOPBACK === '1';
@@ -37,7 +84,7 @@ function send({ url, payload, type, targetId, secret, timeoutMs }) {
         if (target.protocol !== 'http:' && target.protocol !== 'https:') {
             return reject(new Error(`webhook.send: unsupported protocol "${target.protocol}"`));
         }
-        if (!ALLOW_LOOPBACK && LOOPBACK_RE.test(target.hostname)) {
+        if (!ALLOW_LOOPBACK && isInternalOrReservedHost(target.hostname)) {
             return reject(new Error('webhook.send: loopback targets are not allowed (internal calls go via the Router)'));
         }
 
@@ -85,4 +132,4 @@ function send({ url, payload, type, targetId, secret, timeoutMs }) {
     });
 }
 
-module.exports = { send };
+module.exports = { send, isInternalOrReservedHost };

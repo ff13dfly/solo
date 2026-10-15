@@ -137,4 +137,21 @@ describe('mcp logic/tools — call', () => {
         expect(result.isError).toBe(true);
         expect(result.content[0].text).toBe('workflow not found');
     });
+
+    test('redacts sensitive fields (token, secret, apiKey, password) from tool call output', async () => {
+        const { tools } = makeHarness({
+            callAsImpl: async () => ({
+                status: 'completed',
+                workflowId: 'wf-secret',
+                trace: [{ step: 's1', result: { token: 'tok-live-secret', apiKey: 'sk-12345', ok: true } }],
+            }),
+        });
+
+        const result = await tools.call('tok-consumer-1', { name: 'wf-secret', arguments: {} });
+        const parsed = JSON.parse(result.content[0].text);
+        expect(parsed.trace[0].result.token).toBe('***');
+        expect(parsed.trace[0].result.apiKey).toBe('***');
+        expect(parsed.trace[0].result.ok).toBe(true);
+    });
 });
+

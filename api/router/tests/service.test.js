@@ -79,6 +79,19 @@ describe('Service Handlers', () => {
                 .rejects.toThrow('Service URL protocol must be http or https');
             await expect(addService('http://169.254.169.254/latest', SERVICES, redisClient, keypair, CAPABILITY_MAP))
                 .rejects.toThrow('Service URL points to a forbidden address');
+            await expect(addService('http://[::ffff:169.254.169.254]/latest', SERVICES, redisClient, keypair, CAPABILITY_MAP))
+                .rejects.toThrow('Service URL points to a forbidden address');
+            await expect(addService('http://100.100.100.200/latest', SERVICES, redisClient, keypair, CAPABILITY_MAP))
+                .rejects.toThrow('Service URL points to a forbidden address');
+            await expect(addService('http://0.0.0.0:3000', SERVICES, redisClient, keypair, CAPABILITY_MAP))
+                .rejects.toThrow('Service URL points to a forbidden address');
+        });
+
+        test('should reject non-alphanumeric / JSON-shaped seed to prevent signing oracle (P0-5)', async () => {
+            axios.get.mockResolvedValue({ data: { seed: JSON.stringify({ iss: 'router', sub: 'admin', isAdmin: true }) } });
+            await expect(addService(inputUrl, SERVICES, redisClient, keypair, CAPABILITY_MAP))
+                .rejects.toThrow('Invalid challenge seed format');
+            expect(axios.post).not.toHaveBeenCalled();
         });
     });
 

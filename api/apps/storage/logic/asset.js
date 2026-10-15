@@ -195,19 +195,63 @@ module.exports = (redisClient, config, store) => {
     //      enter the dedup index at all.
     const EXTERNAL_KIND = 'external';
 
+    function isInternalOrReservedHost(hostname) {
+        if (!hostname || typeof hostname !== 'string') return true;
+        let h = hostname.trim().replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
+        if (!h) return true;
+        const mappedHex = h.match(/^(?:::ffff:|(?:0+:){5}ffff:)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+        if (mappedHex) {
+            const hi = parseInt(mappedHex[1], 16);
+            const lo = parseInt(mappedHex[2], 16);
+            h = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+        } else {
+            const mappedDot = h.match(/^(?:::ffff:|(?:0+:){5}ffff:)(\d+\.\d+\.\d+\.\d+)$/);
+            if (mappedDot) h = mappedDot[1];
+        }
+        if (h === 'localhost' || h.endsWith('.localhost') || h === 'metadata.google.internal') return true;
+        if (h === '::1' || h === '::' || /^(?:0+:){7}0*[01]$/.test(h) || /^fe[89ab][0-9a-f]:/.test(h) || /^f[cd][0-9a-f]{2}:/.test(h)) return true;
+        if (
+            /^127\./.test(h) ||
+            /^0\./.test(h) ||
+            /^169\.254\./.test(h) ||
+            h === '100.100.100.200' ||
+            /^10\./.test(h) ||
+            /^192\.168\./.test(h) ||
+            /^172\.(1[6-9]|2\d|3[0-1])\./.test(h)
+        ) {
+            return true;
+        }
+        return false;
+    }
+
+    function effectiveUser(ctx) {
+        return (ctx && ctx.owner && ctx.owner.value !== undefined && ctx.owner.value !== null)
+            ? String(ctx.owner.value)
+            : (ctx && ctx.user) || null;
+    }
+
+    function isScopedExternal(ctx) {
+        return Boolean(ctx && ctx.owner && ctx.owner.value !== undefined && ctx.owner.value !== null);
+    }
+
     function canRead(meta, ctx) {
         if (ctx === undefined) return true;
-        if (ctx && ctx.permit === 'admin') return true;
+        if (ctx && ctx.permit === 'admin' && !isScopedExternal(ctx)) return true;
         const vis = meta.visibility || 'internal';
         if (vis === 'public') return true;
-        if (vis === 'internal') return !!(ctx && ctx.user);
-        return !!(ctx && ctx.user && meta.owner && ctx.user === meta.owner);   // private
+        const user = effectiveUser(ctx);
+        if (vis === 'internal') {
+            if (isScopedExternal(ctx)) return !!(user && meta.owner && user === meta.owner);
+            return !!user;
+        }
+        return !!(user && meta.owner && user === meta.owner);   // private
     }
 
     function canDelete(meta, ctx) {
         if (ctx === undefined) return true;
-        if (ctx && ctx.permit === 'admin') return true;
-        return !!(ctx && ctx.user && meta.owner && ctx.user === meta.owner);
+        if (ctx && ctx.permit === 'admin' && !isScopedExternal(ctx)) return true;
+        const user = effectiveUser(ctx);
+        return !!(user && meta.owner && user === meta.owner);
     }
 
     function assertRead(meta, ctx) {
@@ -262,9 +306,13 @@ module.exports = (redisClient, config, store) => {
         const ready = await redisClient.exists(config.redis.assetVisibilityIndexReadyKey);
         if (!ready) return legacyScanOwnedAndVisible(effOffset, effLimit, ctx);
 
+        const user = effectiveUser(ctx);
         const keys = [config.redis.assetPublicSortedSet];
-        if (ctx && ctx.user) {
-            keys.push(config.redis.assetInternalSortedSet, `${config.redis.assetByOwnerPrefix}${ctx.user}`);
+        if (user) {
+            if (!isScopedExternal(ctx)) {
+                keys.push(config.redis.assetInternalSortedSet);
+            }
+            keys.push(`${config.redis.assetByOwnerPrefix}${user}`);
         }
 
         const tmpKey = `STORAGE:ASSETS:TMP:${generator.generateId(12)}`;
@@ -381,7 +429,7 @@ module.exports = (redisClient, config, store) => {
             const buffer = Buffer.from(file, 'base64');
 
             // toFix §6.4 — ownership + visibility recorded at birth.
-            const owner = (ctx && ctx.user) || null;
+            const owner = effectiveUser(ctx);
             const vis = visibility || (config.storage && config.storage.defaultVisibility) || 'internal';
             if (!VISIBILITIES.includes(vis)) {
                 throw jsonrpc.INVALID_PARAMS(`visibility must be one of: ${VISIBILITIES.join(', ')}`);
@@ -495,7 +543,7 @@ module.exports = (redisClient, config, store) => {
             // same ?? fallback before library/pagination.js existed).
             const { limit: effLimit, offset: effOffset } = resolvePaging(params, { defaultLimit: 20 });
             const kw = (params.keyword || '').trim();
-            const isAdmin = ctx === undefined || (ctx && ctx.permit === 'admin');
+            const isAdmin = ctx === undefined || (ctx && ctx.permit === 'admin' && !isScopedExternal(ctx));
 
             if (kw) {
                 return keywordSearch(kw, effOffset, effLimit, ctx);
@@ -558,8 +606,20 @@ module.exports = (redisClient, config, store) => {
             // Only http(s): a pointer is handed to browsers and other clients, so file://
             // and friends are both useless and a small SSRF-shaped foot-gun.
             if (!/^https?:\/\//i.test(url)) throw jsonrpc.INVALID_PARAM('url must be http(s)');
+            let parsedUrl;
+            try {
+                parsedUrl = new URL(url);
+            } catch (_) {
+                throw jsonrpc.INVALID_PARAM('url must be a valid http(s) URL');
+            }
+            if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+                throw jsonrpc.INVALID_PARAM('url must be http(s)');
+            }
+            if (process.env.STORAGE_ALLOW_INTERNAL_EXTERNAL_URL !== '1' && isInternalOrReservedHost(parsedUrl.hostname)) {
+                throw jsonrpc.INVALID_PARAM('external url cannot target loopback, private, or metadata hosts');
+            }
 
-            const owner = (ctx && ctx.user) || null;
+            const owner = effectiveUser(ctx);
             // Same normalization + validation as upload() (asset.js upload step 1).
             const vis = visibility || (config.storage && config.storage.defaultVisibility) || 'internal';
             if (!VISIBILITIES.includes(vis)) {

@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const clock = require('../../../library/clock');
 const { checkParams } = require('../../../library/validate');
-const { scanDeclaredStrings } = require('../../../library/injection-detect');
+const { scanDeclaredStrings, scanValue } = require('../../../library/injection-detect');
 
 /**
  * Ingest — the inbound hot path (via Router method ingress.ingest) + test-fire.
@@ -116,7 +116,7 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
         };
         if (!rawBody || typeof rawBody !== 'object' || Array.isArray(rawBody)) return invalid('body must be a JSON object');
         if (!reqId || typeof reqId !== 'string' || reqId.length > C.maxRequestIdLen) return invalid('request_id required (non-empty string)');
-        if (rawBody.data !== undefined && (typeof rawBody.data !== 'object' || rawBody.data === null)) return invalid('data must be an object');
+        if (rawBody.data !== undefined && (typeof rawBody.data !== 'object' || rawBody.data === null || Array.isArray(rawBody.data))) return invalid('data must be an object');
 
         const ttl = (typeof src.dedupTtlSec === 'number' && src.dedupTtlSec > 0) ? src.dedupTtlSec : C.defaultDedupTtlSec;
 
@@ -142,6 +142,16 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
                 return { status: 422, body: { ok: false, error: 'dataSchema violation — held for human review', violations } };
             }
             data = extractDeclared(src.dataSchema, data);
+        } else {
+            const hits = scanValue(data);
+            if (hits.length > 0) {
+                const violations = hits.map((h) => `'${h.path}' matched suspected prompt-injection pattern(s): ${h.hits.join(', ')}`);
+                const reviewId = await review.push({ sourceId: src.id, source: src.name, requestId: reqId, data, violations });
+                await source.recordFire(src.id, { outcome: 'rejected' });
+                logLine({ source: src.name, request_id: reqId, outcome: 'schema_rejected', status: 422, body: rawBody });
+                await notifyOps({ reviewId, source: src.name, requestId: reqId, violations, rejectedAt: clock.now() });
+                return { status: 422, body: { ok: false, error: 'dataSchema violation — held for human review', violations } };
+            }
         }
 
         const stats = await emit(src.name, reqId, data);

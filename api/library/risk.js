@@ -28,7 +28,7 @@
 const READ_VERBS = new Set([
     'get', 'list', 'status', 'resolve', 'snapshot', 'check', 'search', 'query',
     'find', 'fetch', 'read', 'view', 'info', 'categories', 'getpublic', 'peek',
-    'stat', 'count', 'exists', 'has', 'profile', 'verify',
+    'stat', 'count', 'exists', 'has', 'profile',
 ]);
 
 // Suggested sensitive services (reads of these may be considered high-risk). NOT

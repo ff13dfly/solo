@@ -106,4 +106,40 @@ describe('enroll — retroactive governance for trusted profiles', () => {
         const stored = await profile.get({ id: 'p1' });
         expect(stored.reviewState).toBeUndefined();   // 什么都没改
     });
+
+    test('create, update, and submit strip caller-supplied governance fields; executable update records editor as submittedBy', async () => {
+        const created = await profile.create({
+            id: 'p_gov',
+            name: 'p_gov',
+            ...CLEAN,
+            reviewState: 'APPROVED',
+            submittedBy: 'forged-user',
+            approvals: [{ approvedBy: 'forged' }],
+        });
+        expect(created.reviewState).toBeUndefined();
+        expect(created.submittedBy).toBeUndefined();
+        expect(created.approvals).toBeUndefined();
+
+        await profile.submit({ id: 'p_sub', name: 'p_sub', ...CLEAN, reviewState: 'APPROVED', submittedBy: 'forged' }, { user: 'author-1' });
+        await profile.approve({ id: 'p_sub' }, { user: 'admin-1' });
+
+        // Metadata-only update cannot inject reviewState or approvals
+        const metaEdited = await profile.update({ id: 'p_sub', name: 'renamed', reviewState: 'REJECTED', submittedBy: 'forged' }, { user: 'editor-2' });
+        expect(metaEdited.reviewState).toBe('APPROVED');
+        expect(metaEdited.submittedBy).toBe('author-1');
+
+        // Executable edit resets to PENDING_REVIEW and records editor-2 as submittedBy so editor-2 cannot self-approve
+        const execEdited = await profile.update({
+            id: 'p_sub',
+            transitions: [
+                { event: 'go', from: 'DRAFT', to: 'STEP2' },
+                { event: 'finish', from: 'STEP2', to: 'DONE' },
+            ],
+            reviewState: 'APPROVED',
+        }, { user: 'editor-2' });
+        expect(execEdited.reviewState).toBe('PENDING_REVIEW');
+        expect(execEdited.submittedBy).toBe('editor-2');
+        await expect(profile.approve({ id: 'p_sub' }, { user: 'editor-2' })).rejects.toMatchObject({ code: -32005 });
+    });
 });
+

@@ -43,7 +43,14 @@ module.exports = (redis, { config, relay } = {}) => {
         // object WITHOUT _event, so a replay returns it without firing a new event.
         if (idempotency_key) {
             const cached = await redis.get(`COLLECTION:DEDUP:${idempotency_key}`);
-            if (cached) return JSON.parse(cached);
+            if (cached) {
+                const parsed = JSON.parse(cached);
+                const effOwner = _scope || (createEntity.walContext && createEntity.walContext.getStore()?.owner);
+                if (effOwner && effOwner.field && parsed[effOwner.field] !== effOwner.value) {
+                    throw jsonrpc.NOT_FOUND('payment');
+                }
+                return parsed;
+            }
         }
         if (typeof amount !== 'number' || !(amount > 0))
             throw jsonrpc.INVALID_PARAMS('amount must be a positive number');

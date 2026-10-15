@@ -15,8 +15,38 @@
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;   // total across all attachments
 const DEFAULT_MAX_COUNT = 10;
 
+function isBlockedAttachmentHost(hostname) {
+    if (!hostname || typeof hostname !== 'string') return true;
+    let h = hostname.trim().replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
+    if (!h) return true;
+    const mappedHex = h.match(/^(?:::ffff:|(?:0+:){5}ffff:)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (mappedHex) {
+        const hi = parseInt(mappedHex[1], 16);
+        const lo = parseInt(mappedHex[2], 16);
+        h = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    } else {
+        const mappedDot = h.match(/^(?:::ffff:|(?:0+:){5}ffff:)(\d+\.\d+\.\d+\.\d+)$/);
+        if (mappedDot) h = mappedDot[1];
+    }
+    if (h === 'metadata.google.internal' || h === '100.100.100.200' || /^169\.254\./.test(h)) return true;
+    if (/^fe[89ab][0-9a-f]:/.test(h) || /^f[cd][0-9a-f]{2}:/.test(h)) return true;
+    return false;
+}
+
 async function downloadCapped(url, remainingBytes) {
-    const res = await fetch(url);
+    let parsed;
+    try {
+        parsed = new URL(url);
+    } catch (_) {
+        throw new Error(`attachment download refused: invalid url "${url}"`);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error(`attachment download refused: unsupported protocol "${parsed.protocol}"`);
+    }
+    if (isBlockedAttachmentHost(parsed.hostname)) {
+        throw new Error(`attachment download refused: internal/metadata host "${parsed.hostname}" is not allowed`);
+    }
+    const res = await fetch(url, { redirect: 'error' });
     if (!res.ok) throw new Error(`attachment download failed: HTTP ${res.status}`);
 
     // Fast reject on a declared size before pulling a single byte.

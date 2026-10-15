@@ -15,11 +15,5 @@ module.exports = createAuthHandlers(config, {
     publicMethods: [
         'admin.login.request',
         'admin.login.verify',
-        'admin.log.error',
-        'admin.log.clear',
-        'logs.get',
-        'logs.clear',
-        'admin.logs.get',
-        'admin.logs.clear',
     ],
 });

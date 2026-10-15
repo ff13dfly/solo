@@ -57,12 +57,21 @@ module.exports = (redis, { config, relay, source }) => {
         if (!reviewId) throw jsonrpc.MISSING_PARAM('reviewId');
         const entry = await findAndRemove(reviewId);
         if (!entry) throw jsonrpc.NOT_FOUND('review entry');
-        await relay.call('event.emit', {
-            stream: source.streamFor(entry.source),
-            type: config.ingest.eventType,
-            actor: `webhook:${entry.source}`,
-            payload: { request_id: entry.requestId, data: entry.data },
-        });
+        try {
+            const stats = await relay.call('event.emit', {
+                stream: source.streamFor(entry.source),
+                type: config.ingest.eventType,
+                actor: `webhook:${entry.source}`,
+                payload: { request_id: entry.requestId, data: entry.data },
+            });
+            if (!stats || typeof stats.written !== 'number' || stats.written < 1) {
+                throw jsonrpc.INTERNAL_ERROR('event not delivered by Router');
+            }
+        } catch (err) {
+            await redis.rPush(KEY, JSON.stringify(entry));
+            await redis.lTrim(KEY, -MAXLEN, -1);
+            throw err;
+        }
         await source.recordFire(entry.sourceId, { outcome: 'accepted' });
         return { ok: true, reviewId, stream: source.streamFor(entry.source), request_id: entry.requestId };
     }

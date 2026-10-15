@@ -111,9 +111,12 @@ module.exports = (redis, { serviceName, routerUrl, traceAudit }) => ({
         // Footprint = all method names this workflow can invoke: steps + resolvers
         // (all branches, richer is safer). Shared by H6 below and the actor
         // pre-check (2.6) — pure computation, no I/O.
+        const fullMethod = (s) => (s && typeof s.method === 'string')
+            ? (s.service && !s.method.startsWith(`${s.service}.`) ? `${s.service}.${s.method}` : s.method)
+            : null;
         const footprint = [
-            ...(workflow.steps || []).map(s => s.method),
-            ...Object.values(workflow.resolvers || {}).map(r => r.method),
+            ...(workflow.steps || []).map(fullMethod),
+            ...Object.values(workflow.resolvers || {}).map(fullMethod),
         ].filter(m => typeof m === 'string' && m.length > 0);
 
         if (callerUid) {
@@ -236,7 +239,10 @@ module.exports = (redis, { serviceName, routerUrl, traceAudit }) => ({
                     const actualRpcUrl = routerUrl || process.env.ROUTER_URL;
                     if (!actualRpcUrl) throw jsonrpc.INTERNAL_ERROR('ROUTER_URL not configured');
 
-                    const res = await makeRpcCall(actualRpcUrl, resolver.method, resolvedParams, headers);
+                    const resolverMethod = resolver.service && !resolver.method.startsWith(`${resolver.service}.`)
+                        ? `${resolver.service}.${resolver.method}`
+                        : resolver.method;
+                    const res = await makeRpcCall(actualRpcUrl, resolverMethod, resolvedParams, headers);
                     if (res.error) {
                         logger.warn(`Resolver ${key} failed:`, res.error.message);
                         continue;
@@ -522,6 +528,7 @@ function resolveVariables(params, context) {
         }
         const resolved = {};
         for (const [key, value] of Object.entries(params)) {
+            if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
             const resolvedValue = resolveVariables(value, context);
             // PRUNE_UNDEFINED: Only add key if value is not undefined
             if (resolvedValue !== undefined) {
@@ -551,8 +558,11 @@ function resolveVariable(variable, context) {
     }
     
     let value = context[source];
-    for (let i = 1; i < path.length && value !== undefined; i++) {
-        value = value[path[i]];
+    for (let i = 1; i < path.length && value !== undefined && value !== null; i++) {
+        const seg = path[i];
+        if (seg === '__proto__' || seg === 'constructor' || seg === 'prototype') return undefined;
+        if (!Object.prototype.hasOwnProperty.call(Object(value), seg)) return undefined;
+        value = value[seg];
     }
 
     return value;
@@ -815,6 +825,8 @@ function extractPath(obj, path) {
         let current = obj;
         for (const part of parts) {
             if (current === null || current === undefined) return undefined;
+            if (part === '__proto__' || part === 'constructor' || part === 'prototype') return undefined;
+            if (!Object.prototype.hasOwnProperty.call(Object(current), part)) return undefined;
             current = current[part];
         }
         return current;
@@ -860,4 +872,6 @@ function setPath(obj, path, value) {
 
 module.exports._setPath = setPath;
 module.exports._extractPath = extractPath;
+module.exports._resolveVariables = resolveVariables;
+module.exports._resolveVariable = resolveVariable;
 

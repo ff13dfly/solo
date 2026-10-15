@@ -181,4 +181,23 @@ describe('administrator — actual return satisfies declared returns_schema', ()
         expect(res.success).toBe(true);
         expect(res.service).toBeUndefined();
     });
+
+    test('🔴 saveAdmin enforces single-admin model and rejects creating a second admin username (P0-4)', async () => {
+        await identity.saveAdmin({ username: 'root', password: 'hunter2hunter2' });
+        await expect(identity.saveAdmin({ username: 'rogue', password: 'password1234' }))
+            .rejects.toThrow(/Single-admin model/);
+    });
+
+    test('🔴 loginVerify burns challenge on first failed attempt (P0-4)', async () => {
+        await identity.saveAdmin({ username: 'root', password: 'hunter2hunter2' });
+        const stored = JSON.parse(await redis.get(config.redis.userKeyPrefix + 'root'));
+        const { challenge } = await identity.loginRequest({ username: 'root' });
+
+        await expect(identity.loginVerify({ username: 'root', challenge, response: 'wrong' }))
+            .rejects.toMatchObject({ code: -32603, message: 'Authentication failed' });
+
+        const validResp = crypto.createHash('sha256').update(challenge + stored.login_hash).digest('hex');
+        await expect(identity.loginVerify({ username: 'root', challenge, response: validResp }))
+            .rejects.toMatchObject({ code: -32603, message: 'Invalid or expired challenge' });
+    });
 });

@@ -278,3 +278,33 @@ describe('sha256 refcount — delete() no longer scans every asset to decide byt
         await expect(asset.delete({ id: a.id }, ALICE)).resolves.toEqual({ deleted: a.id });
     });
 });
+
+describe('P1-9 — $owner-scoped external passport isolation (shared bot)', () => {
+    const EXT_ALICE = { user: 'system.portal-bot', permit: 'user', owner: { field: 'ownerId', value: 'tenant-alice' } };
+    const EXT_BOB   = { user: 'system.portal-bot', permit: 'user', owner: { field: 'ownerId', value: 'tenant-bob' } };
+
+    test('shared bot stamps owner from ctx.owner.value and isolates read/list/delete between tenants', async () => {
+        const redis = makeFakeRedis();
+        const asset = createAssetLogic(redis, testConfig, makeFakeStore());
+
+        const aPriv = await asset.upload({ file: b64('alice-priv'), visibility: 'private' }, EXT_ALICE);
+        const aInt  = await asset.upload({ file: b64('alice-int'), visibility: 'internal' }, EXT_ALICE);
+        const aPub  = await asset.upload({ file: b64('alice-pub'), visibility: 'public' }, EXT_ALICE);
+        expect(aPriv.owner).toBe('tenant-alice');
+        expect(aInt.owner).toBe('tenant-alice');
+
+        // Tenant Bob sharing the same bot uid ('system.portal-bot') cannot read or delete Alice's private OR internal assets
+        await expect(asset.get({ id: aPriv.id }, EXT_BOB)).rejects.toMatchObject({ code: -32005 });
+        await expect(asset.get({ id: aInt.id }, EXT_BOB)).rejects.toMatchObject({ code: -32005 });
+        await expect(asset.delete({ id: aPub.id }, EXT_BOB)).rejects.toMatchObject({ code: -32005 });
+        // Public is readable
+        await expect(asset.get({ id: aPub.id }, EXT_BOB)).resolves.toMatchObject({ id: aPub.id });
+
+        // Unmigrated and migrated list() both show Bob only public + Bob's own, never Alice's internal/private
+        expect((await asset.list({}, EXT_BOB)).items.map(i => i.id)).toEqual([aPub.id]);
+        await redis.set(testConfig.redis.assetVisibilityIndexReadyKey, '1');
+        expect((await asset.list({}, EXT_BOB)).items.map(i => i.id)).toEqual([aPub.id]);
+        expect((await asset.list({}, EXT_ALICE)).total).toBe(3);
+    });
+});
+

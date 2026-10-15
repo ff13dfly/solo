@@ -88,4 +88,37 @@ describe('approval record state machine', () => {
         expect(dispatched.total).toBe(1);
         expect(dispatched.items[0].id).toBe(a.id);
     });
+
+    test('signed verify rejects a retired (history) key and accepts the active key', async () => {
+        const nacl = require('tweetnacl');
+        const bs58 = require('bs58').default || require('bs58');
+        const crypto = require('crypto');
+        const oldKp = nacl.sign.keyPair();
+        const newKp = nacl.sign.keyPair();
+        const relay = {
+            call: async (method, { uid }) => {
+                if (method === 'user.key.public' && uid === 'u-manager') {
+                    return {
+                        uid,
+                        publicKey: bs58.encode(Buffer.from(newKp.publicKey)),
+                        history: [bs58.encode(Buffer.from(oldKp.publicKey))],
+                    };
+                }
+                return null;
+            },
+        };
+        const signedLogic = createLogic(makeFakeRedis(), { config, relay });
+        const rec = await signedLogic.record.request({ target: 't', payload: validPayload }, { actor: 'u-applicant' });
+        const payloadHash = crypto.createHash('sha256').update(JSON.stringify(validPayload)).digest('hex');
+        const digest = crypto.createHash('sha256').update(`t\nverify\n${payloadHash}`).digest('hex');
+
+        const oldSig = bs58.encode(Buffer.from(nacl.sign.detached(Buffer.from(digest, 'utf8'), oldKp.secretKey)));
+        await expect(signedLogic.record.verify({ id: rec.id, signature: oldSig }, { actor: 'u-manager' }))
+            .rejects.toMatchObject({ code: -32001 });
+
+        const newSig = bs58.encode(Buffer.from(nacl.sign.detached(Buffer.from(digest, 'utf8'), newKp.secretKey)));
+        const verified = await signedLogic.record.verify({ id: rec.id, signature: newSig }, { actor: 'u-manager' });
+        expect(verified.state).toBe('DISPATCHED');
+    });
 });
+

@@ -195,4 +195,32 @@ describe('scope resolution — the two contracts callers depend on', () => {
         const direct = await entity.create({ name: 'sys' });
         expect(direct.ownerId).toBeUndefined();                      // nothing stamped either
     });
+
+    test('malformed $owner constraint (missing field or empty/null value) throws FORBIDDEN (fail-closed, P1-7)', async () => {
+        for (const badOwner of [
+            {},
+            { field: 'ownerId' },
+            { field: 'ownerId', value: null },
+            { field: 'ownerId', value: '' },
+            { field: '', value: 'alice' },
+        ]) {
+            await expect(
+                walContext.run({ uid: 'u1', owner: badOwner }, () => entity.list())
+            ).rejects.toMatchObject({ code: -32005, message: expect.stringMatching(/Invalid \$owner/) });
+            await expect(
+                walContext.run({ uid: 'u1', owner: badOwner }, () => entity.create({ name: 'x' }))
+            ).rejects.toMatchObject({ code: -32005 });
+        }
+    });
+
+    test('getDataKey rejects colon-injected or reserved (INDEX/SEQ/CURSOR) ids (P1-7)', async () => {
+        const keyed = createEntity(redis, { serviceName: SERVICE, entityName: 'ROW', idLength: 8, clientId: true });
+        for (const badId of ['INDEX', 'index', 'SEQ', 'CURSOR', 'INDEX:CURSOR:SEQ', 'foo:bar', '   ']) {
+            await expect(keyed.create({ id: badId, name: 'bad' })).rejects.toMatchObject({ code: -32602 });
+            await expect(entity.get({ id: badId })).rejects.toMatchObject({ code: -32602 });
+            await expect(entity.update({ id: badId, name: 'x' })).rejects.toMatchObject({ code: -32602 });
+            await expect(entity.delete({ id: badId })).rejects.toMatchObject({ code: -32602 });
+        }
+    });
 });
+

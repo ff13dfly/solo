@@ -35,7 +35,14 @@ module.exports = (redis, { config }) => {
         // second shipment or re-emit. Cache stores the object WITHOUT _event.
         if (idempotency_key) {
             const cached = await redis.get(`MARKET:DEDUP:${idempotency_key}`);
-            if (cached) return JSON.parse(cached);
+            if (cached) {
+                const parsed = JSON.parse(cached);
+                const effOwner = createEntity.walContext && createEntity.walContext.getStore()?.owner;
+                if (effOwner && effOwner.field && parsed[effOwner.field] !== effOwner.value) {
+                    throw jsonrpc.NOT_FOUND('shipment');
+                }
+                return parsed;
+            }
         }
         const s = await entity.create({
             orderId: orderId || null,

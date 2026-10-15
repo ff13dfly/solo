@@ -274,25 +274,31 @@ describe('jsonlogic — evaluateCondition fail-closed on missing operands of < <
         expect(L.evaluateCondition(rule, { a: 5, b: 1 })).toBe(true);
     });
 
-    test('an explicit default — {var: [path, default]} — is honoured, not treated as missing', () => {
+    test('an explicit default — {var: [path, default]} — is honoured when non-null, but null/empty default still fails closed', () => {
         const rule = { '>=': [{ var: ['meta.balance', 0] }, 0] };
         expect(L.evaluateCondition(rule, {})).toBe(true);
         expect(L.evaluateCondition({ '>=': [{ var: ['meta.balance', 0] }, 1] }, {})).toBe(false); // 0 >= 1
+        expect(L.evaluateCondition({ '<': [{ var: ['x', null] }, 60] }, {})).toBe(false);
+        expect(L.evaluateCondition({ '<': [{ var: ['x', ''] }, 60] }, {})).toBe(false);
     });
 
-    test('comparisons nested under and / or / if / ! are rewritten as well', () => {
+    test('comparisons nested under and / or / if / ! are rewritten as well (negated comparison fails closed on missing var)', () => {
         expect(L.evaluateCondition({ and: [true, { '>': [{ var: 'x' }, 1] }] }, {})).toBe(false);
         expect(L.evaluateCondition({ or: [false, { '>': [{ var: 'x' }, 1] }] }, {})).toBe(false);
         expect(L.evaluateCondition({ if: [{ '>': [{ var: 'x' }, 1] }, 'yes', 'no'] }, {})).toBe('no');
-        // `!` of a failed-closed comparison is true — that is the documented boolean algebra, not a leak
-        expect(L.evaluateCondition({ '!': { '>': [{ var: 'x' }, 1] } }, {})).toBe(true);
+        expect(L.evaluateCondition({ '!': { '>': [{ var: 'x' }, 1] } }, {})).toBe(false);
+        expect(L.evaluateCondition({ '!': { '<': [{ var: 'meta.score' }, 60] } }, {})).toBe(false);
+        expect(L.evaluateCondition({ '!': { '<': [{ var: 'meta.score' }, 60] } }, { meta: { score: 70 } })).toBe(true);
     });
 
-    test('equality / negation / truthiness operators are NOT changed (missing stays null there)', () => {
+    test('single-var equality / negation / truthiness operators stay unchanged; two-var equality fails closed on missing', () => {
         expect(L.evaluateCondition({ '==': [{ var: 'x' }, 'A'] }, {})).toBe(false);
         expect(L.evaluateCondition({ '!=': [{ var: 'x' }, 'A'] }, {})).toBe(true);
         expect(L.evaluateCondition({ '!': { var: 'cancelled' } }, {})).toBe(true);
-        expect(L.evaluateCondition({ '==': [{ var: 'x' }, { var: 'y' }] }, {})).toBe(true); // null == null, unchanged
+        expect(L.evaluateCondition({ '==': [{ var: 'x' }, null] }, {})).toBe(true);
+        expect(L.evaluateCondition({ '==': [{ var: 'x' }, { var: 'y' }] }, {})).toBe(false);
+        expect(L.evaluateCondition({ '===': [{ var: 'a' }, { var: 'b' }] }, {})).toBe(false);
+        expect(L.evaluateCondition({ '===': [{ var: 'a' }, { var: 'b' }] }, { a: 'k', b: 'k' })).toBe(true);
     });
 
     test('satisfied comparisons still pass; literal-only comparisons untouched', () => {
@@ -313,4 +319,12 @@ describe('jsonlogic — evaluateCondition fail-closed on missing operands of < <
         expect(L.evaluateCondition(0, {})).toBe(0);
         expect(L.evaluateCondition('', {})).toBe('');
     });
+
+    test('resolveParams drops __proto__, constructor, and prototype keys', () => {
+        const tpl = JSON.parse('{"safe":{"var":"x"},"__proto__":{"polluted":true},"constructor":{"bad":1},"prototype":{"bad":2}}');
+        const out = L.resolveParams(tpl, { x: 'ok' });
+        expect(out).toEqual({ safe: 'ok' });
+        expect(({}).polluted).toBeUndefined();
+    });
 });
+

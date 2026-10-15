@@ -33,7 +33,14 @@ module.exports = (redis, { config }) => {
         // object (stored WITHOUT mutation) instead of creating a second order.
         if (idempotency_key) {
             const cached = await redis.get(`MARKET:ORDERDEDUP:${idempotency_key}`);
-            if (cached) return JSON.parse(cached);
+            if (cached) {
+                const parsed = JSON.parse(cached);
+                const effOwner = createEntity.walContext && createEntity.walContext.getStore()?.owner;
+                if (effOwner && effOwner.field && parsed[effOwner.field] !== effOwner.value) {
+                    throw jsonrpc.NOT_FOUND('order');
+                }
+                return parsed;
+            }
         }
         const o = await entity.create({
             orderRef: orderRef || null,

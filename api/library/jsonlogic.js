@@ -22,10 +22,12 @@ function apply(rule, data) {
 
 // 比较类算子：json-logic-js 把它们落到 JS 松散比较，null 会被转成 0。
 const COMPARE_OPS = new Set(['<', '<=', '>', '>=']);
+const EQ_OPS = new Set(['==', '===']);
 
 /**
- * 收集一棵规则子树里「不带缺省值」的 var 路径。
- * `{var: 'a.b'}` / `{var: ['a.b']}` 计入；`{var: ['a.b', 0]}` 是调用方显式给的缺省，不计入；
+ * 收集一棵规则子树里「不带有效缺省值」的 var 路径。
+ * `{var: 'a.b'}` / `{var: ['a.b']}` 以及缺省值为 null/undefined/'' 的 `{var: ['a.b', null]}` 计入；
+ * `{var: ['a.b', 0]}` 是调用方显式给的非空缺省，不计入；
  * `{var: ''}`（整个 data）与数字下标不计入。
  */
 function varPathsWithoutDefault(node, out) {
@@ -33,7 +35,14 @@ function varPathsWithoutDefault(node, out) {
     if (!node || typeof node !== 'object') return out;
     for (const [op, val] of Object.entries(node)) {
         if (op === 'var') {
-            const p = Array.isArray(val) ? (val.length === 1 ? val[0] : null) : val;
+            let p = null;
+            if (Array.isArray(val)) {
+                if (val.length === 1 || (val.length >= 2 && (val[1] === null || val[1] === undefined || val[1] === ''))) {
+                    p = val[0];
+                }
+            } else {
+                p = val;
+            }
             if (typeof p === 'string' && p !== '') out.push(p);
         } else {
             varPathsWithoutDefault(val, out);
@@ -42,8 +51,29 @@ function varPathsWithoutDefault(node, out) {
     return out;
 }
 
+function isTwoVarEquality(op, args) {
+    if (!EQ_OPS.has(op) || !Array.isArray(args) || args.length < 2) return false;
+    const withVars = args.filter((a) => varPathsWithoutDefault(a, []).length > 0);
+    return withVars.length >= 2;
+}
+
+function comparisonVarPaths(node, out = []) {
+    if (Array.isArray(node)) { for (const n of node) comparisonVarPaths(n, out); return out; }
+    if (!node || typeof node !== 'object') return out;
+    const keys = Object.keys(node);
+    if (keys.length === 1) {
+        const op = keys[0];
+        if (COMPARE_OPS.has(op) || isTwoVarEquality(op, node[op])) {
+            varPathsWithoutDefault(node[op], out);
+            return out;
+        }
+    }
+    for (const k of keys) comparisonVarPaths(node[k], out);
+    return out;
+}
+
 /**
- * 把规则树里每个比较类算子包成「引用字段任一缺失 → false，否则原样比较」。
+ * 把规则树里每个比较类算子（及包裹比较算子的 `!`、双变量相等比较）包成「引用字段任一缺失 → false，否则原样比较」。
  * 纯函数、不动传入对象；标量与空对象原样返回，保住 evaluateCondition 既有的透传行为。
  */
 function failClosedOnMissing(rule) {
@@ -52,9 +82,16 @@ function failClosedOnMissing(rule) {
     const keys = Object.keys(rule);
     const out = {};
     for (const op of keys) out[op] = failClosedOnMissing(rule[op]);
-    if (keys.length === 1 && COMPARE_OPS.has(keys[0])) {
-        const paths = varPathsWithoutDefault(rule[keys[0]], []);
-        if (paths.length) return { if: [{ missing: paths }, false, out] };
+    if (keys.length === 1) {
+        const op = keys[0];
+        if (COMPARE_OPS.has(op) || isTwoVarEquality(op, rule[op])) {
+            const paths = varPathsWithoutDefault(rule[op], []);
+            if (paths.length) return { if: [{ missing: paths }, false, out] };
+        }
+        if (op === '!' || op === '!!') {
+            const paths = comparisonVarPaths(rule[op], []);
+            if (paths.length) return { if: [{ missing: paths }, false, out] };
+        }
     }
     return out;
 }
@@ -69,8 +106,10 @@ function failClosedOnMissing(rule) {
  *   做法：求值前改写规则树，`<` `<=` `>` `>=` 子树里引用的 `{var: path}` 任一缺失
  *   （json-logic `missing` 语义：undefined / null / 空串）→ 该比较为 false。
  *   - 值为 0 / false **不算缺失**（`missing` 只判 null 与空串）。
- *   - `{var: [path, default]}` 是显式缺省，照旧取缺省值，不触发。
- *   - `==` `!=` `!` 等**不改**：`{'!': {var:'meta.cancelled'}}`「没设过就当 false」是合法惯用法。
+ *   - `{var: [path, default]}`（default 非 null/undefined/''）是显式缺省，照旧取缺省值，不触发。
+ *   - 单变量 `{'!': {var:'meta.cancelled'}}`「没设过就当 false」保持不变；但包裹数值比较的
+ *     `{'!': {'<': [{var:'meta.score'}, 60]}}` 及双变量相等 `{'===': [{var:'a'}, {var:'b'}]}`
+ *     在缺数据时同样 fail-closed 返回 false。
  *   - `apply()` 是裸原语，不做改写；只有守卫（本函数）带这层语义。
  */
 function evaluateCondition(rule, data) {
@@ -98,6 +137,7 @@ function resolveParams(template, data) {
 
     const resolved = {};
     for (const [key, value] of Object.entries(template)) {
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
         resolved[key] = resolveValue(value, data);
     }
     return resolved;

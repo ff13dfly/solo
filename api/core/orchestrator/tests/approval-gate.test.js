@@ -302,4 +302,45 @@ describe('§7.4 — compensation interface existence at approve', () => {
         const wf = await h.logic.workflow.create(sagaWf('wf_comp_skip', 'user.profile.ghost'), SUBMITTER);
         expect(passedPrecheck(await h.logic.workflow.approve({ id: wf.id }, APPROVER))).toBe(true);
     });
+
+    test('short method name (service + bare action) normalizes before risk classification', async () => {
+        const wfRead = await h.logic.workflow.create({
+            id: 'wf_short_read', category: 'ops', name: 'short read', desc: 'x',
+            steps: [{ id: 's1', service: 'user', method: 'profile.get', params: {} }],
+        }, SUBMITTER);
+        const resRead = await h.logic.workflow.approve({ id: wfRead.id }, APPROVER);
+        expect(resRead.workflow.status).toBe('ACTIVE');
+
+        const wf = await h.logic.workflow.create({
+            id: 'wf_short_write', category: 'ops', name: 'short write', desc: 'x',
+            steps: [{ id: 's1', service: 'ledger', method: 'transfer', params: {} }],
+        }, SUBMITTER);
+        const res = await h.logic.workflow.approve({ id: wf.id }, APPROVER);
+        expect(res.status).toBe('NEEDS_SIGNATURE');
+        expect(res.gateId).toBe('gate-stub');
+    });
+
+    test('executable metadata edits (input_schema / require_actor_permit / allowed_triggers) require revise:true on ACTIVE, reset to PENDING_REVIEW, and stamp submittedBy to editor', async () => {
+        const wf = await h.logic.workflow.create({
+            id: 'wf_exec_meta', category: 'ops', name: 'meta test', desc: 'x',
+            require_actor_permit: true,
+            steps: [{ id: 's1', service: 'user', method: 'user.profile.get', params: {} }],
+        }, SUBMITTER);
+        await h.logic.workflow.approve({ id: wf.id }, APPROVER);
+
+        // Editing require_actor_permit on ACTIVE without revise:true is rejected
+        await expect(h.logic.workflow.update({ id: wf.id, require_actor_permit: false }, 'uid-editor'))
+            .rejects.toMatchObject({ code: -32005 });
+
+        // With revise:true, resets to PENDING_REVIEW and sets submittedBy = 'uid-editor'
+        await h.logic.workflow.update({ id: wf.id, require_actor_permit: false, revise: true }, 'uid-editor');
+        const rev = await h.logic.workflow.get({ id: wf.id });
+        expect(rev.status).toBe('PENDING_REVIEW');
+        expect(rev.submittedBy).toBe('uid-editor');
+
+        // 'uid-editor' cannot self-approve their own revision
+        await expect(h.logic.workflow.approve({ id: wf.id }, 'uid-editor'))
+            .rejects.toMatchObject({ code: -32005 });
+    });
 });
+

@@ -22,6 +22,7 @@
 
 const { PATTERNS } = require('../../../library/validate');
 const jsonrpc = require('../../../library/jsonrpc');
+const { redactSensitive } = require('../../../library/logger');
 
 function toJsonSchemaProperty(item) {
     const prop = {};
@@ -88,12 +89,12 @@ module.exports = (redis, { config, relay }) => {
             });
             if (result && result.status === 'failed') {
                 return {
-                    content: [{ type: 'text', text: JSON.stringify({ error: result.error, failedStep: result.failedStep }) }],
+                    content: [{ type: 'text', text: JSON.stringify(redactSensitive({ error: result.error, failedStep: result.failedStep })) }],
                     isError: true,
                 };
             }
             return {
-                content: [{ type: 'text', text: JSON.stringify(result) }],
+                content: [{ type: 'text', text: JSON.stringify(redactSensitive(result)) }],
                 isError: false,
             };
         } catch (e) {

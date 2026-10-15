@@ -115,7 +115,7 @@ module.exports = (redis, { config, relay, policy = null } = {}) => {
         let pub;
         try { pub = await relay.call('user.key.public', { uid: actor }); }
         catch (e) { throw jsonrpc.INTERNAL_ERROR(`could not fetch signer public key: ${e.message}`); }
-        const keys = [pub && pub.publicKey, ...((pub && pub.history) || [])].filter(Boolean);
+        const keys = [pub && pub.publicKey].filter(Boolean);
         if (!keys.length) throw jsonrpc.FORBIDDEN(`signer ${actor} has no signing key`);
         if (!verifyAgainst(stageDigest(target, stage, payloadHash), signature, keys)) {
             throw jsonrpc.INVALID_SIGNATURE();

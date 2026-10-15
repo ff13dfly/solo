@@ -263,10 +263,36 @@ if (!fs.existsSync(SKILL)) {
     }
 }
 
+// ── 8. 红线（CLAUDE.md §8）：前端严禁使用浏览器原生弹窗 alert / confirm / prompt ──
+{
+    const NATIVE_DIALOG_RE = /\bwindow\.(?:alert|confirm|prompt)\s*\(|(?:^|[^\w$.])(?:alert|prompt)\s*\(|(?:^|[^\w$.])(?<!await\s+)confirm\s*\(\s*(?!\{)/;
+    const walkFrontend = (dir) => {
+        if (!fs.existsSync(dir)) return;
+        for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (ent.name === 'node_modules' || ent.name === 'dist' || ent.name.startsWith('.')) continue;
+            const full = path.join(dir, ent.name);
+            if (ent.isDirectory()) {
+                walkFrontend(full);
+            } else if (/\.(?:js|jsx|ts|tsx)$/.test(ent.name) && !/\.(?:test|spec)\./.test(ent.name)) {
+                const lines = fs.readFileSync(full, 'utf8').split('\n');
+                lines.forEach((line, idx) => {
+                    const stripped = line.replace(/\/\/.*$/, '').replace(/'[^']*'|"[^"]*"|`[^`]*`/g, '');
+                    if (NATIVE_DIALOG_RE.test(stripped)) {
+                        const rel = path.relative(ROOT, full);
+                        errors.push(`红线 [CLAUDE.md §8] ${rel}:${idx + 1} 检测到原生弹窗调用 (${line.trim()})——请改用应用内 Modal / Toast`);
+                    }
+                });
+            }
+        }
+    };
+    walkFrontend(path.join(ROOT, 'portal'));
+    walkFrontend(path.join(ROOT, 'client'));
+}
+
 // ── 报告 ──────────────────────────────────────────────────────────────
 if (errors.length) {
     console.error('❌ 文档漂移检查未通过：\n' + errors.map(e => `   • ${e}`).join('\n'));
     console.error('\n修复：更新 CLAUDE.md §2 表格 / deploy/services.json，或同步 introspection 声明 ↔ index.js 注册。');
     process.exit(1);
 }
-console.log(`✅ 文档漂移检查通过：CLAUDE.md §2 ↔ services.json（${serviceNames.size} 服务 + 端口）+ config.js portFor 兜底 ↔ services.json 端口一致（端口单一真源）+ 各服务 introspection ↔ index 注册一致 + 脚手架 README 无硬编码 bundle 版本 + 契约文档包就位（docs/README + authoring/{modeling,service,events,workflows}.md + ${wfExampleCount} workflow 示例，引擎合法）+ 下游守门 skill 就位（solo-service，含 autocheck 门禁）+ e2e harness catalog ↔ services.json（服务清单不漏、端口/path 一致、全部进 full 档）。`);
+console.log(`✅ 文档漂移检查通过：CLAUDE.md §2 ↔ services.json（${serviceNames.size} 服务 + 端口）+ config.js portFor 兜底 ↔ services.json 端口一致（端口单一真源）+ 各服务 introspection ↔ index 注册一致 + 脚手架 README 无硬编码 bundle 版本 + 契约文档包就位（docs/README + authoring/{modeling,service,events,workflows}.md + ${wfExampleCount} workflow 示例，引擎合法）+ 下游守门 skill 就位（solo-service，含 autocheck 门禁）+ e2e harness catalog ↔ services.json（服务清单不漏、端口/path 一致、全部进 full 档）+ 前端无原生弹窗调用（CLAUDE.md §8）。`);

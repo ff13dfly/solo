@@ -25,6 +25,24 @@ const { enrichCapabilityMap } = require('./capability');
  * @why Establishes a cryptographically secure "Chain of Trust" between the Router 
  *      and its microservices without pre-shared keys.
  */
+function isForbiddenServiceHost(rawHost) {
+    const host = String(rawHost || '').trim().replace(/^\[|\]$/g, '').toLowerCase();
+    if (!host) return true;
+    return (
+        host === '169.254.169.254' ||
+        host === '100.100.100.200' ||
+        host === 'metadata.google.internal' ||
+        host === '0.0.0.0' ||
+        host === '::' ||
+        host === '0:0:0:0:0:0:0:0' ||
+        /^169\.254\./.test(host) ||
+        /^fe[89ab][0-9a-f]:/.test(host) ||
+        /^::ffff:169\.254\./.test(host) ||
+        /^::ffff:a9fe:/.test(host) ||
+        /^::ffff:0:0$/.test(host)
+    );
+}
+
 async function addService(inputUrl, SERVICES, redisClient, keypair, CAPABILITY_MAP) {
     if (!inputUrl || typeof inputUrl !== 'string') {
         throw new Error('Invalid service URL');
@@ -38,8 +56,7 @@ async function addService(inputUrl, SERVICES, redisClient, keypair, CAPABILITY_M
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
         throw new Error('Service URL protocol must be http or https');
     }
-    const hostname = parsed.hostname.toLowerCase();
-    if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') {
+    if (isForbiddenServiceHost(parsed.hostname)) {
         throw new Error('Service URL points to a forbidden address');
     }
 
@@ -47,9 +64,12 @@ async function addService(inputUrl, SERVICES, redisClient, keypair, CAPABILITY_M
     console.log(chalk.cyan(`[Discovery] Initiating handshake with: ${baseUrl}`));
 
     // 1. Fetch Challenge Seed
-    const seedRes = await axios.get(`${baseUrl}/auth/seed`, { timeout: 3000 });
-    const { seed } = seedRes.data;
+    const seedRes = await axios.get(`${baseUrl}/auth/seed`, { timeout: 3000, maxRedirects: 0 });
+    const { seed } = seedRes.data || {};
     if (!seed) throw new Error('Target service failed to provide a challenge seed');
+    if (typeof seed !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(seed)) {
+        throw new Error('Invalid challenge seed format');
+    }
 
     // 2. Compute Signature
     const message = new TextEncoder().encode(seed);
@@ -59,7 +79,7 @@ async function addService(inputUrl, SERVICES, redisClient, keypair, CAPABILITY_M
     const verifyRes = await axios.post(`${baseUrl}/auth/verify`, {
         signature,
         publicKey: keypair.publicKey.toBase58()
-    }, { timeout: 3000 });
+    }, { timeout: 3000, maxRedirects: 0 });
 
     if (verifyRes.data.success) {
         // 4. Introspection Phase
@@ -67,7 +87,7 @@ async function addService(inputUrl, SERVICES, redisClient, keypair, CAPABILITY_M
             jsonrpc: '2.0',
             method: 'methods',
             id: 'handshake'
-        }, { timeout: 5000 });
+        }, { timeout: 5000, maxRedirects: 0 });
 
         let methods = [];
         let description = {};
@@ -86,7 +106,7 @@ async function addService(inputUrl, SERVICES, redisClient, keypair, CAPABILITY_M
                 jsonrpc: '2.0',
                 method: 'entities',
                 id: 'handshake'
-            }, { timeout: 3000 });
+            }, { timeout: 3000, maxRedirects: 0 });
 
             if (entitiesRes.data && entitiesRes.data.result) {
                 entities = entitiesRes.data.result;

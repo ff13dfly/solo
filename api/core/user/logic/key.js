@@ -46,6 +46,21 @@ module.exports = (redis, config) => {
         if (n > RATE_MAX) throw jsonrpc.FORBIDDEN(`Signing rate limit exceeded (${RATE_MAX}/${RATE_WINDOW}s)`);
     }
 
+    async function assertActiveAccount(uid) {
+        const userPrefix = R.userPrefix || 'user:';
+        const rawUser = await redis.get(`${userPrefix}${uid}`);
+        if (rawUser) {
+            try {
+                const u = JSON.parse(rawUser);
+                if (u && u.status && u.status !== 'ACTIVE') {
+                    throw jsonrpc.FORBIDDEN('Account is not active');
+                }
+            } catch (e) {
+                if (e.code) throw e;
+            }
+        }
+    }
+
     return {
         /**
          * Generate (or re-provision) the caller's keypair. Self-only: uid = ctx.actor.
@@ -59,6 +74,7 @@ module.exports = (redis, config) => {
             if (typeof password !== 'string' || password.length < 8) {
                 throw jsonrpc.INVALID_PARAM('password required (min 8 chars) — encrypts the private key');
             }
+            await assertActiveAccount(uid);
 
             const existing = await load(uid);
             if (existing && existing.publicKey) {
@@ -98,6 +114,7 @@ module.exports = (redis, config) => {
             if (ctx.actor !== uid) throw jsonrpc.FORBIDDEN('Can only sign as yourself');
             if (typeof password !== 'string' || !password) throw jsonrpc.MISSING_PARAM('password');
 
+            await assertActiveAccount(uid);
             await checkRate(uid);
 
             const doc = await load(uid);

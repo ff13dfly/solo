@@ -33,9 +33,14 @@ module.exports = (redis, context) => {
             const idMap = {};
 
             for (const todo of todos) {
+                const isLocal = !todo.id || todo.id.toString().startsWith('local-');
+                if (!isLocal) {
+                    const idStr = String(todo.id).trim();
+                    if (!idStr || idStr.includes(':') || ['INDEX', 'SEQ', 'CURSOR'].includes(idStr.toUpperCase())) {
+                        throw jsonrpc.INVALID_PARAM(`Invalid TODO id: ${todo.id}`);
+                    }
+                }
                 try {
-                    const isLocal = !todo.id || todo.id.toString().startsWith('local-');
-
                     if (isLocal) {
                         const { id: oldId, ...itemData } = todo;
                         const newTodo = await entity.create(itemData);

@@ -110,6 +110,24 @@ describe('Validator Handler', () => {
             const schema = [{ name: 'payload', type: 'object' }];
             expect(validateParams({ payload: { key: 'val' } }, schema)).toBeNull();
         });
+
+        test('[P1-10] rejects array or primitive params instead of treating them as object', () => {
+            const schema = [{ name: 'id', type: 'string', required: true }];
+            const arrErr = validateParams(['not-an-object'], schema);
+            expect(arrErr).not.toBeNull();
+            expect(arrErr.code).toBe(-32602);
+            const strErr = validateParams('primitive', schema);
+            expect(strErr).not.toBeNull();
+            expect(strErr.code).toBe(-32602);
+        });
+
+        test('[P1-10] handles undefined/null params without crashing when schema has required fields', () => {
+            const schema = [{ name: 'id', type: 'string', required: true }];
+            const err = validateParams(undefined, schema);
+            expect(err).not.toBeNull();
+            expect(err.code).toBe(-32602);
+            expect(err.message).toContain("'id'");
+        });
     });
 
     // ─────────────────────────────────────────────────────────────────────────

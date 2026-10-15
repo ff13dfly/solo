@@ -78,9 +78,14 @@ module.exports = (redis, context) => {
             const idMap = {};
 
             for (const event of events) {
+                const isLocal = !event.id || event.id.toString().startsWith('local-');
+                if (!isLocal) {
+                    const idStr = String(event.id).trim();
+                    if (!idStr || idStr.includes(':') || ['INDEX', 'SEQ', 'CURSOR'].includes(idStr.toUpperCase())) {
+                        throw jsonrpc.INVALID_PARAM(`Invalid AGENDA id: ${event.id}`);
+                    }
+                }
                 try {
-                    const isLocal = !event.id || event.id.toString().startsWith('local-');
-
                     if (isLocal) {
                         // Create proper server ID
                         const { id: oldId, ...itemData } = event;

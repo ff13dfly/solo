@@ -153,4 +153,30 @@ describe('H6 — footprint pre-check', () => {
         expect(err.code).toBe(-32603);
         expect(h.mock.count('ledger.transfer')).toBe(0);
     });
+
+    test('short method name (service="mail", method="send") is normalized to mail.send in footprint pre-check', async () => {
+        const shortWf = {
+            id: 'wf_short_method',
+            name: 'Short Method WF',
+            category: 'finance',
+            status: 'ACTIVE',
+            steps: [
+                { id: 's1', service: 'mail', method: 'send', params: {} },
+            ],
+        };
+        await h.seedWorkflow(shortWf);
+
+        // PARTIAL_PERMIT lacks mail.send → rejected with mail.send in missing methods
+        h.mock.on('user.permit.get', () => PARTIAL_PERMIT);
+        const err = await h.run(shortWf.id, {}, {}, CALLER).catch(e => e);
+        expect(err.code).toBe(-32005);
+        expect(err.message).toMatch(/mail\.send/);
+        expect(h.mock.count('mail.send')).toBe(0);
+
+        // FULL_PERMIT has mail: ['mail.send'] → normalized short method passes pre-check
+        h.mock.on('user.permit.get', () => FULL_PERMIT);
+        const res = await h.run(shortWf.id, {}, {}, CALLER);
+        expect(res.status).toBe('completed');
+    });
 });
+

@@ -92,4 +92,17 @@ describe('router rate limit', () => {
         expect(await ratelimit.getRules(redis)).toEqual(B);      // bust 后立即重读 B
         ratelimit.invalidate();                                  // 收尾:别把缓存留给后续
     });
+
+    test('[P1-10] checkLimit: count > 1 且 ttl === -1 时自动补设 expire 防止永久锁死', async () => {
+        let expireCalled = 0;
+        const redis = {
+            isOpen: true,
+            async incr() { return 5; },
+            async ttl() { return -1; },
+            async expire() { expireCalled++; return 1; },
+        };
+        const res = await ratelimit.checkLimit(redis, 'user.login.verify', '1.2.3.4', { window: 60, max: 10 });
+        expect(res.allowed).toBe(true);
+        expect(expireCalled).toBe(1);
+    });
 });

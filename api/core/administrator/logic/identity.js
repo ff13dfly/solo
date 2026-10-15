@@ -126,8 +126,10 @@ const IdentityLogic = {
     async loginVerify(params) {
         const { username, challenge, response } = params;
         const storedChallenge = challengeStore.get(challenge);
+        // Burn challenge on first verify attempt (pass or fail)
+        if (challenge) challengeStore.delete(challenge);
 
-        if (!storedChallenge || storedChallenge.username !== username) {
+        if (!storedChallenge || storedChallenge.username !== username || Date.now() > storedChallenge.expiresAt) {
             throw jsonrpc.INVALID_CHALLENGE();
         }
         
@@ -139,7 +141,6 @@ const IdentityLogic = {
             .digest('hex');
 
         if (response === expected) {
-            challengeStore.delete(challenge); 
             const token = crypto.randomBytes(32).toString('hex');
             
             if (redisClient && redisClient.isOpen) {
@@ -151,6 +152,9 @@ const IdentityLogic = {
                     ttl: config.sessionTtl 
                 };
                 await redisClient.setEx(`${config.redis.sessionKeyPrefix}${token}`, config.sessionTtl, JSON.stringify(sessionData));
+                if (typeof redisClient.sAdd === 'function') {
+                    await redisClient.sAdd('USER:SESSIONS:__admin__', token);
+                }
             }
 
             return { success: true, token };
@@ -195,14 +199,25 @@ const IdentityLogic = {
         await redisClient.set(sessionKey, JSON.stringify(sess));
         await redisClient.expire(sessionKey, 60);
 
+        // Also revoke any other live admin sessions in USER:SESSIONS:__admin__
+        if (typeof redisClient.sMembers === 'function' && typeof redisClient.del === 'function') {
+            const adminTokens = await redisClient.sMembers('USER:SESSIONS:__admin__');
+            for (const t of adminTokens || []) {
+                if (t !== callerToken) {
+                    await redisClient.del(`${config.redis.sessionKeyPrefix}${t}`);
+                }
+            }
+        }
+
         // Defer server.close() so the RPC response is delivered first.
-        setTimeout(() => {
+        const closeTimer = setTimeout(() => {
             const srv = typeof getServer === 'function' ? getServer() : null;
             if (srv && typeof srv.close === 'function') {
                 logger.info('[Lock] Closing administrator HTTP server...');
                 srv.close(() => logger.info('[Lock] HTTP server closed'));
             }
         }, 500);
+        if (closeTimer && typeof closeTimer.unref === 'function') closeTimer.unref();
 
         return { ok: true, tokenExpiresIn: 60 };
     },
@@ -215,13 +230,24 @@ const IdentityLogic = {
      * @attention 
      *   1. ATOMIC LOCK: Deletes seed.json only if the username matches.
      *   2. NO MULTI-USER: This service does not support operator accounts.
-     * @side_effects Writes user to Redis; deletes seed.json.
+     * @side_effects Writes user to Redis; deletes seed.json; revokes live admin sessions.
      */
     async saveAdmin(params) {
         const { username, password } = params;
         
         if (!username || !password) throw new Error('username and password required');
         if (!redisClient || !redisClient.isOpen) throw new Error('Redis connection required');
+
+        // Enforce Single-Admin Model: reject creating a second admin account if one already exists in Redis
+        if (typeof redisClient.keys === 'function') {
+            const existingKeys = await redisClient.keys(`${config.redis.userKeyPrefix}*`);
+            const targetKey = config.redis.userKeyPrefix + username;
+            if (Array.isArray(existingKeys) && existingKeys.length > 0 && !existingKeys.includes(targetKey)) {
+                const err = new Error('Single-admin model: cannot create additional administrator accounts');
+                err.code = -32005;
+                throw err;
+            }
+        }
 
         const salt = crypto.randomBytes(16).toString('hex');
         const iterations = config.defaultIterations;
@@ -247,7 +273,16 @@ const IdentityLogic = {
         const key = config.redis.userKeyPrefix + username;
         await redisClient.set(key, JSON.stringify(userData));
 
-        // 2. Self-Destruct seed.json
+        // 2. Revoke all existing live admin sessions on password reset
+        if (typeof redisClient.sMembers === 'function' && typeof redisClient.del === 'function') {
+            const tokens = await redisClient.sMembers('USER:SESSIONS:__admin__');
+            for (const t of tokens || []) {
+                await redisClient.del(`${config.redis.sessionKeyPrefix}${t}`);
+            }
+            await redisClient.del('USER:SESSIONS:__admin__');
+        }
+
+        // 3. Self-Destruct seed.json
         const seedPath = path.join(__dirname, '../seed.json');
         if (fs.existsSync(seedPath)) {
             try {

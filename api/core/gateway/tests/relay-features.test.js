@@ -137,6 +137,25 @@ describe('fetchAttachments', () => {
         ));
         expect(body.attachments).toEqual([{ filename: 'f.bin', content: Buffer.from('bytes!').toString('base64') }]);
     });
+
+    test('blocks metadata/link-local hosts in resolved attachment URLs (P1-8)', async () => {
+        for (const badUrl of [
+            'http://169.254.169.254/latest/meta-data/',
+            'http://[::ffff:169.254.169.254]/latest/meta-data/',
+            'http://metadata.google.internal/computeMetadata/v1/',
+            'http://100.100.100.200/latest/meta-data/',
+        ]) {
+            const badRelay = {
+                call(method, params) {
+                    if (method === 'storage.asset.get') return Promise.resolve({ id: params.id, filename: 'x.txt', mimeType: 'text/plain' });
+                    if (method === 'storage.asset.resolve') return Promise.resolve({ url: badUrl });
+                    return Promise.reject(new Error('unexpected'));
+                }
+            };
+            await expect(fetchAttachments(badRelay, [{ assetId: 'asset-meta' }], {}))
+                .rejects.toThrow(/refused/);
+        }
+    });
 });
 
 // ─── G12: channel probes ──────────────────────────────────────────────────────

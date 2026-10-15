@@ -61,13 +61,17 @@ function ctEqual(a, b) {
     return crypto.timingSafeEqual(x, y);
 }
 
+const ACTIVE_CONTENT_RE = /^(image\/svg\+xml|text\/html|text\/xml|text\/xsl|text\/javascript|application\/xhtml\+xml|application\/xml|application\/javascript|application\/x-javascript|multipart\/x-mixed-replace|[a-z0-9.+-]+\/[a-z0-9.+-]*\+xml)/i;
+
 /**
  * Resolve an object key to an absolute path inside `root`, or null if the key
- * would escape root (path traversal). Keys legitimately contain '/'.
+ * would escape root (path traversal) or enter the `.meta` sidecar directory.
+ * Keys legitimately contain '/'.
  */
 function safeResolve(root, key) {
-    if (!key || key.includes('\0')) return null;
-    if (key.split('/').some((s) => s === '..' || s === '')) return null;
+    if (!key || key.includes('\0') || key.includes('\\')) return null;
+    const segs = key.split('/');
+    if (segs.some((s) => s === '..' || s === '.' || s === '') || segs[0] === '.meta') return null;
     const base = path.resolve(root);
     const resolved = path.resolve(base, key);
     if (resolved !== base && !resolved.startsWith(base + path.sep)) return null;
@@ -243,7 +247,7 @@ function createLocalOssServer(opts = {}) {
             res.setHeader('Content-Type', ct);
             res.setHeader('Last-Modified', st.mtime.toUTCString());
             res.setHeader('X-Content-Type-Options', 'nosniff');
-            if (typeof ct === 'string' && /^(image\/svg\+xml|text\/html|text\/xml|application\/xhtml\+xml|application\/xml)/i.test(ct)) {
+            if (typeof ct === 'string' && ACTIVE_CONTENT_RE.test(ct.trim())) {
                 res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
             }
             if (meta && meta.etag) res.setHeader('ETag', meta.etag);
@@ -264,7 +268,7 @@ function createLocalOssServer(opts = {}) {
             }
             res.setHeader('Content-Type', ct);
             res.setHeader('X-Content-Type-Options', 'nosniff');
-            if (typeof ct === 'string' && /^(image\/svg\+xml|text\/html|text\/xml|application\/xhtml\+xml|application\/xml)/i.test(ct)) {
+            if (typeof ct === 'string' && ACTIVE_CONTENT_RE.test(ct.trim())) {
                 res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
             }
             return res.status(200).end(buf);

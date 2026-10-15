@@ -99,8 +99,8 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
 
                 // Instance
                 'fulfillment.instance.create':     (p) => Methods.instance.create(p, req),
-                'fulfillment.instance.get':        (p) => Methods.instance.get(p),
-                'fulfillment.instance.list':       (p) => Methods.instance.list(p),
+                'fulfillment.instance.get':        (p) => Methods.instance.get(p, req),
+                'fulfillment.instance.list':       (p) => Methods.instance.list(p, req),
                 'fulfillment.instance.transition': (p) => Methods.instance.transition(p, req),
                 'fulfillment.instance.cancel':     (p) => Methods.instance.cancel(p, req),
                 'fulfillment.instance.hold':       (p) => Methods.instance.hold(p, req),
@@ -112,7 +112,7 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'fulfillment.profile.create':  (p) => Methods.profile.create(p),
                 'fulfillment.profile.get':     (p) => Methods.profile.get(p),
                 'fulfillment.profile.list':    (p) => Methods.profile.list(p),
-                'fulfillment.profile.update':  (p) => Methods.profile.update(p),
+                'fulfillment.profile.update':  (p) => Methods.profile.update(p, req),
                 'fulfillment.profile.delete':  (p) => Methods.profile.delete(p),
                 'fulfillment.profile.restore': (p) => Methods.profile.restore(p),
                 'fulfillment.profile.destroy': (p) => Methods.profile.destroy(p),

@@ -33,10 +33,11 @@ describe('library/risk — classifyFootprint', () => {
         expect(r.reasons[0]).toMatch(/write action 'frobnicate'/);
     });
 
-    test('known read verbs stay LOW; send/record/charge are writes', () => {
+    test('known read verbs stay LOW; send/record/charge/verify are writes', () => {
         expect(classifyFootprint(['planner.task.status', 'planner.task.resolve']).level).toBe('LOW');
         expect(classifyFootprint(['gateway.email.send']).level).toBe('HIGH');     // gateway sensitive + write
         expect(classifyFootprint(['collection.payment.record']).level).toBe('HIGH');
+        expect(classifyFootprint(['approval.record.verify']).level).toBe('HIGH');
     });
 
     test('extraReadVerbs widens the read set', () => {

@@ -354,4 +354,29 @@ describe('passport anchor namespace + TOFU', () => {
             await expect(P.deviceIssue({ anchor, app: 'appdev' })).resolves.toMatchObject({ anchor });
         }
     });
+
+    test.each(['admin', 'ADMIN', 'anonymous', 'guest', 'router', 'orchestrator'])(
+        '🔴 refuses reserved system/admin identifier "%s" as passport anchor (P0-3)',
+        async (anchor) => {
+            const { P } = make();
+            await expectThrowCode(P.deviceIssue({ anchor, app: 'appdev' }), -32602);
+            await expectThrowCode(P.register({ anchor, role: 'external', deviceToken: 'dt' }), -32602);
+        }
+    );
+
+    test('🔴 refuses destroyed internal UID recorded in user:destroyed:ids (P0-3)', async () => {
+        const { r, P } = make();
+        await r.sAdd('user:destroyed:ids', 'destroyedUid0001');
+        await expectThrowCode(P.deviceIssue({ anchor: 'destroyedUid0001', app: 'appdev' }), -32602);
+    });
+
+    test('🔴 otpRequest/otpVerify reject device-only apps and cross-app OTP reuse (P1-2)', async () => {
+        const { P } = make();
+        // appdev is configured as 'device', not 'otp' or 'pending'
+        await expectThrowCode(P.otpRequest({ anchor: 'dev@x.com', channel: 'email', app: 'appdev' }), -32005);
+
+        // Request OTP for pending app (apprev), then attempt to redeem on otp app (app1)
+        const { devCode } = await P.otpRequest({ anchor: 'cross@x.com', channel: 'email', app: 'apprev' });
+        await expectThrowCode(P.otpVerify({ anchor: 'cross@x.com', otp: devCode, app: 'app1' }), -32003);
+    });
 });

@@ -45,10 +45,13 @@ function blockNew(errObj) {
  * Phase 0: Global baseline size validation to prevent OOM.
  */
 function validateGlobalConstraints(params, schema) {
-    if (!params || typeof params !== 'object') return null;
+    if (params === undefined || params === null) return null;
+    if (typeof params !== 'object' || Array.isArray(params)) {
+        return jsonrpcHandler.INVALID_PARAMS('params must be a JSON object');
+    }
 
     // Build a quick lookup for per-param maxLength overrides from schema
-    const schemaLimits = {};
+    const schemaLimits = Object.create(null);
     if (Array.isArray(schema)) {
         for (const item of schema) {
             if (item.name && item.maxLength) schemaLimits[item.name] = item.maxLength;
@@ -101,12 +104,14 @@ function validateParams(params, methodSchema) {
         return null;
     }
 
+    const safeParams = params || {};
+
     for (const item of methodSchema) {
         if (typeof item !== 'object' || !item.name) {
             continue;
         }
 
-        const value = params[item.name];
+        const value = safeParams[item.name];
 
         // 1. Mandatory Parameter Check
         if (item.required && (value === undefined || value === null)) {

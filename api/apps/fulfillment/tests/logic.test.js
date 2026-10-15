@@ -290,6 +290,40 @@ describe('fulfillment.instance — dedicated operations', () => {
         expect(last.forced).toBe(true);
         expect(last.reason).toBe('manual sign-off');
     });
+
+    test('resume enforces profile activation gate when profile is PENDING_REVIEW or REJECTED', async () => {
+        const id = await newProcessing('ORD-R-GATE');
+        await logic.instance.hold({ id, reason: 'pause' }, MOCK_REQ);
+        await redis.set(`${config.redis.profilePrefix}${SM_ID}`, JSON.stringify({ ...SM_PROFILE, reviewState: 'PENDING_REVIEW' }));
+        await expect(logic.instance.resume({ id }, MOCK_REQ)).rejects.toMatchObject({ code: -32005 });
+    });
+
+    test('instance key validation rejects colons, whitespace, and control characters; update ignores non-meta top-level fields; $owner scope isolates instances', async () => {
+        await expect(logic.instance.get({ id: 'bad:key' }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
+        await expect(logic.instance.get({ id: 'bad key' }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
+
+        const ownerA = { user: 'u-a', permit: 'user', constraints: { $owner: { field: 'createdBy', value: 'u-a' } } };
+        const ownerB = { user: 'u-b', permit: 'user', constraints: { $owner: { field: 'createdBy', value: 'u-b' } } };
+
+        const instA = await logic.instance.create({ sourceId: 'ORD-OWN-A', profileId: SM_ID, meta: { k: 1 } }, ownerA);
+        await expect(logic.instance.get({ id: instA.id }, ownerB)).rejects.toMatchObject({ code: -32002 });
+        const listB = await logic.instance.list({}, ownerB);
+        expect(listB.items.find(i => i.id === instA.id)).toBeUndefined();
+
+        const updated = await logic.instance.update({
+            id: instA.id,
+            meta: { k: 2 },
+            sourceId: 'FORGED',
+            profileId: 'FORGED_PROF',
+            createdBy: 'u-b',
+            pending_callbacks: ['evil'],
+        }, ownerA);
+        expect(updated.sourceId).toBe('ORD-OWN-A');
+        expect(updated.profileId).toBe(SM_ID);
+        expect(updated.createdBy).toBe('u-a');
+        expect(updated.pending_callbacks).toEqual([]);
+        expect(updated.meta).toEqual({ k: 2 });
+    });
 });
 
 // ============================================================

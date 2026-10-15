@@ -267,7 +267,13 @@ module.exports = (redisClient, config) => {
 
             user.last = now; // Global last login
 
-            await redisClient.set(`${config.redis.userPrefix}${uid}`, JSON.stringify(user));
+            const updated = await optimisticUpdate(redisClient, `${config.redis.userPrefix}${uid}`, (latest) => {
+                if (latest.status === STATUS.DELETED) throw jsonrpc.ACCOUNT_DELETED();
+                latest.devices = { ...(latest.devices || {}), ...user.devices };
+                latest.last = now;
+                return latest;
+            });
+            if (!updated) throw jsonrpc.USER_NOT_FOUND();
 
             const SESSION_TTL = 86400 * 7; // 7 days
             // Store Session
@@ -384,8 +390,23 @@ module.exports = (redisClient, config) => {
 
         // Remove from indexes
         await redisClient.sRem(config.redis.userIdSet, targetId);
+        if (typeof redisClient.sAdd === 'function') {
+            await redisClient.sAdd('user:destroyed:ids', targetId);
+        }
         if (user.name) {
             await redisClient.del(`${config.redis.userNamePrefix}${user.name}`);
+        }
+        // Retire active signing key to HISTORY so destroyed accounts cannot keep an active signing key
+        const signKeyPrefix = config.redis?.signKeyPrefix || 'USER:SIGNKEY:';
+        const rawSignKey = await redisClient.get(`${signKeyPrefix}${targetId}`);
+        if (rawSignKey) {
+            try {
+                const doc = JSON.parse(rawSignKey);
+                if (doc && doc.publicKey && typeof redisClient.sAdd === 'function') {
+                    await redisClient.sAdd(`${signKeyPrefix}HISTORY:${targetId}`, doc.publicKey);
+                }
+            } catch (_) { /* ignore malformed key doc */ }
+            await redisClient.del(`${signKeyPrefix}${targetId}`);
         }
         await redisClient.del(key);
         // Deletion implies revocation. Without this the account record is gone while its
@@ -644,6 +665,18 @@ module.exports = (redisClient, config) => {
             userData.deletedAt = new Date().toISOString();
 
             await redisClient.set(`${config.redis.userPrefix}${id}`, JSON.stringify(userData));
+            // Retire active signing key to HISTORY on soft-delete
+            const signKeyPrefix = config.redis?.signKeyPrefix || 'USER:SIGNKEY:';
+            const rawSignKey = await redisClient.get(`${signKeyPrefix}${id}`);
+            if (rawSignKey) {
+                try {
+                    const doc = JSON.parse(rawSignKey);
+                    if (doc && doc.publicKey && typeof redisClient.sAdd === 'function') {
+                        await redisClient.sAdd(`${signKeyPrefix}HISTORY:${id}`, doc.publicKey);
+                    }
+                } catch (_) { /* ignore */ }
+                await redisClient.del(`${signKeyPrefix}${id}`);
+            }
             // Deletion implies revocation — loginRequest() already refuses NEW logins for a
             // DELETED account, but sessions handed out BEFORE the delete outlived it.
             const revoked = await killSessions(id);

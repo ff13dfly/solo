@@ -125,6 +125,25 @@ describe('local provider — round-trip against the single-file local-oss-server
         expect(resHead.status).toBe(200);
         expect(resHead.headers['x-content-type-options']).toBe('nosniff');
         expect(resHead.headers['content-security-policy']).toBe("default-src 'none'; style-src 'unsafe-inline'");
+
+        // Expanded CSP check: leading whitespace or text/javascript or +xml also get CSP
+        const jsKey = keying.keyFor(sha('payload-js'), '.bin');
+        await store.put(jsKey, Buffer.from('alert(1)'), { contentType: ' text/javascript; charset=utf-8' });
+        const resJs = await httpGet(store.presignGet(jsKey));
+        expect(resJs.status).toBe(200);
+        expect(resJs.headers['content-security-policy']).toBe("default-src 'none'; style-src 'unsafe-inline'");
+    });
+
+    test('refuses direct access to .meta sidecar keys and dot segments (P1-9)', async () => {
+        const key = keying.keyFor(sha('payload-meta-guard'), '.txt');
+        await store.put(key, Buffer.from('hello'), { contentType: 'text/plain' });
+
+        const signedMeta = store.presignGet(`.meta/${key}.json`);
+        expect((await httpGet(signedMeta)).status).toBe(400);
+
+        const delRes = await store.deleteMany([`.meta/${key}.json`, `./${key}`, `a/./b`]);
+        expect(delRes.deleted).toEqual([]);
+        expect(await store.exists(key)).toBe(true);
     });
 
     test('presignGet yields a fetchable URL; unsigned/tampered/expired are rejected', async () => {

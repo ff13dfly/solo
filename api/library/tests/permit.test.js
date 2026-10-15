@@ -154,4 +154,12 @@ describe('CONTRACT: hasPermit agrees with Router checkPermission oracle', () => 
             }
         }
     });
+
+    test('🔴 hasPermit safely returns false for Object.prototype properties and non-array service values (D2-F11)', () => {
+        const p = { allow_all: false, services: { erp: 'not-an-array' } };
+        expect(permit.hasPermit(p, 'toString.call')).toBe(false);
+        expect(permit.hasPermit(p, 'constructor.assign')).toBe(false);
+        expect(permit.hasPermit(p, '__proto__.pollute')).toBe(false);
+        expect(permit.hasPermit(p, 'erp.stock.query')).toBe(false);
+    });
 });

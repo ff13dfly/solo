@@ -6,6 +6,7 @@ const config = require('./config');
 const { bindAddr } = require('../../library/ports');
 const { createLogger } = require('../../library/logger');
 const { mountHealth } = require('../../library/health');
+const { walContext, requestContext } = require('../../library/entity');
 
 const { initializeRedis } = require('./handlers/bootstrap');
 const { createRelay } = require('../../library/relay');
@@ -100,10 +101,11 @@ app.post('/jsonrpc', async (req, res) => {
 
     const { jsonrpc: jsonrpc_version, method, params, id } = req.body;
 
-    try {
-        // Method-level access is the Router's job (checkAccess); this mirrors the fleet
-        // convention (notification.token.*) of double-gating the relay-token lifecycle only.
-        const requireAdmin = () => { if (req.permit !== 'admin') throw jsonrpc.UNAUTHORIZED(); };
+    await walContext.run(requestContext(req), async () => {
+        try {
+            // Method-level access is the Router's job (checkAccess); this mirrors the fleet
+            // convention (notification.token.*) of double-gating the relay-token lifecycle only.
+            const requireAdmin = () => { if (req.permit !== 'admin') throw jsonrpc.UNAUTHORIZED(); };
 
         const handlers = {
             // System
@@ -179,8 +181,9 @@ app.post('/jsonrpc', async (req, res) => {
             logger.error(`Error:`, err.message, { request: params });
         }
         
-        jsonrpc.error(res, err.code ? err : jsonrpc.INTERNAL_ERROR(err.message), id);
-    }
+            jsonrpc.error(res, err.code ? err : jsonrpc.INTERNAL_ERROR(err.message), id);
+        }
+    });
 });
 
 // --- SERVER STARTUP ---

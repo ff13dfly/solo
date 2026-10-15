@@ -68,7 +68,15 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
     const useJson = storageType === 'json';
 
     // Key pattern: SERVICE:ENTITY:ID
-    const getDataKey = (id) => `${SERVICE_UPPER}:${ENTITY_UPPER}:${id}`;
+    const getDataKey = (id) => {
+        if ((typeof id !== 'string' && typeof id !== 'number') ||
+            String(id).trim() === '' ||
+            String(id).includes(':') ||
+            ['INDEX', 'SEQ', 'CURSOR'].includes(String(id).toUpperCase())) {
+            throw jsonrpc.INVALID_PARAM(`Invalid ${entityName} id: ${id}`);
+        }
+        return `${SERVICE_UPPER}:${ENTITY_UPPER}:${id}`;
+    };
     // Index pattern: SERVICE:ENTITY:INDEX (Redis Set) — unordered, sMembers-only.
     const getIndexKey = () => `${SERVICE_UPPER}:${ENTITY_UPPER}:INDEX`;
     // Cursor index: SERVICE:ENTITY:INDEX:CURSOR (Redis ZSET, score = insertion sequence,
@@ -121,7 +129,11 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
     const ownerScope = () => {
         const ctx = walContext.getStore();
         const o = ctx && ctx.owner;
-        return (o && o.field && o.value !== undefined && o.value !== null) ? o : null;
+        if (!o) return null;
+        if (!o.field || o.value === undefined || o.value === null || o.value === '') {
+            throw jsonrpc.FORBIDDEN('Invalid $owner row-isolation constraint');
+        }
+        return o;
     };
     const ownerFilter = (filter) => {
         const o = ownerScope();

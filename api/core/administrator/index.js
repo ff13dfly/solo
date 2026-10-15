@@ -91,11 +91,17 @@ app.post('/jsonrpc', async (req, res) => {
 
     try {
         const handlers = {
-            'admin.log.error': (p) => Methods.error.list(redisClient, p),
+            'admin.log.error': (p) => {
+                if (!p.isAdmin) throw jsonrpc.UNAUTHORIZED();
+                return Methods.error.list(redisClient, p);
+            },
             'admin.log.clear': (p) => Methods.error.clear(redisClient, p),
             'admin.login.request': (p) => Methods.identity.loginRequest(p),
             'admin.login.verify': (p) => Methods.identity.loginVerify(p),
-            'admin.password.reset': (p) => Methods.identity.saveAdmin(p),
+            'admin.password.reset': (p) => {
+                if (!p.isAdmin) throw jsonrpc.UNAUTHORIZED();
+                return Methods.identity.saveAdmin(p);
+            },
             'admin.self.lock': () => Methods.identity.lockAdmin(callerToken, () => server),
             'ping': () => ({ status: 'ok', service: config.serviceName, version: config.version, uptime: new Date().toISOString() }),
             'methods': () => ({ methods: introspectionMethods, description: config.description || {} }),
@@ -139,7 +145,9 @@ app.post('/jsonrpc', async (req, res) => {
                 if (!raw) return null;
                 return JSON.parse(raw);
             },
-            'setting.index.schema': async ({ service }) => {
+            'setting.index.schema': async (p) => {
+                if (!p.isAdmin) throw jsonrpc.UNAUTHORIZED();
+                const { service } = p;
                 if (!service) throw jsonrpc.MISSING_PARAM('service');
                 const raw = await redisClient.get(`SYSTEM:INDEX_SCHEMA:${service}`);
                 if (!raw) return null;

@@ -113,6 +113,26 @@ describe('external — registration and resolution', () => {
         await expect(asset.external({ url: BIG, visibility: 'everyone' }, ALICE))
             .rejects.toMatchObject({ code: -32602 });
     });
+
+    test('rejects loopback, private, and cloud metadata URLs by default (P1-8 SSRF guardrail)', async () => {
+        const asset = makeLogic();
+        for (const internalUrl of [
+            'http://127.0.0.1:8750/_oss/solo/secret',
+            'http://localhost:6379/',
+            'http://[::1]:8080/',
+            'http://[::ffff:127.0.0.1]:8080/',
+            'http://169.254.169.254/latest/meta-data/iam/',
+            'http://[::ffff:169.254.169.254]/latest/meta-data/',
+            'http://metadata.google.internal/computeMetadata/v1/',
+            'http://100.100.100.200/latest/meta-data/',
+            'http://0.0.0.0:8000/',
+            'http://10.0.0.1/file',
+            'http://192.168.1.50/file',
+        ]) {
+            await expect(asset.external({ url: internalUrl }, ALICE))
+                .rejects.toMatchObject({ code: -32602 });
+        }
+    });
 });
 
 describe('external — must not disturb the CAS invariants', () => {

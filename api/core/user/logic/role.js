@@ -93,12 +93,14 @@ module.exports = (redisClient, config) => {
     async function assign({ uid, role } = {}) {
         if (!uid || !role) throw jsonrpc.MISSING_PARAM('uid/role');
         const permit = await resolve(role, uid);   // ownerField (if any) scoped to the user
-        const raw = await redisClient.get(userKey(uid));
-        if (!raw) throw jsonrpc.NOT_FOUND(`user ${uid}`);
-        const u = JSON.parse(raw);
-        u.permit = permit;
-        u.role = role;
-        await redisClient.set(userKey(uid), JSON.stringify(u));
+        const { optimisticUpdate } = require('../../../library/optimistic');
+        const updated = await optimisticUpdate(redisClient, userKey(uid), (u) => {
+            if (u.status === 'DELETED') throw jsonrpc.FORBIDDEN('Cannot assign role to deleted account');
+            u.permit = permit;
+            u.role = role;
+            return u;
+        });
+        if (!updated) throw jsonrpc.NOT_FOUND(`user ${uid}`);
         return { uid, role };
     }
 

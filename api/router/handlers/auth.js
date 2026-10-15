@@ -87,6 +87,12 @@ async function resolveSessionUser(token, redisClient) {
                     if (botData.permit) {
                         sessionUser.permit = botData.permit;
                     }
+                } else if (sessionUser.type === 'bot') {
+                    // Hard-deleted bot record (user.bot.delete): real bot sessions carry
+                    // type:'bot' (set at issuance in bot.js) and must fail closed when
+                    // their user:bot:{uid} record is deleted.
+                    console.warn(`[Auth] Bot ${sessionUser.uid} has no bot record — rejecting live session`);
+                    return { username: 'guest', permit: { allow_all: false, services: {} } };
                 }
             } else if (!isExternal) {
                 // Hard-deleted internal account: the record is gone, so there is nothing left
@@ -112,9 +118,10 @@ async function resolveSessionUser(token, redisClient) {
 
     // SLIDING EXPIRATION: Auto-renew admin/operator sessions — keyed off the POWER tier
     // (fallback to legacy top-level role so the bootstrap admin, role:'admin', stays recognized).
+    // Do NOT extend sessions that have been explicitly locked (sessionUser.lockedAt).
     const tier = sessionUser.power || sessionUser.role;
 
-    if (redisClient.isOpen && (tier === adminRole || tier === operatorRole)) {
+    if (redisClient.isOpen && !sessionUser.lockedAt && (tier === adminRole || tier === operatorRole)) {
         // Reset TTL based on session's own policy (or default 30m)
         const ttl = sessionUser.ttl || 1800;
         redisClient.expire(`${config.redis.sessionPrefix}${token}`, ttl)
@@ -179,10 +186,11 @@ function isLoopbackRequest(req) {
 function checkPermission(permit, service, method) {
     if (!permit) return false;
     if (permit.allow_all) return true;
-    if (!permit.services) return false;
+    if (!permit.services || typeof permit.services !== 'object') return false;
+    if (!Object.prototype.hasOwnProperty.call(permit.services, service)) return false;
 
     const allowedMethods = permit.services[service];
-    if (!allowedMethods) return false;
+    if (!Array.isArray(allowedMethods)) return false;
 
     if (allowedMethods.includes('*')) return true;
     if (allowedMethods.includes(method)) return true;

@@ -89,13 +89,16 @@ describe('gate.open consumes policy (explicit > policy > config default)', () =>
         expect(g.expiresAt).toBe(clock.now() + 600 * 1000);
     });
 
-    test('explicit caller params beat the policy', async () => {
+    test('policy requiredSigners acts as a floor; caller can raise requiredSigners or override expiresInSec', async () => {
         await policy.set({ subjectPattern: 'workflow:*', requiredSigners: 3, expiresInSec: 600 });
         const gate = createGate(redis, { config, relay: noRelay, policy });
 
-        const g = await gate.open({ subject: 'workflow:wf1:v1', digest: DIGEST, requiredSigners: 1, expiresInSec: 120 });
-        expect(g.requiredSigners).toBe(1);
-        expect(g.expiresAt).toBe(clock.now() + 120 * 1000);
+        const gFloor = await gate.open({ subject: 'workflow:wf1:v1', digest: DIGEST, requiredSigners: 1, expiresInSec: 120 });
+        expect(gFloor.requiredSigners).toBe(3);   // clamped up to policy floor
+        expect(gFloor.expiresAt).toBe(clock.now() + 120 * 1000);
+
+        const gRaised = await gate.open({ subject: 'workflow:wf1:v2', digest: DIGEST, requiredSigners: 4, expiresInSec: 120 });
+        expect(gRaised.requiredSigners).toBe(4);  // caller may raise above policy floor
     });
 
     test('no policy match → config defaults (pre-policy behavior, byte-for-byte)', async () => {

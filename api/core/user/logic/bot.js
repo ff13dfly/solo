@@ -116,7 +116,8 @@ module.exports = (redisClient, config) => {
             multi.del(botKey(uid));
             multi.sRem(KEY.idsSet, uid);
             await multi.exec();
-            return { id: uid };
+            const revoked = await killSessions(uid);
+            return { id: uid, revoked };
         },
 
         // ── TOKEN OPERATIONS ─────────────────────────────────────────────────

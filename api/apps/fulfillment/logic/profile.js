@@ -27,6 +27,19 @@ function execDigest(profile) {
 // (≠ submitter) activates them — mirrors the orchestrator workflow C1 lane.
 const REVIEW = { PENDING: 'PENDING_REVIEW', APPROVED: 'APPROVED', REJECTED: 'REJECTED' };
 
+// Governance fields are server-controlled and must never be injected by callers on create/update/submit.
+const GOVERNANCE_FIELDS = new Set([
+    'reviewState', 'approvals', 'approvedDigest', 'submittedBy', 'submittedAt',
+    'reReviewOf', 'rejectedBy', 'rejectedAt', 'rejectReason', 'enrolledBy', 'enrolledAt',
+]);
+function stripGovernance(params = {}) {
+    const clean = {};
+    for (const [k, v] of Object.entries(params || {})) {
+        if (!GOVERNANCE_FIELDS.has(k)) clean[k] = v;
+    }
+    return clean;
+}
+
 /**
  * Build the lint method index from co-located service introspection. SOLO is single-repo /
  * single-machine (CLAUDE.md §单机部署), so the introspection arrays are local static data —
@@ -109,7 +122,7 @@ module.exports = (redis, config, relay) => {
     });
 
     return {
-        create:  (params) => factory.create(params),
+        create:  (params) => factory.create(stripGovernance(params)),
         get:     (params) => factory.get(params),
         list:    (params) => factory.list(params),
 
@@ -119,19 +132,27 @@ module.exports = (redis, config, relay) => {
         // PENDING_REVIEW, clear the prior approval. So a usable (APPROVED) profile is ALWAYS
         // exactly what was approved; the edited version must be re-approved (and its instances
         // freeze meanwhile via the instance activation gate). Metadata-only edits pass through.
-        update: async (params = {}) => {
+        update: async (params = {}, req) => {
             if (!params.id) throw jsonrpc.MISSING_PARAM('id');
-            const existing = await factory.get({ id: params.id });
-            if (!existing.reviewState) return factory.update(params);
+            const clean = stripGovernance(params);
+            const existing = await factory.get({ id: clean.id });
+            if (!existing.reviewState) return factory.update(clean);
             const execChanged =
-                ('transitions' in params && canonical(params.transitions) !== canonical(existing.transitions)) ||
-                ('meta_fields' in params && canonical(params.meta_fields) !== canonical(existing.meta_fields));
-            if (!execChanged) return factory.update(params);   // metadata-only edit — no re-review
-            const lintReport = lintProfile({ ...existing, ...params }, localMethodIndex(), await lintOptions());
+                ('transitions' in clean && canonical(clean.transitions) !== canonical(existing.transitions)) ||
+                ('meta_fields' in clean && canonical(clean.meta_fields) !== canonical(existing.meta_fields));
+            if (!execChanged) return factory.update(clean);   // metadata-only edit — no re-review
+            const lintReport = lintProfile({ ...existing, ...clean }, localMethodIndex(), await lintOptions());
             if (lintReport.errors.length) {
                 throw jsonrpc.INVALID_PARAM(`Profile edit failed lint (executable fields are re-checked on edit): ${lintReport.errors.join('; ')}`);
             }
-            return factory.update({ ...params, reviewState: REVIEW.PENDING, approvals: [], approvedDigest: null, reReviewOf: existing.approvedDigest || null });
+            return factory.update({
+                ...clean,
+                reviewState: REVIEW.PENDING,
+                approvals: [],
+                approvedDigest: null,
+                reReviewOf: existing.approvedDigest || null,
+                ...(req && req.user ? { submittedBy: req.user, submittedAt: Date.now() } : {}),
+            });
         },
 
         delete:  (params) => factory.delete(params),
@@ -167,7 +188,8 @@ module.exports = (redis, config, relay) => {
         // stored definition and flips it to PENDING_REVIEW — its instances freeze immediately
         // via the activation gate (instance.js) until (re-)approved.
         submit: async (params = {}, req) => {
-            const { allowedActions = null, enroll = false, ...profile } = params || {};
+            const { allowedActions = null, enroll = false, ...rawProfile } = params || {};
+            const profile = stripGovernance(rawProfile);
 
             if (enroll) {
                 if (!profile.id) throw jsonrpc.MISSING_PARAM('id');

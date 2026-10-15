@@ -170,4 +170,16 @@ describe('§3.2 user signing keys — lifecycle', () => {
         // revoked key lives on in history for verification
         expect((await key.getPublic({ uid: 'uid-z' })).history).toContain(publicKey);
     });
+
+    test('🔴 DELETED account cannot generate or sign with signing key (P1-3a)', async () => {
+        const redis = makeFakeRedis();
+        const key = createKeyLogic(redis, config);
+        await key.generate({ password: 'pw-del-1234' }, { actor: 'uid-del' });
+        await redis.set('user:uid-del', JSON.stringify({ id: 'uid-del', status: 'DELETED' }));
+
+        await expect(key.sign({ digest: DIGEST, password: 'pw-del-1234' }, { actor: 'uid-del' }))
+            .rejects.toMatchObject({ code: -32005 });
+        await expect(key.generate({ password: 'pw-del-5678' }, { actor: 'uid-del' }))
+            .rejects.toMatchObject({ code: -32005 });
+    });
 });

@@ -164,7 +164,7 @@ async function bootstrap() {
             // Auth context (consistent with other services)
             const isAdmin = req.permit === 'admin';
             // toFix §6.4 — per-asset authorization context, threaded into asset logic.
-            const ctx = { user: req.user || null, permit: req.permit || null };
+            const ctx = { user: req.user || null, permit: req.permit || null, owner: req.constraints?.$owner || null };
 
             try {
                 const handlers = {

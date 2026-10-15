@@ -36,4 +36,26 @@ describe('runner - prototype pollution defense', () => {
         expect(target.step.s1.params.amount).toBe(42);
         expect(target.input.amount).toBe(42);
     });
+
+    test('resolveVariable and extractPath block prototype chain access (__proto__, constructor, prototype, toString)', () => {
+        const ctx = { input: { name: 'alice' } };
+        expect(runner._resolveVariable('$input.name', ctx)).toBe('alice');
+        expect(runner._resolveVariable('$input.__proto__', ctx)).toBeUndefined();
+        expect(runner._resolveVariable('$input.constructor', ctx)).toBeUndefined();
+        expect(runner._resolveVariable('$input.toString', ctx)).toBeUndefined();
+
+        const obj = { data: { id: 7 } };
+        expect(runner._extractPath(obj, 'data.id')).toBe(7);
+        expect(runner._extractPath(obj, 'data.__proto__')).toBeUndefined();
+        expect(runner._extractPath(obj, 'data.constructor.name')).toBeUndefined();
+        expect(runner._extractPath(obj, 'data.toString')).toBeUndefined();
+    });
+
+    test('resolveVariables strips __proto__, constructor, and prototype keys', () => {
+        const raw = JSON.parse('{"a":"$input.x","__proto__":{"polluted":1},"constructor":{"bad":1},"prototype":{"bad":2}}');
+        const resolved = runner._resolveVariables(raw, { input: { x: 'ok' } });
+        expect(resolved).toEqual({ a: 'ok' });
+        expect(({}).polluted).toBeUndefined();
+    });
 });
+

@@ -394,6 +394,34 @@ describe('Auth Handler', () => {
             const user = await authHandlers.resolveSessionUser('noPermUsr', mockRedis);
             expect(user.permit.allow_all).toBe(false);
         });
+
+        test('[P1-1b] hard-deleted bot session (type: "bot") with missing user:bot:{uid} resolves to guest', async () => {
+            const session = {
+                uid: 'system.deletedbot',
+                username: 'system.deletedbot',
+                type: 'bot',
+                permit: { allow_all: false, services: { planner: ['*'] } }
+            };
+            await mockRedis.set('session:delBotTok', JSON.stringify(session));
+            const user = await authHandlers.resolveSessionUser('delBotTok', mockRedis);
+            expect(user.username).toBe('guest');
+            expect(user.permit.allow_all).toBe(false);
+        });
+
+        test('[P0-4] locked admin session (lockedAt present) does NOT trigger sliding TTL renewal', async () => {
+            await mockRedis.set('session:lockedAdm', JSON.stringify({
+                username: 'admin', role: 'admin', lockedAt: Date.now(), ttl: 60
+            }));
+            await authHandlers.resolveSessionUser('lockedAdm', mockRedis);
+            expect(mockRedis.expireCalls.length).toBe(0);
+        });
+
+        test('[P1-10] checkPermission rejects Object.prototype keys like toString / constructor', () => {
+            const permit = { allow_all: false, services: { crm: ['crm.get'] } };
+            expect(authHandlers.checkPermission(permit, 'toString', 'call')).toBe(false);
+            expect(authHandlers.checkPermission(permit, 'constructor', 'name')).toBe(false);
+            expect(authHandlers.checkPermission(permit, '__proto__', 'x')).toBe(false);
+        });
     });
 
     // ─────────────────────────────────────────────────────────────────────────

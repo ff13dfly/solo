@@ -29,18 +29,18 @@ function versionKey(id, version) {
 // input to risk classification. Mirrors runner's fullMethod ({service}.{method}).
 function footprintOf(workflow) {
     const fromStep = (s) => (s && typeof s.method === 'string')
-        ? (s.method.startsWith(`${s.service}.`) ? s.method : `${s.service}.${s.method}`)
+        ? (s.service && !s.method.startsWith(`${s.service}.`) ? `${s.service}.${s.method}` : s.method)
         : null;
     return [
         ...((workflow.steps || []).map(fromStep)),
-        ...Object.values(workflow.resolvers || {}).map((r) => r && r.method),
+        ...Object.values(workflow.resolvers || {}).map(fromStep),
     ].filter((m) => typeof m === 'string' && m.length > 0);
 }
 
 // §7.4 — resolve a step to its full {service}.{method} name (mirrors footprintOf.fromStep).
 function fullMethodOf(step) {
     if (!step || typeof step.method !== 'string') return null;
-    return step.method.startsWith(`${step.service}.`) ? step.method : `${step.service}.${step.method}`;
+    return (step.service && !step.method.startsWith(`${step.service}.`)) ? `${step.service}.${step.method}` : step.method;
 }
 
 // §7.4 — split the workflow's methods into those MISSING from the live capability catalog,
@@ -58,7 +58,7 @@ function classifyMissingMethods(workflow, catalog) {
         (compTargets.has(step.id) ? missingComp : missingFwd).push(`${step.id} → ${m}`);
     }
     for (const [rkey, r] of Object.entries(workflow.resolvers || {})) {
-        const m = r && typeof r.method === 'string' ? r.method : null;
+        const m = fullMethodOf(r);
         if (m && !catalog.has(m)) missingFwd.push(`resolver:${rkey} → ${m}`);
     }
     return { missingComp, missingFwd };
@@ -95,8 +95,12 @@ function approvalDigest(workflow) {
     const material = stableStringify({
         id: workflow.id,
         steps: workflow.steps || [],
+        resolvers: workflow.resolvers || {},
         event_subscriptions: workflow.event_subscriptions || [],
         input_schema: workflow.input_schema || [],
+        allowed_triggers: workflow.allowed_triggers || ['sync'],
+        required_inputs: workflow.required_inputs || [],
+        require_actor_permit: workflow.require_actor_permit === true,
     });
     return crypto.createHash('sha256').update(material).digest('hex');
 }
@@ -412,7 +416,7 @@ module.exports = (redis, { serviceName, relay } = {}) => {
         async update({ id, name, desc, category, priority, tags, examples, negative, keywords,
                     required_inputs, optional_inputs, synonyms, allowed_triggers, steps, resolvers,
                     event_subscriptions, input_schema, strict_result, require_actor_permit, expected_version,
-                    revise = false }) {
+                    revise = false }, callerUid = null) {
             if (!id) throw jsonrpc.MISSING_PARAM('id');
 
             // Validate steps shape once, outside the CAS retry loop (pure input check).
@@ -462,7 +466,9 @@ module.exports = (redis, { serviceName, relay } = {}) => {
                 //   not something an update() call should do because a field was passed by
                 //   accident; the caller says so.
                 const isActive = existing.status === 'ACTIVE';
-                const execEdit = steps !== undefined || resolvers !== undefined || require_actor_permit !== undefined;
+                const execEdit = steps !== undefined || resolvers !== undefined || normSubs !== undefined
+                    || input_schema !== undefined || require_actor_permit !== undefined
+                    || allowed_triggers !== undefined || required_inputs !== undefined;
                 if (isActive && execEdit && revise !== true) {
                     throw jsonrpc.FORBIDDEN(
                         'Workflow locked: executable fields (steps/resolvers/require_actor_permit) are frozen while ACTIVE. ' +
@@ -501,14 +507,15 @@ module.exports = (redis, { serviceName, relay } = {}) => {
                 // no longer matches. Covers every field the digest binds, plus
                 // require_actor_permit (not digest-bound, but it changes WHO may trigger
                 // the approved definition — a mid-review flip must void collected signatures).
-                if (steps !== undefined || resolvers !== undefined || normSubs !== undefined || input_schema !== undefined || require_actor_permit !== undefined) {
+                if (execEdit) {
                     withRiskClassification(next);
                     delete next.gateId;
                     delete next.effective_at;
+                    if (callerUid) next.submittedBy = callerUid;
 
                     // An in-place revision of a LIVE workflow: it stops being runnable until
                     // re-approved. Collected signatures are void — they signed the old digest.
-                    if (isActive && execEdit) {
+                    if (isActive) {
                         next.status = 'PENDING_REVIEW';
                         next.approvals = [];
                         next.revisionOf = existing.version || 0;
@@ -618,6 +625,7 @@ module.exports = (redis, { serviceName, relay } = {}) => {
             if (callerUid && wf.submittedBy && callerUid === wf.submittedBy) {
                 throw jsonrpc.FORBIDDEN('Approver cannot be the same as the submitter');
             }
+            const digest = approvalDigest(wf);
 
             // ── §7.4: compensation-interface existence pre-check (before either lane) ──
             // A compensate step whose downstream method exists in no active service is a
@@ -639,7 +647,7 @@ module.exports = (redis, { serviceName, relay } = {}) => {
             // ── LOW: C1 fast single-sign lane ───────────────────────────────────
             if ((wf.risk_level || 'LOW') !== 'HIGH') {
                 const updated = await optimisticJsonUpdate(redis, key, (existing) => {
-                    if (existing.status !== 'PENDING_REVIEW') throw jsonrpc.FORBIDDEN(`Cannot approve a workflow in status: ${existing.status}`);
+                    if (existing.status !== 'PENDING_REVIEW' || approvalDigest(existing) !== digest) return null;
                     if (callerUid && existing.submittedBy && callerUid === existing.submittedBy) throw jsonrpc.FORBIDDEN('Approver cannot be the same as the submitter');
                     const approvals = existing.approvals || [];
                     if (callerUid && approvals.some(a => a.approvedBy === callerUid)) throw jsonrpc.FORBIDDEN('Already approved by this user');
@@ -651,14 +659,13 @@ module.exports = (redis, { serviceName, relay } = {}) => {
                         updatedAt: Date.now(),
                     };
                 }, { onMulti: (multi, { next }) => multi.json.set(versionKey(id, next.version), '$', next) });
-                if (!updated) throw jsonrpc.NOT_FOUND('Workflow');
+                if (!updated) throw jsonrpc.FORBIDDEN('Workflow status or definition changed during approval');
                 return { success: true, lane: 'C1', workflow: updated };
             }
 
             // ── HIGH: multi-signature lane via the approval service ──────────────
             if (!relay) throw jsonrpc.INTERNAL_ERROR('High-risk approval requires the approval service (relay not configured)');
 
-            const digest = approvalDigest(wf);
             const cfg = wf.approval_config || {};
 
             // Ensure a gate exists (idempotent: gateId is stored on the workflow).
@@ -672,7 +679,11 @@ module.exports = (redis, { serviceName, relay } = {}) => {
                     submitterUid: wf.submittedBy || null,
                 });
                 gateId = gate.id;
-                await optimisticJsonUpdate(redis, key, (e) => ({ ...e, gateId }));
+                const savedGate = await optimisticJsonUpdate(redis, key, (e) => {
+                    if (e.status !== 'PENDING_REVIEW' || approvalDigest(e) !== digest) return null;
+                    return { ...e, gateId };
+                });
+                if (!savedGate) throw jsonrpc.FORBIDDEN('Workflow status or definition changed during approval');
             }
 
             // Tell the caller what to sign.
@@ -689,7 +700,8 @@ module.exports = (redis, { serviceName, relay } = {}) => {
             // Threshold reached → activate, with a cooling period before it can run.
             const coolingMs = cfg.coolingMs || 0;
             const updated = await optimisticJsonUpdate(redis, key, (existing) => {
-                if (existing.status !== 'PENDING_REVIEW') throw jsonrpc.FORBIDDEN(`Cannot approve a workflow in status: ${existing.status}`);
+                if (existing.status !== 'PENDING_REVIEW' || approvalDigest(existing) !== digest) return null;
+                if (callerUid && existing.submittedBy && callerUid === existing.submittedBy) throw jsonrpc.FORBIDDEN('Approver cannot be the same as the submitter');
                 return {
                     ...existing,
                     status: 'ACTIVE',
@@ -699,7 +711,7 @@ module.exports = (redis, { serviceName, relay } = {}) => {
                     updatedAt: Date.now(),
                 };
             }, { onMulti: (multi, { next }) => multi.json.set(versionKey(id, next.version), '$', next) });
-            if (!updated) throw jsonrpc.NOT_FOUND('Workflow');
+            if (!updated) throw jsonrpc.FORBIDDEN('Workflow status or definition changed during approval');
             return { success: true, lane: 'multisig', gateId, effective_at: updated.effective_at, workflow: updated };
         },
 

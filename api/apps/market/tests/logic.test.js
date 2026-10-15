@@ -68,6 +68,21 @@ describe('market.shipment', () => {
         expect((await logic.shipment.list({})).total).toBe(1);
     });
 
+    test('idempotency_key — cross-owner replay on shipment.create rejects with NOT_FOUND (P2-5)', async () => {
+        const { walContext } = require('../../../library/entity');
+        const key = 'idem-ship-cross-1';
+        await walContext.run(
+            { actor: 'user:alice', owner: { field: '_owner', value: 'user:alice' } },
+            () => logic.shipment.create({ orderId: 'o', idempotency_key: key })
+        );
+        await expect(
+            walContext.run(
+                { actor: 'user:bob', owner: { field: '_owner', value: 'user:bob' } },
+                () => logic.shipment.create({ orderId: 'o', idempotency_key: key })
+            )
+        ).rejects.toMatchObject({ code: -32002 });
+    });
+
     test('get / list', async () => {
         const s = await logic.shipment.create({ orderId: 'o' });
         expect((await logic.shipment.get({ id: s.id })).id).toBe(s.id);
@@ -83,6 +98,21 @@ describe('market.order', () => {
         expect(o.amount).toBe(100);
         expect(o.paidAt).toBeNull();
         expect(o._event).toBeUndefined();   // order methods deliberately do NOT emit
+    });
+
+    test('idempotency_key — cross-owner replay on order.create rejects with NOT_FOUND (P2-5)', async () => {
+        const { walContext } = require('../../../library/entity');
+        const key = 'idem-ord-cross-1';
+        await walContext.run(
+            { actor: 'user:alice', owner: { field: '_owner', value: 'user:alice' } },
+            () => logic.order.create({ amount: 100, idempotency_key: key })
+        );
+        await expect(
+            walContext.run(
+                { actor: 'user:bob', owner: { field: '_owner', value: 'user:bob' } },
+                () => logic.order.create({ amount: 100, idempotency_key: key })
+            )
+        ).rejects.toMatchObject({ code: -32002 });
     });
 
     test('AML cleared path — pay → PAID, confirm → CONFIRMED', async () => {

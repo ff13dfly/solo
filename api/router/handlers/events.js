@@ -99,9 +99,13 @@ async function getRegistry(redisClient) {
 // source emit to a whole namespace of dynamically-named streams (ingress
 // creates EVENT:WEBHOOK:{source} at runtime) without per-stream registry edits.
 function checkRegistry(registry, source, stream, type) {
+    if (!registry || typeof registry !== 'object') return false;
+    if (!Object.prototype.hasOwnProperty.call(registry, source)) return false;
     const sourceRules = registry[source];
-    if (!sourceRules) return false;
-    let allowedTypes = sourceRules[stream];
+    if (!sourceRules || typeof sourceRules !== 'object') return false;
+    let allowedTypes = Object.prototype.hasOwnProperty.call(sourceRules, stream)
+        ? sourceRules[stream]
+        : undefined;
     if (!allowedTypes) {
         for (const pattern of Object.keys(sourceRules)) {
             if (pattern.endsWith('*') && stream.startsWith(pattern.slice(0, -1))) {
@@ -110,7 +114,7 @@ function checkRegistry(registry, source, stream, type) {
             }
         }
     }
-    if (!allowedTypes) return false;
+    if (!Array.isArray(allowedTypes)) return false;
     return allowedTypes.includes('*') || allowedTypes.includes(type);
 }
 

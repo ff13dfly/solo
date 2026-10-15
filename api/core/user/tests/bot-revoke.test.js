@@ -60,6 +60,7 @@ function makeFakeRedis() {
                 set(k, v) { ops.push(['set', k, v]); return chain; },
                 setEx(k, s, v) { ops.push(['setEx', k, s, v]); return chain; },
                 sAdd(k, m) { ops.push(['sAdd', k, m]); return chain; },
+                sRem(k, m) { ops.push(['sRem', k, m]); return chain; },
                 zAdd(k, entry) { ops.push(['zAdd', k, entry]); return chain; },
                 expire(k, s) { ops.push(['expire', k, s]); return chain; },
                 persist(k) { ops.push(['persist', k]); return chain; },
@@ -195,5 +196,16 @@ describe('human account revocation (the half that used to be missing)', () => {
         const t3 = await login();
         expect((await redis.sMembers(idx())).sort()).toEqual([t2, t3].sort());
         expect((await bot.revoke({ uid })).revoked).toBe(2);
+    });
+
+    test('🔴 bot.remove (user.bot.delete) 同步吊销该 bot 的所有存活 session (P1-1a)', async () => {
+        const bUid = 'system.killme';
+        await bot.create({ uid: bUid, permit: { allow_all: false, services: { user: ['user.profile'] } } });
+        const { token } = await bot.issueToken({ uid: bUid });
+        expect(await redis.get(sKey(token))).toBeTruthy();
+
+        const delRes = await bot.remove({ uid: bUid });
+        expect(delRes).toEqual({ id: bUid, revoked: 1 });
+        expect(await redis.get(sKey(token))).toBeNull();
     });
 });

@@ -137,7 +137,16 @@ app.post('/jsonrpc', async (req, res) => {
                 'user.register': (p) => Methods.user.register(p),
                 'user.login.request': (p) => Methods.user.loginRequest(p),
                 'user.login.verify': (p) => Methods.user.loginVerify(p),
-                'user.profile': (p) => Methods.user.getProfile(p),
+                'user.profile': async (p) => {
+                    const isSystemBot = typeof req.user === 'string' && req.user.startsWith('system.');
+                    if (!isAdmin && req.user !== p?.uid && !isSystemBot) throw jsonrpc.UNAUTHORIZED();
+                    const prof = await Methods.user.getProfile(p);
+                    if (!isAdmin && req.user !== p?.uid) {
+                        const { permit, devices, ...redacted } = prof;
+                        return redacted;
+                    }
+                    return prof;
+                },
                 'user.account.list': (p) => {
                     if (!isAdmin) throw jsonrpc.UNAUTHORIZED();
                     return Methods.user.list(p);
@@ -228,10 +237,16 @@ app.post('/jsonrpc', async (req, res) => {
                 // ── Roles (authority.md) — named permit templates for internal users + passports ──
                 // Permit-gated by the Router's checkAccess (CLAUDE.md §5). role.set/assign are
                 // high-privilege (they define/grant permits) — admin grants them deliberately.
-                'user.role.set':    (p) => Methods.role.set(p),
+                'user.role.set': (p) => {
+                    if (!isAdmin) throw jsonrpc.UNAUTHORIZED();
+                    return Methods.role.set(p);
+                },
                 'user.role.list':   () => Methods.role.list(),
                 'user.role.get':    (p) => Methods.role.get(p),
-                'user.role.assign': (p) => Methods.role.assign(p),   // materialize role's permit onto an internal user
+                'user.role.assign': (p) => {
+                    if (!isAdmin) throw jsonrpc.UNAUTHORIZED();
+                    return Methods.role.assign(p);
+                },   // materialize role's permit onto an internal user
 
                 // ── External principals (passport) — manageable entity + bridge (authority.md) ──
                 // Permit-gated (not hard isAdmin): an operator whose permit lists user.passport.*

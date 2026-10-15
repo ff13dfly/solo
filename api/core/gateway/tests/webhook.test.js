@@ -88,11 +88,30 @@ describe('gateway.webhook.send', () => {
             delete process.env.WEBHOOK_ALLOW_LOOPBACK;
             try {
                 const strictWebhook = require('../logic/webhook');
-                await expect(strictWebhook.send({ url: `http://127.0.0.1:${port}/cb`, payload: {} }))
-                    .rejects.toThrow(/loopback/);
+                for (const blockedUrl of [
+                    `http://127.0.0.1:${port}/cb`,
+                    `http://localhost:${port}/cb`,
+                    `http://sub.localhost:${port}/cb`,
+                    `http://[::1]:${port}/cb`,
+                    `http://[::ffff:127.0.0.1]:${port}/cb`,
+                    `http://[::]:${port}/cb`,
+                    `http://[0:0:0:0:0:0:0:1]:${port}/cb`,
+                    `http://0.0.0.1:${port}/cb`,
+                    `http://169.254.169.254/latest/meta-data/`,
+                    `http://[::ffff:169.254.169.254]/latest/meta-data/`,
+                    `http://100.100.100.200/latest/meta-data/`,
+                    `http://metadata.google.internal/computeMetadata/v1/`,
+                    `http://10.0.0.1/internal`,
+                    `http://192.168.1.1/internal`,
+                    `http://172.16.0.1/internal`,
+                ]) {
+                    await expect(strictWebhook.send({ url: blockedUrl, payload: {} }))
+                        .rejects.toThrow(/loopback/);
+                }
             } finally {
                 process.env.WEBHOOK_ALLOW_LOOPBACK = prev;
             }
         });
     });
 });
+

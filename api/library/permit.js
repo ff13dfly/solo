@@ -74,8 +74,9 @@ function hasPermit(permit, method) {
     const svc = serviceOf(method);
     if (!svc) return false;
 
+    if (!Object.prototype.hasOwnProperty.call(permit.services, svc)) return false;
     const allowed = permit.services[svc];
-    if (!allowed) return false;
+    if (!Array.isArray(allowed)) return false;
 
     if (allowed.includes('*')) return true;
     if (allowed.includes(method)) return true;

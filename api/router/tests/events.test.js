@@ -116,6 +116,13 @@ describe('checkRegistry', () => {
     test('bot source with wrong type → false', () => {
         expect(checkRegistry(REGISTRY, 'system.orchestrator', 'EVENT:WORKFLOW:NEEDS_GRANT', 'other')).toBe(false);
     });
+
+    test('[P1-10] Object.prototype keys in source or stream do not crash or match', () => {
+        expect(checkRegistry(REGISTRY, 'toString', 'EVENT:WORKFLOW:STATUS', 'x')).toBe(false);
+        expect(checkRegistry(REGISTRY, '__proto__', 'toString', 'x')).toBe(false);
+        expect(checkRegistry(REGISTRY, 'orchestrator', 'toString', 'call')).toBe(false);
+        expect(checkRegistry(REGISTRY, 'orchestrator', 'constructor', 'name')).toBe(false);
+    });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -111,7 +111,10 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
          * @attention Secured by checking if the requester is an internal/private IP.
          */
         app.get('/auth/key', (req, res) => {
-            const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+            const xff = (process.env.TRUST_PROXY === 'true' && typeof req.headers['x-forwarded-for'] === 'string')
+                ? req.headers['x-forwarded-for'].split(',').map(s => s.trim()).filter(Boolean).pop()
+                : '';
+            const ip = xff || req.socket?.remoteAddress || '';
             // Allow localhost and basic private networks (10.*, 192.168.*, 172.16-31.*)
             const isInternal = /^(::1|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)$/.test(ip.replace(/^::ffff:/, ''));
 
@@ -134,7 +137,7 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
          * @why Logic-agnostic dispatcher that handles auth, routing, and task interception.
          */
         const rpcHandler = async (req, res) => {
-            if (!req.body || typeof req.body !== 'object') {
+            if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || typeof req.body.method !== 'string') {
                 return jsonrpc.error(res, jsonrpc.INVALID_REQUEST(), null, 400);
             }
 
@@ -275,8 +278,8 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
                 const rlRules  = await handlers.ratelimit.getRules(redisClient);
                 const rlRule   = handlers.ratelimit.resolveLimit(method, CAPABILITY_MAP, rlRules);
                 const clientIp = req.socket?.remoteAddress || '127.0.0.1';
-                const rlIp     = (process.env.TRUST_PROXY === 'true' && req.headers['x-forwarded-for'])
-                    ? req.headers['x-forwarded-for'].split(',')[0].trim()
+                const rlIp     = (process.env.TRUST_PROXY === 'true' && typeof req.headers['x-forwarded-for'] === 'string')
+                    ? (req.headers['x-forwarded-for'].split(',').map(s => s.trim()).filter(Boolean).pop() || clientIp)
                     : clientIp;
                 const identity = (rlRule.by === 'user' && sessionUser.uid) ? sessionUser.uid : rlIp;
                 const rlStatus = await handlers.ratelimit.checkLimit(redisClient, method, identity, rlRule);
@@ -402,10 +405,10 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
                     const partitionKey = `${effectiveUserId}_${currentMonth}`;
 
                     let prompt = "RAW_PAYLOAD";
-                    if (params.text) prompt = params.text;
-                    else if (params.image) prompt = `[Image: ${(params.image.length / 1024).toFixed(2)}KB]`;
-                    else if (params.audio) prompt = `[Audio: ${(params.audio.length / 1024).toFixed(2)}KB]`;
-                    else if (params.user_input) prompt = params.user_input;
+                    if (params?.text) prompt = params.text;
+                    else if (params?.image) prompt = `[Image: ${(params.image.length / 1024).toFixed(2)}KB]`;
+                    else if (params?.audio) prompt = `[Audio: ${(params.audio.length / 1024).toFixed(2)}KB]`;
+                    else if (params?.user_input) prompt = params.user_input;
 
                     let status = "SUCCESS";
                     if (response.error) {

@@ -47,3 +47,5 @@
 | `$env` 环境变量通过 `$env.X` 泄露 | 2026-04-27 | `core/orchestrator/logic/runner.js` |
 | ACTIVE workflow 可修改 steps/resolvers 绕过审核 | 2026-04-27 | `core/orchestrator/logic/workflow.js` |
 | `METHOD_NOT_FOUND` 未写入 logInteraction | 2026-04-27 | `router/index.js` |
+| 🔴 `run-2` 增量复审与全仓对抗性审计发现项（`workflow.run` 入参透传绕过 H6 预审、`workflow.update` / `fulfillment.profile.update` 激活态篡改与自审绕过、`user.role.set/assign` 与 `administrator` 内部接口未校验 `isAdmin`、`system.service.add` Z-Handshake 签名预言机、Bot 硬删会话残留、`passport` `$owner.field`/停用 bot/OTP 跨应用核销、已吊销签名密钥 `history` 验签、JsonLogic `!` 嵌套与双缺失 `var` fail-open、`entity.js` `id` 键注入与 `$owner` fail-open、Gateway/Storage SSRF 与 `.meta` 侧车文件暴露、AI 提示词注入跨行/对象绕过、Router `X-Forwarded-For` 首跳伪造与限流 TTL 自愈等） | 2026-10-16（详见 `docs/feedback/done/security-audit-run2.md`，全仓 140 套 / 2,386 项 CI 单测 + 并发仿真 + 文档/弹窗静态门禁守护） | `router/` / `core/{orchestrator,user,administrator,agent,gateway,ingress,mcp}/` / `apps/{fulfillment,approval,storage,planner,collection,market}/` / `library/` |
+

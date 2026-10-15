@@ -136,7 +136,7 @@ describe('§3.1 approval gate — sign (m-of-n)', () => {
             .rejects.toMatchObject({ code: -32005 });
     });
 
-    test('a retired (history) key still verifies', async () => {
+    test('a retired (history) key is rejected for live gate signing; new active key verifies', async () => {
         const ring = makeKeyring();
         ring.add('uid-a');
         const oldSecret = ring._keys['uid-a'].secret;
@@ -145,7 +145,9 @@ describe('§3.1 approval gate — sign (m-of-n)', () => {
 
         const gate = createGate(makeFakeRedis(), { config, relay: ring.relay() });
         const g = await gate.open({ subject: 's', digest: DIGEST, requiredSigners: 1, submitterUid: 'uid-sub' });
-        const res = await gate.sign({ id: g.id, approverUid: 'uid-a', signature: sigWithOld });
+        await expect(gate.sign({ id: g.id, approverUid: 'uid-a', signature: sigWithOld }))
+            .rejects.toMatchObject({ code: -32001 });
+        const res = await gate.sign({ id: g.id, approverUid: 'uid-a', signature: ring.sign('uid-a', DIGEST) });
         expect(res.state).toBe('APPROVED');
     });
 });

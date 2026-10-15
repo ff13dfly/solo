@@ -115,6 +115,11 @@ async function checkLimit(redisClient, method, identity, rule) {
 
         if (count === 1) {
             await redisClient.expire(redisKey, windowSeconds);
+        } else if (typeof redisClient.ttl === 'function') {
+            const currentTtl = await redisClient.ttl(redisKey);
+            if (currentTtl === -1) {
+                await redisClient.expire(redisKey, windowSeconds);
+            }
         }
 
         const remaining = Math.max(0, max - count);

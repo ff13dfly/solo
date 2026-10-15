@@ -231,4 +231,14 @@ describe('planner.* — actual return satisfies declared returns_schema', () => 
         expect(checkReturn(method('planner.todo.analyze'), analyze)).toEqual([]);
         expect(checkReturn(method('planner.todo.schedule'), schedule)).toEqual([]);
     });
+
+    test('agenda.sync / todo.sync reject colon-injected or INDEX/SEQ/CURSOR ids (P1-7)', async () => {
+        for (const badId of ['INDEX', 'index', 'SEQ', 'CURSOR', 'foo:bar']) {
+            await expect(logic.agenda.sync({ events: [{ id: badId, title: 'x' }] }, USER))
+                .rejects.toMatchObject({ code: -32602 });
+            await expect(logic.todo.sync({ todos: [{ id: badId, name: 'x' }] }, USER))
+                .rejects.toMatchObject({ code: -32602 });
+        }
+    });
 });
+

@@ -70,17 +70,13 @@ module.exports = (redis, { config, relay, policy = null }) => {
             if (!subject) throw jsonrpc.MISSING_PARAM('subject');
             if (!digest || !/^[0-9a-f]{16,128}$/i.test(digest)) throw jsonrpc.INVALID_PARAM('digest must be a hex string');
 
-            // Precedence: explicit caller param > matching policy > config default.
-            // (Previously requiredSigners defaulted to 1 in the signature, which made
-            // "caller didn't say" indistinguishable from "caller said 1" — undefined now
-            // means "ask policy".)
-            const p = (requiredSigners === undefined || expiresInSec === undefined)
-                ? await policyDefaults(subject) : {};
-            const required = Math.max(1, parseInt(
-                requiredSigners !== undefined ? requiredSigners
-                    : (p.requiredSigners !== undefined ? p.requiredSigners
-                        : ((config.gate && config.gate.defaultRequiredSigners) || 1)),
-                10) || 1);
+            // Precedence: policy requiredSigners is a minimum floor; explicit caller param
+            // may raise requiredSigners or override expiresInSec; config default fills blanks.
+            const p = await policyDefaults(subject);
+            const callerReq = requiredSigners !== undefined ? (parseInt(requiredSigners, 10) || 1) : 0;
+            const policyReq = p.requiredSigners !== undefined ? (parseInt(p.requiredSigners, 10) || 1) : 0;
+            const defaultReq = (config.gate && config.gate.defaultRequiredSigners) || 1;
+            const required = Math.max(1, callerReq || policyReq || defaultReq, policyReq);
             const ttl = parseInt(
                 expiresInSec !== undefined ? expiresInSec
                     : (p.expiresInSec !== undefined ? p.expiresInSec
@@ -122,15 +118,15 @@ module.exports = (redis, { config, relay, policy = null }) => {
                 throw jsonrpc.FORBIDDEN('This approver has already signed');
             }
 
-            // Fetch the approver's public key (+ retired keys) and verify the signature
-            // binds them to THIS gate's digest. Approval is the verification authority.
+            // Fetch the approver's active public key and verify the signature
+            // binds them to THIS gate's digest. Retired/revoked history keys are rejected for live signing.
             let pub;
             try {
                 pub = await relay.call('user.key.public', { uid: approverUid });
             } catch (e) {
                 throw jsonrpc.INTERNAL_ERROR(`Could not fetch approver public key: ${e.message}`);
             }
-            const keys = [pub && pub.publicKey, ...((pub && pub.history) || [])].filter(Boolean);
+            const keys = [pub && pub.publicKey].filter(Boolean);
             if (keys.length === 0) throw jsonrpc.FORBIDDEN('Approver has no signing key');
             if (!verifyAgainst(gate.digest, signature, keys)) {
                 throw (jsonrpc.INVALID_SIGNATURE ? jsonrpc.INVALID_SIGNATURE('Signature does not verify against approver key')

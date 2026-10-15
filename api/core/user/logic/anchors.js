@@ -18,16 +18,36 @@ const BOT_UID_PREFIX = 'system.';
 // not config-derived: what matters is the key the Router will load, and a missing/renamed config
 // value must not silently turn the collision check into a no-op.
 const ROUTER_USER_PREFIX = 'user:';
+const ADMIN_USER_PREFIX = 'administrator:user:';
+const DESTROYED_UIDS_SET = 'user:destroyed:ids';
+const RESERVED_ANCHORS = new Set([
+    'admin', 'anonymous', 'guest', 'system', 'router', 'administrator',
+    'user', 'agent', 'nexus', 'orchestrator', 'gateway', 'ingress',
+    'notification', 'storage', 'fulfillment', 'approval', 'planner', 'mcp',
+]);
 
-/** Never a valid anchor, whatever exists today: bot namespace, or a `user:<sub>:…` path. */
+/** Never a valid anchor, whatever exists today: bot namespace, reserved names, or a `user:<sub>:…` path. */
 function isReservedAnchorSyntax(anchor) {
-    return typeof anchor !== 'string' || anchor.startsWith(BOT_UID_PREFIX) || anchor.includes(':');
+    if (typeof anchor !== 'string') return true;
+    const trimmed = anchor.trim();
+    if (!trimmed) return true;
+    return trimmed.startsWith(BOT_UID_PREFIX)
+        || trimmed.includes(':')
+        || RESERVED_ANCHORS.has(trimmed.toLowerCase());
 }
 
-/** Syntax, plus an internal account already holding this id as its uid. */
+/** Syntax, plus an internal account / admin account / destroyed account holding this id as its uid. */
 async function isReservedAnchor(redisClient, anchor) {
     if (isReservedAnchorSyntax(anchor)) return true;
-    return (await redisClient.exists(`${ROUTER_USER_PREFIX}${anchor}`)) === 1;
+    if ((await redisClient.exists(`${ROUTER_USER_PREFIX}${anchor}`)) === 1) return true;
+    if ((await redisClient.exists(`${ADMIN_USER_PREFIX}${anchor}`)) === 1) return true;
+    if (typeof redisClient.sIsMember === 'function') {
+        if (await redisClient.sIsMember(DESTROYED_UIDS_SET, anchor)) return true;
+    } else if (typeof redisClient.sMembers === 'function') {
+        const destroyed = await redisClient.sMembers(DESTROYED_UIDS_SET);
+        if (Array.isArray(destroyed) && destroyed.includes(anchor)) return true;
+    }
+    return false;
 }
 
-module.exports = { BOT_UID_PREFIX, isReservedAnchorSyntax, isReservedAnchor };
+module.exports = { BOT_UID_PREFIX, DESTROYED_UIDS_SET, RESERVED_ANCHORS, isReservedAnchorSyntax, isReservedAnchor };

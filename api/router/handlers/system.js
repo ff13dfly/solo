@@ -347,6 +347,9 @@ function createSystemHandlers(addServiceFn, isAdmin, dirname, redisClient, SERVI
             if (!start || !end || !step) {
                 return res.json({ jsonrpc: '2.0', error: { code: -32602, message: 'start, end, step are required' }, id });
             }
+            if (!Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(step) || step <= 0 || end < start || (end - start) / step > 10000) {
+                return res.json({ jsonrpc: '2.0', error: { code: -32602, message: 'Invalid range or step parameters' }, id });
+            }
 
             const walBaseDir = path.join(dirname, 'logs/wal');
 

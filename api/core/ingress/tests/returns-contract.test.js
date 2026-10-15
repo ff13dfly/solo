@@ -308,4 +308,33 @@ describe('ingress.* — actual return satisfies declared returns_schema', () => 
         expect(listAfter.total).toBe(0);
         expect(relay.calls.some((c) => c.method === 'event.emit')).toBe(false);
     });
+
+    test('review.approve re-inserts entry into queue if event.emit fails or returns written < 1 (P2-5)', async () => {
+        const schema = [{ name: 'amount', type: 'number', required: true }];
+        const created = await logic.source.create({ name: 'retryapprove', dataSchema: schema });
+        await logic.ingest.handle(created.apiKey, { request_id: 'req-fail', data: { amount: 'bad' } });
+
+        const list = await logic.review.list({});
+        expect(list.total).toBe(1);
+        const reviewId = list.items[0].reviewId;
+
+        // Simulate event.emit returning written: 0
+        const origCall = relay.call;
+        relay.call = async (m, p) => {
+            if (m === 'event.emit') return { ok: true, count: 1, written: 0, blocked: 1, deduped: 0 };
+            return origCall(m, p);
+        };
+        await expect(logic.review.approve({ reviewId })).rejects.toMatchObject({ code: -32603 });
+
+        // Entry must still be in the queue!
+        const listAfterZero = await logic.review.list({});
+        expect(listAfterZero.total).toBe(1);
+        expect(listAfterZero.items[0].reviewId).toBe(reviewId);
+
+        // Restore relay and approve successfully
+        relay.call = origCall;
+        const approved = await logic.review.approve({ reviewId });
+        expect(approved.ok).toBe(true);
+        expect((await logic.review.list({})).total).toBe(0);
+    });
 });
