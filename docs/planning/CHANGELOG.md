@@ -11,6 +11,27 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+---
+
+## [v1.3.1] — 2026-10-16
+
+### 🔴 `run-2` 增量复审与全仓对抗性安全审计闭环修复（清 `../feedback/done/security-audit-run2.md`）
+
+采用 MSO 对抗性“同效异路 / 白名单闸口”方法论对全仓 4 大防线开展深度审计并完成红灯→绿灯闭环修复：
+
+- **Router 网关与发现握手（`api/router/`）**：
+  - `system.service.add` Z-Handshake 签名前强制校验挑战 `seed` 格式（`/^[A-Za-z0-9_-]{8,128}$/`），阻断利用共享 Ed25519 私钥签发伪造 `X-Router-Token` JSON 的签名预言机；握手补齐 `maxRedirects: 0` 与 `0.0.0.0` / `100.100.100.200` / IPv6 映射元数据地址拦截。
+  - `resolveSessionUser` 对硬删后的 `type === 'bot'` 会话立即降级为 `guest`；锁定会话（`lockedAt`）跳过滑动续期；`checkPermission` 与 `events.checkRegistry` 补齐 `hasOwnProperty` 原型链守卫。
+  - 统一拦截 JSON-RPC 批量数组与非字符串 `method`；`TRUST_PROXY=true` 时取 `X-Forwarded-For` 最右侧可信跳；`ratelimit.checkLimit` 在 `count > 1 && ttl === -1` 时自动自愈补设 TTL；`wal.stats.range` 校验 `step > 0` 与分桶上限。
+- **编排、审批与履约（`orchestrator` / `fulfillment` / `approval` / `mcp` / `library/jsonlogic.js`）**：
+  - `orchestrator.workflow.run` 入参白名单收敛为仅透传 `{ workflowId, input }`，剥离 `oneTimeGrant` / `triggerSource` / `compensationProgress`，防止绕过 H6 足迹权限预审。
+  - `workflow.update` 与 `fulfillment.profile.update` 冻结激活态全部可执行/触发字段、剥离 `reviewState`/`approvals`/`approvedDigest` 等治理字段，并在编辑时重置 `submittedBy = req.user` 阻断换人编辑后自审；`footprint` 统一做 `${service}.${method}` 归一化。
+  - `approval.gate.sign` / `record.confirm` 仅接受当前激活签名密钥（拒绝 `history` 已轮换/已吊销密钥），`gate.open` 以匹配 `policy.requiredSigners` 为最小签名人数下限。
+  - `library/jsonlogic.js` 修复 `!`/`!!` 否定包裹比较运算、双缺失变量 `==`/`===` 及 `[path, null]` 默认值下的 fail-open。
+- **身份、护照、管理端与存储/SSRF/AI 注入盾（`user` / `administrator` / `entity.js` / `storage` / `gateway` / `ingress` / `agent`）**：
+  - `user.role.set/assign` 与 `administrator` 内部改密/日志/配置接口补齐 `isAdmin` 强校验；`bot.remove` 同步 `killSessions`；`anchors.js` 封禁 `'admin'`、服务名与已销毁 UID 墓碑集；`passport.js` 强制校验 `$owner.field`、活跃 bot 状态与 OTP `app` 绑定；删号同步吊销 `USER:SIGNKEY:{uid}`。
+  - `library/entity.js` 拦截含 `:` 或保留字 `INDEX`/`SEQ`/`CURSOR` 的 `id`，残缺 `$owner` 约束改为 fail-closed；`storage` 透传 `$owner` 隔离外部租户并封禁 `.meta` 侧车访问；`gateway` 与 `storage` 统一拦截 IPv6 映射回环、私网与云元数据 SSRF；`injection-detect.js` 补齐跨行/零宽归一化、对象递归扫描与 `agent.decide` `instruction` 扫描；`deploy/check-doc-drift.js` 新增前端原生弹窗静态门禁。
+
 ### 🔴 安全复评（2026-09-27，`/security-review` 审 `e1f5306..HEAD`）查出的三处，均在 user 服务内修复
 
 复评本身的结论：v1.2.16 / v1.3.0 那批改动**没有**引入 High/Medium 问题。下面三处中，前两处是**更早就存在**、
@@ -33,11 +54,15 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
   并删掉 anchor 落在保留空间里的活 passport session。失败只记日志、下次启动重试，不阻塞启动。
 - **守护**：`passport-otp.test.js` +10、`bot-revoke.test.js` +3、新 `session-migrate.test.js` 7 例（进 CI 白名单）；
   前两个文件的新用例**对旧代码 11 例红**（实测）。user GUIDE、`spec-passport-identity-line.md`、`security.md` 台账同步。
-- 没做：Router 侧对外部会话跳过 `user:` / bot 读取（纵深防御，Router 保护区，需另行授权）。
+
+### 🟢 单机单用户精简档 `deploy/services.minimal.json`（清 `../feedback/done/solo-lightweight-single-user-feedback.md`）
+
+- 新增 [`deploy/services.minimal.json`](../../deploy/services.minimal.json)（仅启 `router` + `administrator` + `user` + `storage` 4 个基础服务），供单机单用户/轻量派生项目通过 `SERVICES_MANIFEST=deploy/services.minimal.json` 按需裁剪。
 
 下游 action：多数项目无需改动，升级后首次启动 user 服务时日志会有一行 `[sessions] migrated live sessions: …`。
-开过 `device` 发证的项目留意两点：① 已有护照的 anchor 不能再 `device.issue`（设备令牌丢了 = 换新设备 anchor）；
-② 升级前可以自查有没有被利用过：`redis-cli --scan --pattern 'USER:PASSPORT:system.*'`，以及列出 `USER:PASSPORT:IDS` 里含 `:` 的成员——
+开过 `device` 发证或外部 `passport` 的项目留意三点：① 已有护照的 anchor 不能再 `device.issue`（设备令牌丢了 = 换新设备 anchor）；
+② 外部护照对应角色必须配置非空的 `constraints.$owner.field`（如 `owner_id` / `user_id`），否则拒绝签发外部会话；
+③ 升级前可自查是否有保留名 anchor：`redis-cli --scan --pattern 'USER:PASSPORT:system.*'` 及 `USER:PASSPORT:admin`——
 有输出就说明有人用过保留 anchor，迁移会删掉它们的活会话，实体本身建议 `user.passport.disable`。
 
 ---
