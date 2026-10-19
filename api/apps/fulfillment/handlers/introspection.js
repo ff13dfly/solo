@@ -97,10 +97,12 @@ const methods = [
     {
         name: 'fulfillment.instance.list',
         params: [
-            { name: 'state',    type: 'string',  required: false, maxLength: 64, description: 'Filter by state' },
-            { name: 'sourceId', type: 'string',  required: false, maxLength: 64, pattern: 'id', description: 'Filter by source order ID (exact match) — the client-side idempotency probe: look up whether an instance for this sourceId already exists before creating one (instance.create does NOT dedupe by sourceId)' },
-            { name: 'limit',    type: 'number',  required: false, description: 'Page size' },
-            { name: 'offset',   type: 'number',  required: false, description: 'Page offset' }
+            { name: 'state',              type: 'string',  required: false, maxLength: 64, description: 'Filter by state' },
+            { name: 'sourceId',           type: 'string',  required: false, maxLength: 64, pattern: 'id', description: 'Filter by source order ID (exact match) — the client-side idempotency probe: look up whether an instance for this sourceId already exists before creating one (instance.create does NOT dedupe by sourceId)' },
+            { name: 'profileId',          type: 'string',  required: false, maxLength: 64, pattern: 'id', description: 'Filter by fulfillment profile ID' },
+            { name: 'stateChangedBefore', type: 'number',  required: false, description: 'Filter instances whose stateChangedAt <= this epoch ms timestamp (for external sentinel stale/timeout sweeps)' },
+            { name: 'limit',              type: 'number',  required: false, description: 'Page size' },
+            { name: 'offset',             type: 'number',  required: false, description: 'Page offset' }
         ],
         description: 'List all fulfillment instances',
         returns_schema: LIST_RETURN,     // { items: instance[], total } — items always [] on empty
@@ -110,10 +112,11 @@ const methods = [
     {
         name: 'fulfillment.instance.transition',
         params: [
-            { name: 'id',         type: 'string', required: true,  maxLength: 64, pattern: 'id', description: 'Instance ID' },
-            { name: 'event',      type: 'string', required: true,  maxLength: 64, description: 'Transition event/trigger name, defined in the applied profile transitions[].event. The engine matches (event, from=current state) and derives the target state from the matched rule\'s `to` field — the caller does NOT pass the target state.' },
-            { name: 'metaUpdate', type: 'object', required: false, description: 'Metadata merged into instance.meta BEFORE the JsonLogic condition is evaluated' },
-            { name: 'meta',       type: 'object', required: false, description: 'Alias for metaUpdate (create/update call this field `meta`; both merge identically). Prefer metaUpdate — it names the merge semantics.' }
+            { name: 'id',                   type: 'string', required: true,  maxLength: 64, pattern: 'id', description: 'Instance ID' },
+            { name: 'event',                type: 'string', required: true,  maxLength: 64, description: 'Transition event/trigger name, defined in the applied profile transitions[].event. The engine matches (event, from=current state) and derives the target state from the matched rule\'s `to` field — the caller does NOT pass the target state.' },
+            { name: 'metaUpdate',           type: 'object', required: false, description: 'Metadata merged into instance.meta BEFORE the JsonLogic condition is evaluated' },
+            { name: 'meta',                 type: 'object', required: false, description: 'Alias for metaUpdate (create/update call this field `meta`; both merge identically). Prefer metaUpdate — it names the merge semantics.' },
+            { name: 'expectedTransitionId', type: 'string', required: false, maxLength: 80, description: 'Optimistic concurrency guard: if supplied, must match the latest history[].transition_id (e.g. FL-20261019-1234-T2) or the transition is rejected (prevents ABA stale callbacks in self-healing loops)' }
         ],
         description: 'Trigger a state transition on a fulfillment instance. Transitions must be defined in the applied profile; the engine evaluates JsonLogic conditions before applying. Metadata goes in `metaUpdate` (`meta` accepted as an alias).',
         returns_schema: INSTANCE_WITH_TASKS,   // { ...instance, _tasks } — _tasks for Router async dispatch
@@ -166,8 +169,9 @@ const methods = [
     {
         name: 'fulfillment.instance.update',
         params: [
-            { name: 'id',   type: 'string', required: true, maxLength: 64, pattern: 'id', description: 'Instance ID' },
-            { name: 'meta', type: 'object', required: false, description: 'Metadata to MERGE into instance.meta (e.g. cached meta_fields.source values pulled by the frontend)' }
+            { name: 'id',                   type: 'string', required: true,  maxLength: 64, pattern: 'id', description: 'Instance ID' },
+            { name: 'meta',                 type: 'object', required: false, description: 'Metadata to MERGE into instance.meta (e.g. cached meta_fields.source values pulled by the frontend)' },
+            { name: 'expectedTransitionId', type: 'string', required: false, maxLength: 80, description: 'Optimistic concurrency guard: if supplied, must match the latest history[].transition_id or the update is rejected' }
         ],
         description: 'Update instance metadata (merges meta). Used to cache meta_fields.source values before a transition evaluates its condition.',
         // update() always stamps updatedAt and returns the bare instance — no _tasks.

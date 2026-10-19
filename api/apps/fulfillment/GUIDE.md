@@ -114,8 +114,10 @@ await call('setting.task.update', { whitelist: wl }); // ← 整体替换，不�
   只留 `updatedBy` + `updatedAt`——要可回放就把证据随 transition 的 `metaUpdate` 送，别先 update 再空跃迁。
 - **profile 软删**：`delete` 是软删，返回**整条记录**（`status: DELETED`），不是 `{ success: true }`；
   `restore` 复活为 ACTIVE；`destroy` 才是真删、返回 `{ success: true }`。instance **不软删**。
-- **写方法对 AI 关闭**：只有 create/get/list 类是 `ai:true`（LLM 可自主调）；所有 transition/cancel/hold/
-  override/审批类是 `ai:false`——状态推进走人工或明确授权的执行层，不由 LLM 直接触发（决策/执行分层）。
+- **写方法对 AI 关闭（但向已获授权账号开放自省）**：只有 create/get/list 类是 `ai:true`（LLM 自由对话可自主调）；所有 transition/cancel/hold/
+  override/审批类是 `ai:false`——状态推进走人工或明确授权的执行层，不由 LLM 自由触发（决策/执行分层）。若外部哨兵使用最小权限账号（非 admin），只要在 RBAC `permit.services.fulfillment` 中显式授予了这些写方法，调用 `system.capability.list` 即可自省到已授权方法的完整参数契约，同时也可随时调 `system.guide { service: "fulfillment" }` 查阅本配方。
+- **自愈环路防 ABA 并发覆盖（`expectedTransitionId`）**：当状态机存在 `EXECUTING <-> needs_assist` 等环路时，迟到的上一轮回调可能因 `fromState` 再次同名而误推状态或覆盖 `meta`。`transition` 与 `update` 均支持可选参数 `expectedTransitionId`（传当前轮次的 `instance.history.at(-1).transition_id`，如 `FL-xxx-T2`），若实例已被推进到新轮次则立即拒绝（`-32602`）。
+- **多车道与僵尸单巡检（`list` 过滤）**：`fulfillment.instance.list` 支持 `profileId`（按车道过滤）与 `stateChangedBefore`（epoch ms，筛选 `stateChangedAt <= stateChangedBefore` 的超时驻留实例），供外部定时哨兵扫描超时卡死单。
 - **时间戳是 epoch 毫秒数字**（`stateChangedAt`/`createdAt`），不是 ISO 字符串；例外：`hold` 的
   `expectedResume` 参数按 ISO 8601 字符串传。
 - **外键 `{targetService}Id`**：`profileId` 指模板；`sourceId` 是外部订单号，刻意不带命名空间（来自任意上游）。

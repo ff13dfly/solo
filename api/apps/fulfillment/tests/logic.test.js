@@ -239,6 +239,92 @@ describe('fulfillment.instance', () => {
         const anon = await logic.instance.update({ id: inst.id, meta: { c: 3 } });
         expect(anon.updatedBy).toBeNull();
     });
+
+    test('list — filters by profileId and stateChangedBefore', async () => {
+        const inst1 = await logic.instance.create({ sourceId: 'ORD-L1', profileId: PROFILE_ID }, MOCK_REQ);
+        const inst2 = await logic.instance.create({ sourceId: 'ORD-L2', profileId: SM_ID }, MOCK_REQ);
+
+        // Manually backdate inst1.stateChangedAt to simulate a stale instance
+        const staleTs = Date.now() - 600_000;
+        const stored1 = JSON.parse(await redis.get(`${config.redis.instancePrefix}${inst1.id}`));
+        stored1.stateChangedAt = staleTs;
+        await redis.set(`${config.redis.instancePrefix}${inst1.id}`, JSON.stringify(stored1));
+
+        const byProfile = await logic.instance.list({ profileId: SM_ID });
+        expect(byProfile.total).toBe(1);
+        expect(byProfile.items[0].id).toBe(inst2.id);
+
+        const staleOnly = await logic.instance.list({ stateChangedBefore: staleTs + 1000 });
+        expect(staleOnly.total).toBe(1);
+        expect(staleOnly.items[0].id).toBe(inst1.id);
+    });
+
+    test('transition & update — expectedTransitionId prevents ABA stale callback races in self-healing loops', async () => {
+        const loopProfile = {
+            id: 'loop-test',
+            name: 'Self-healing loop test',
+            status: 'ACTIVE',
+            transitions: [
+                { event: 'start_task',      from: 'DRAFT',          to: 'EXECUTING_TASK', condition: null, actions: [] },
+                { event: 'task_failed',     from: 'EXECUTING_TASK', to: 'needs_assist',   condition: null, actions: [] },
+                { event: 'assist_resolved', from: 'needs_assist',   to: 'EXECUTING_TASK', condition: null, actions: [] },
+                { event: 'task_done',       from: 'EXECUTING_TASK', to: 'COMPLETED',      condition: null, actions: [] },
+            ],
+        };
+        await redis.set(`${config.redis.profilePrefix}loop-test`, JSON.stringify(loopProfile));
+
+        const inst = await logic.instance.create({ sourceId: 'ORD-ABA', profileId: 'loop-test' }, MOCK_REQ);
+        // Round 1: DRAFT → EXECUTING_TASK (T2)
+        const r1 = await logic.instance.transition({ id: inst.id, event: 'start_task' }, MOCK_REQ);
+        const round1Tid = r1.history.at(-1).transition_id;
+        expect(round1Tid).toBe(`${inst.id}-T2`);
+
+        // Sentinel moves it to needs_assist (T3) and resolves back to EXECUTING_TASK (T4)
+        await logic.instance.transition({ id: inst.id, event: 'task_failed', expectedTransitionId: round1Tid }, MOCK_REQ);
+        const r2 = await logic.instance.transition({ id: inst.id, event: 'assist_resolved' }, MOCK_REQ);
+        const round2Tid = r2.history.at(-1).transition_id;
+        expect(r2.state).toBe('EXECUTING_TASK');
+        expect(round2Tid).toBe(`${inst.id}-T4`);
+
+        // Late callback from Round 1 tries to transition or update using stale round1Tid → REJECTED
+        await expect(
+            logic.instance.transition({
+                id: inst.id,
+                event: 'task_failed',
+                metaUpdate: { error: 'Job-A late timeout' },
+                expectedTransitionId: round1Tid,
+            }, MOCK_REQ)
+        ).rejects.toMatchObject({ code: -32602 });
+
+        await expect(
+            logic.instance.update({
+                id: inst.id,
+                meta: { dirty: 'from-round-1' },
+                expectedTransitionId: round1Tid,
+            }, MOCK_REQ)
+        ).rejects.toMatchObject({ code: -32602 });
+
+        // Instance remains untouched in Round 2's EXECUTING_TASK state
+        const current = await logic.instance.get({ id: inst.id });
+        expect(current.state).toBe('EXECUTING_TASK');
+        expect(current.meta.error).toBeUndefined();
+        expect(current.meta.dirty).toBeUndefined();
+
+        // Round 2 callback with matching round2Tid succeeds
+        const updatedR2 = await logic.instance.update({
+            id: inst.id,
+            meta: { attempt: 2 },
+            expectedTransitionId: round2Tid,
+        }, MOCK_REQ);
+        expect(updatedR2.meta.attempt).toBe(2);
+
+        const done = await logic.instance.transition({
+            id: inst.id,
+            event: 'task_done',
+            expectedTransitionId: round2Tid,
+        }, MOCK_REQ);
+        expect(done.state).toBe('COMPLETED');
+    });
 });
 
 // ============================================================
@@ -265,16 +351,52 @@ describe('fulfillment.instance — dedicated operations', () => {
         await expect(logic.instance.cancel({ id, reason: '' }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
     });
 
-    test('hold → resume — pause to ON_HOLD then restore prevState', async () => {
-        const id = await newProcessing('ORD-H1');
-        const held = await logic.instance.hold({ id, reason: 'supplier delay', expectedResume: '2026-07-01' }, MOCK_REQ);
+    test('hold → resume — pause to ON_HOLD then restore prevState, emitting EVENT:FULFILLMENT:TRANSITIONED and recording trace', async () => {
+        const emitted = [];
+        const mockRelay = {
+            call: jest.fn(async (method, payload) => {
+                emitted.push({ method, payload });
+                return { ok: true };
+            }),
+        };
+        const logicWithRelay = createLogic(redis, config, { relay: mockRelay });
+        const { walContext } = require('../../../library/entity');
+
+        const inst = await logicWithRelay.instance.create({ sourceId: 'ORD-H1', profileId: SM_ID }, MOCK_REQ);
+        await logicWithRelay.instance.transition({ id: inst.id, event: 'start' }, MOCK_REQ);
+        const id = inst.id;
+
+        const held = await logicWithRelay.instance.hold({ id, reason: 'supplier delay', expectedResume: '2026-07-01' }, MOCK_REQ);
         expect(held.state).toBe('ON_HOLD');
         expect(held.prevState).toBe('PROCESSING');
         expect(held.meta.hold_reason).toBe('supplier delay');
 
-        const resumed = await logic.instance.resume({ id }, MOCK_REQ);
+        emitted.length = 0;
+        const resumed = await walContext.run({ trace: 'trace-resume-001' }, () =>
+            logicWithRelay.instance.resume({ id }, MOCK_REQ)
+        );
         expect(resumed.state).toBe('PROCESSING');
-        expect(resumed.history[resumed.history.length - 1].event).toBe('resume');
+        const lastEntry = resumed.history[resumed.history.length - 1];
+        expect(lastEntry.event).toBe('resume');
+        expect(lastEntry.trace).toBe('trace-resume-001');
+
+        expect(emitted).toHaveLength(1);
+        expect(emitted[0].method).toBe('event.emit');
+        expect(emitted[0].payload).toMatchObject({
+            stream: 'EVENT:FULFILLMENT:TRANSITIONED',
+            type:   'instance.transitioned',
+            actor:  `fulfillment:${id}`,
+            payload: {
+                instanceId:   id,
+                profileId:    SM_ID,
+                sourceId:     'ORD-H1',
+                fromState:    'ON_HOLD',
+                toState:      'PROCESSING',
+                event:        'resume',
+                transitionId: lastEntry.transition_id,
+                user:         MOCK_REQ.user,
+            },
+        });
     });
 
     test('override — admin force-advances past a failing condition; non-admin is forbidden', async () => {

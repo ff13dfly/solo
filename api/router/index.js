@@ -219,7 +219,7 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
                     if (!isAdmin) return jsonrpc.error(r, jsonrpc.FORBIDDEN('Admin required'), i);
                     return serviceHandlers.removeService(p, i, r);
                 },
-                'system.capability.list': (p, i, r) => serviceHandlers.capabilities(p, i, r, isAdmin),
+                'system.capability.list': (p, i, r) => serviceHandlers.capabilities(p, i, r, isAdmin, sessionUser?.permit),
                 // Anonymous bootstrap doc; per-service variant self-gates in the
                 // handler (auth required in production, like DISCOVERY_METHODS).
                 'system.guide': (p, i, r) => systemHandlers.systemGuide(p, i, r, isAdmin, !!sessionUser.uid),

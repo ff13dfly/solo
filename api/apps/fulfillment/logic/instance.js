@@ -74,11 +74,19 @@ module.exports = (redis, config, relay = null) => {
      * JsonLogic condition (override), applies the state change + history, and
      * builds idempotency-keyed _tasks. See docs/IMPLEMENTATION.md §幂等契约.
      */
-    async function advance({ id, event, metaUpdate = {}, skipCondition = false, forced = false, reason = null }, req) {
+    async function advance({ id, event, metaUpdate = {}, skipCondition = false, forced = false, reason = null, expectedTransitionId = null }, req) {
         if (!id)    throw jsonrpc.MISSING_PARAM('id');
         if (!event) throw jsonrpc.MISSING_PARAM('event');
 
         const instance  = await getInstance(id, req);
+        if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
+            const currentTransitionId = instance.history.at(-1)?.transition_id || null;
+            if (currentTransitionId !== expectedTransitionId) {
+                throw jsonrpc.INVALID_PARAM(
+                    `Stale transition_id for instance ${id}: expected "${expectedTransitionId}", current is "${currentTransitionId}"`
+                );
+            }
+        }
         const fromState  = instance.state;
         const profile    = await loadProfile(instance.profileId);
 
@@ -234,9 +242,9 @@ module.exports = (redis, config, relay = null) => {
         },
 
         /**
-         * fulfillment.instance.list — paginated, optional state/sourceId filter.
+         * fulfillment.instance.list — paginated, optional state/sourceId/profileId/stateChangedBefore filter.
          */
-        async list({ state, sourceId, limit = 50, offset = 0 } = {}, req) {
+        async list({ state, sourceId, profileId, stateChangedBefore, limit = 50, offset = 0 } = {}, req) {
             const ids = await redis.sMembers(INDEX); // SAFE: bounded — one index entry per fulfillment instance
             if (!ids || ids.length === 0) return { items: [], total: 0 };
 
@@ -246,8 +254,10 @@ module.exports = (redis, config, relay = null) => {
             let items = results.filter(r => r !== null).map(r => JSON.parse(r));
             const owner = resolveOwner(req);
             if (owner && owner.field) items = items.filter(i => i[owner.field] === owner.value);
-            if (state)    items = items.filter(i => i.state === state);
-            if (sourceId) items = items.filter(i => i.sourceId === sourceId);
+            if (state)     items = items.filter(i => i.state === state);
+            if (sourceId)  items = items.filter(i => i.sourceId === sourceId);
+            if (profileId) items = items.filter(i => i.profileId === profileId);
+            if (Number.isFinite(stateChangedBefore)) items = items.filter(i => i.stateChangedAt <= stateChangedBefore);
             items.sort((a, b) => b.createdAt - a.createdAt);
 
             const total = items.length;
@@ -267,8 +277,8 @@ module.exports = (redis, config, relay = null) => {
          * Both names carry the same merge-into-instance.meta semantics, so the alias
          * is safe; `metaUpdate` stays canonical (it says "merge", not "replace").
          */
-        async transition({ id, event, metaUpdate, meta }, req) {
-            return advance({ id, event, metaUpdate: metaUpdate ?? meta ?? {}, skipCondition: false }, req);
+        async transition({ id, event, metaUpdate, meta, expectedTransitionId }, req) {
+            return advance({ id, event, metaUpdate: metaUpdate ?? meta ?? {}, skipCondition: false, expectedTransitionId }, req);
         },
 
         /**
@@ -318,10 +328,31 @@ module.exports = (redis, config, relay = null) => {
             instance.stateChangedAt = Date.now();
             instance.history.push({
                 state: toState, event: 'resume', transition_id: transitionId,
-                reason: `resumed from ${fromState}`, user: req?.user || null, stamp: Date.now()
+                reason: `resumed from ${fromState}`, user: req?.user || null,
+                trace: walContext.getStore()?.trace || null, stamp: Date.now()
             });
 
             await redis.set(getInstanceKey(id), JSON.stringify(instance));
+
+            if (relay) {
+                relay.call('event.emit', {
+                    stream:  'EVENT:FULFILLMENT:TRANSITIONED',
+                    type:    'instance.transitioned',
+                    actor:   `fulfillment:${id}`,
+                    payload: {
+                        instanceId:   id,
+                        profileId:    instance.profileId,
+                        sourceId:     instance.sourceId,
+                        fromState,
+                        toState,
+                        event:        'resume',
+                        transitionId,
+                        user:         req?.user || null,
+                        stamp:        instance.stateChangedAt,
+                    },
+                }).catch((err) => logger.warn(`emit EVENT:FULFILLMENT:TRANSITIONED failed (${transitionId}): ${err.message}`));
+            }
+
             logger.info(`Instance ${id}: ${fromState} → ${toState} (resume, ${transitionId})`);
             return instance;
         },
@@ -339,8 +370,16 @@ module.exports = (redis, config, relay = null) => {
         /**
          * fulfillment.instance.update — metadata/field update (restricted fields blocked).
          */
-        async update({ id, meta } = {}, req) {
+        async update({ id, meta, expectedTransitionId } = {}, req) {
             const instance = await getInstance(id, req);
+            if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
+                const currentTransitionId = instance.history.at(-1)?.transition_id || null;
+                if (currentTransitionId !== expectedTransitionId) {
+                    throw jsonrpc.INVALID_PARAM(
+                        `Stale transition_id for instance ${id}: expected "${expectedTransitionId}", current is "${currentTransitionId}"`
+                    );
+                }
+            }
 
             // updatedBy: this is the ONLY write path for meta that leaves no history entry,
             // and meta is what the JsonLogic guards judge — so "a probe wrote this fact" vs

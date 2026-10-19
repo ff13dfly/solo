@@ -124,11 +124,28 @@ describe('Service Handlers', () => {
             expect(res.sentData.result[0].id).toBe('svc1');
         });
 
-        test('capabilities - should return map', () => {
-             CAPABILITY_MAP['m1'] = { ai: true };
-             const res = new MockResponse();
-             handlers.capabilities({}, 1, res);
-             expect(res.sentData.result.m1).toBeDefined();
+        test('capabilities - should return map and include caller-permitted ai:false methods', () => {
+             CAPABILITY_MAP['m1'] = { service: 'svc1', ai: true };
+             CAPABILITY_MAP['fulfillment.instance.transition'] = { service: 'fulfillment', ai: false };
+             CAPABILITY_MAP['fulfillment.instance.override']   = { service: 'fulfillment', ai: false };
+
+             // Guest / no permit: sees only ai:true / public:true
+             const resGuest = new MockResponse();
+             handlers.capabilities({}, 1, resGuest, false, null);
+             expect(resGuest.sentData.result.m1).toBeDefined();
+             expect(resGuest.sentData.result['fulfillment.instance.transition']).toBeUndefined();
+
+             // Non-admin sentinel with explicit permit for fulfillment.instance.transition:
+             // sees m1 + transition, but NOT override
+             const sentinelPermit = {
+                 allow_all: false,
+                 services: { fulfillment: ['fulfillment.instance.transition'] },
+             };
+             const resSentinel = new MockResponse();
+             handlers.capabilities({ all: true }, 2, resSentinel, false, sentinelPermit);
+             expect(resSentinel.sentData.result.m1).toBeDefined();
+             expect(resSentinel.sentData.result['fulfillment.instance.transition']).toBeDefined();
+             expect(resSentinel.sentData.result['fulfillment.instance.override']).toBeUndefined();
         });
 
         test('removeService - should remove service and caps', async () => {
