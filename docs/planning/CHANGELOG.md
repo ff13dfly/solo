@@ -11,7 +11,11 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
-### 🔴 `fulfillment` & `router` 外部哨兵自愈环路补齐与专项安全审计加固（`../security/FULFILLMENT_ROUTER_AUDIT_REPORT.md`）
+---
+
+## [v1.3.2] — 2026-10-19
+
+### 🔴 `fulfillment` & `router` 外部哨兵自愈环路补齐与专项安全审计加固（`../feedback/done/fulfillment-external-sentinel-and-loop-concurrency.md`、`../security/FULFILLMENT_ROUTER_AUDIT_REPORT.md`）
 
 - **`fulfillment` 状态机乐观锁与生命周期防线（`api/apps/fulfillment/`）**：
   - `fulfillment.instance.transition`、`fulfillment.instance.update`、`fulfillment.instance.resume` 均支持可选 `expectedTransitionId` 乐观并发守卫，并通过进程内实例级串行锁 `withInstanceLock` + Redis `optimisticUpdate`（`WATCH/MULTI/EXEC` CAS）保证检查与写入的原子性，消除并发回调与超时哨兵的 TOCTOU 覆盖竞态。
@@ -22,6 +26,10 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
   - `system.capability.list` 在过滤非公开、`ai: false` 方法时仅向 `permit.services[service]` **显式列名授权**的调用方返回对应方法，修复通配符（`*`）泄露管理方法及管理员未传 `all: true` 时过滤失效的问题。
   - Phase 2 本地 `METHODS`（`system.service.{list,status}`、`system.capability.list`、`system.category.{locate,list}`、`system.workflow.list`）统一接入生产环境未认证拦截门禁；`system.category.list` 仅允许管理员使用 `includeDeleted: true`。
   - `handlers.tasks.processTasks` 将调用方 `sessionUser.permit.constraints`（如外部护照 `$owner` 行级隔离作用域）签入异步任务 `X-Router-Token` 载荷。
+- **Portal System 可观测性（`portal/system/`）**：
+  - `Ingress Deliveries` 标签页支持可调回溯时间窗口（1h / 6h / 24h / 7d / 30d）。
+
+下游 action：无。全部改动向后兼容；使用外部哨兵自愈环路（如 `steward`）的消费方升级至 `v1.3.2` 后，可在 `fulfillment.instance.{transition,update,resume}` 中传入 `expectedTransitionId` 并在 `fulfillment.instance.list` 中使用 `profileId` / `stateChangedBefore` 过滤。
 
 ---
 
