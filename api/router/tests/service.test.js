@@ -146,6 +146,26 @@ describe('Service Handlers', () => {
              expect(resSentinel.sentData.result.m1).toBeDefined();
              expect(resSentinel.sentData.result['fulfillment.instance.transition']).toBeDefined();
              expect(resSentinel.sentData.result['fulfillment.instance.override']).toBeUndefined();
+
+             // Non-admin with service wildcard ['*'] does NOT leak ai:false admin-only methods
+             const wildcardPermit = {
+                 allow_all: false,
+                 services: { fulfillment: ['*'] },
+             };
+             const resWildcard = new MockResponse();
+             handlers.capabilities({}, 3, resWildcard, false, wildcardPermit);
+             expect(resWildcard.sentData.result.m1).toBeDefined();
+             expect(resWildcard.sentData.result['fulfillment.instance.override']).toBeUndefined();
+
+             // Admin without params.all === true gets filtered discovery map; with params.all === true gets raw map
+             const adminPermit = { allow_all: true, services: {} };
+             const resAdminFiltered = new MockResponse();
+             handlers.capabilities({}, 4, resAdminFiltered, true, adminPermit);
+             expect(resAdminFiltered.sentData.result['fulfillment.instance.override']).toBeUndefined();
+
+             const resAdminAll = new MockResponse();
+             handlers.capabilities({ all: true }, 5, resAdminAll, true, adminPermit);
+             expect(resAdminAll.sentData.result['fulfillment.instance.override']).toBeDefined();
         });
 
         test('removeService - should remove service and caps', async () => {

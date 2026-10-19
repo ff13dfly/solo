@@ -107,7 +107,7 @@ async function postWithRetry(url, rpcBody, headers, redisClient, targetService, 
  *      await/retry only bounds how long a task keeps trying in the background, it does
  *      not change the overall at-most-once delivery semantics (still no durable queue).
  */
-async function processTasks(tasks, username, isAdmin, SERVICES, keypair, redisClient, sourceService, CAPABILITY_MAP, traceCtx = null) {
+async function processTasks(tasks, username, isAdmin, SERVICES, keypair, redisClient, sourceService, CAPABILITY_MAP, traceCtx = null, constraints = null) {
     if (!tasks || tasks.length === 0) return;
 
     console.log(`[Tasks] Dispatching ${tasks.length} background operations from ${sourceService}...`);
@@ -233,6 +233,7 @@ async function processTasks(tasks, username, isAdmin, SERVICES, keypair, redisCl
                 user: username,
                 permit: isAdmin ? 'admin' : 'user',
                 context: 'task',
+                ...(constraints && typeof constraints === 'object' && Object.keys(constraints).length ? { constraints } : {}),
                 // Chain correlation: the async task belongs to the request's chain —
                 // same trace, same depth (a _task is an RPC hop, not an event hop).
                 ...(traceCtx ? { meta: { trace: traceCtx.trace, depth: traceCtx.depth } } : {})

@@ -109,13 +109,13 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'fulfillment.instance.update':     (p) => Methods.instance.update(p, req),
 
                 // Profile
-                'fulfillment.profile.create':  (p) => Methods.profile.create(p),
+                'fulfillment.profile.create':  (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.create(p); },
                 'fulfillment.profile.get':     (p) => Methods.profile.get(p),
                 'fulfillment.profile.list':    (p) => Methods.profile.list(p),
-                'fulfillment.profile.update':  (p) => Methods.profile.update(p, req),
-                'fulfillment.profile.delete':  (p) => Methods.profile.delete(p),
-                'fulfillment.profile.restore': (p) => Methods.profile.restore(p),
-                'fulfillment.profile.destroy': (p) => Methods.profile.destroy(p),
+                'fulfillment.profile.update':  (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.update(p, req); },
+                'fulfillment.profile.delete':  (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.delete(p); },
+                'fulfillment.profile.restore': (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.restore(p); },
+                'fulfillment.profile.destroy': (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.destroy(p); },
                 'fulfillment.profile.generate': (p) => Methods.profile.generate(p),
                 // 投稿面: submit is callable by a (narrow-permit) submitter; approve/reject are
                 // admin-gated (an external submitter can propose but never self-activate).

@@ -99,18 +99,22 @@ function lintWith(profile, methodIndex) {
     return lintProfile(profile, methodIndex);
 }
 
+const MAX_REPAIRS_CAP = 5;
+
 /**
  * Generate a lint-clean profile from an NL requirement.
  * @param requirement  NL string
  * @param profileId    optional id stamped onto the candidate
  * @param callLLM      async (prompt:string) => string   (the LLM reply text)
  * @param methodIndex  { 'service.method': { returns_schema? } } — the lint index
- * @param maxRepairs   how many repair round-trips after the first attempt (default 2)
+ * @param maxRepairs   how many repair round-trips after the first attempt (default 2, capped at 5)
  * @returns { profile, lintReport:{errors,warnings}, attempts, ok }
  */
 async function generateProfile({ requirement, profileId = null, callLLM, methodIndex = {}, maxRepairs = 2 }) {
     if (!requirement || typeof requirement !== 'string') throw new Error('generateProfile: requirement (string) required');
     if (typeof callLLM !== 'function') throw new Error('generateProfile: callLLM function required');
+
+    const boundedMaxRepairs = Math.min(Math.max(0, Number.isInteger(maxRepairs) ? maxRepairs : 2), MAX_REPAIRS_CAP);
 
     const ask = async (prompt) => {
         const profile = extractJson(await callLLM(prompt));
@@ -121,7 +125,7 @@ async function generateProfile({ requirement, profileId = null, callLLM, methodI
     let profile = await ask(buildPrompt(requirement, methodIndex));
     let report = lintWith(profile, methodIndex);
     let attempts = 1;
-    while (report.errors.length && attempts <= maxRepairs) {
+    while (report.errors.length && attempts <= boundedMaxRepairs) {
         const repaired = await ask(buildRepairPrompt(requirement, profile, report.errors));
         if (repaired) profile = repaired;
         report = lintWith(profile, methodIndex);
@@ -130,4 +134,4 @@ async function generateProfile({ requirement, profileId = null, callLLM, methodI
     return { profile: profile || null, lintReport: report, attempts, ok: report.errors.length === 0 && !!profile };
 }
 
-module.exports = { generateProfile, buildPrompt, buildRepairPrompt, buildContext, extractJson, PROFILE_MARKER };
+module.exports = { generateProfile, buildPrompt, buildRepairPrompt, buildContext, extractJson, PROFILE_MARKER, MAX_REPAIRS_CAP };

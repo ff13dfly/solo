@@ -31,6 +31,7 @@ const REVIEW = { PENDING: 'PENDING_REVIEW', APPROVED: 'APPROVED', REJECTED: 'REJ
 const GOVERNANCE_FIELDS = new Set([
     'reviewState', 'approvals', 'approvedDigest', 'submittedBy', 'submittedAt',
     'reReviewOf', 'rejectedBy', 'rejectedAt', 'rejectReason', 'enrolledBy', 'enrolledAt',
+    'contributors',
 ]);
 function stripGovernance(params = {}) {
     const clean = {};
@@ -145,13 +146,20 @@ module.exports = (redis, config, relay) => {
             if (lintReport.errors.length) {
                 throw jsonrpc.INVALID_PARAM(`Profile edit failed lint (executable fields are re-checked on edit): ${lintReport.errors.join('; ')}`);
             }
+            const nextContributors = Array.from(new Set([
+                ...(Array.isArray(existing.contributors) ? existing.contributors : []),
+                ...(existing.submittedBy ? [existing.submittedBy] : []),
+                ...(req && req.user ? [req.user] : []),
+            ]));
             return factory.update({
                 ...clean,
                 reviewState: REVIEW.PENDING,
                 approvals: [],
                 approvedDigest: null,
                 reReviewOf: existing.approvedDigest || null,
-                ...(req && req.user ? { submittedBy: req.user, submittedAt: Date.now() } : {}),
+                submittedBy: (req && req.user) || existing.submittedBy || null,
+                submittedAt: Date.now(),
+                contributors: nextContributors,
             });
         },
 
@@ -231,6 +239,7 @@ module.exports = (redis, config, relay) => {
                     ...profile,
                     reviewState: REVIEW.PENDING,
                     submittedBy: req?.user || null,
+                    contributors: req?.user ? [req.user] : [],
                     approvals: [],
                     submittedAt: Date.now(),
                 });
@@ -260,7 +269,10 @@ module.exports = (redis, config, relay) => {
             const profile = await factory.get({ id });
             if (profile.reviewState !== REVIEW.PENDING) throw jsonrpc.FORBIDDEN(`Cannot approve a profile in reviewState: ${profile.reviewState || '(none)'}`);
             const caller = req?.user || null;
-            if (caller && profile.submittedBy && caller === profile.submittedBy) throw jsonrpc.FORBIDDEN('Approver cannot be the same as the submitter');
+            const contributors = Array.isArray(profile.contributors) ? profile.contributors : [];
+            if (caller && ((profile.submittedBy && caller === profile.submittedBy) || contributors.includes(caller))) {
+                throw jsonrpc.FORBIDDEN('Approver cannot be the same as the submitter');
+            }
             // Bind the approval to the exact executable definition (tamper-evident). A later
             // executable edit resets reviewState (see update) → this digest no longer applies.
             const digest = execDigest(profile);

@@ -2,6 +2,7 @@ const jsonrpc = require('../../../library/jsonrpc');
 const rules = require('./rules');
 const { createLogger } = require('../../../library/logger');
 const { walContext } = require('../../../library/entity');
+const { optimisticUpdate } = require('../../../library/optimistic');
 const clock = require('../../../library/clock');
 
 const logger = createLogger('fulfillment:instance');
@@ -16,6 +17,24 @@ module.exports = (redis, config, relay = null) => {
 
     const PREFIX = config.redis.instancePrefix;
     const INDEX  = config.redis.instanceIndex;
+    const instanceLocks = new Map();
+
+    async function withInstanceLock(key, fn) {
+        const prev = instanceLocks.get(key) || Promise.resolve();
+        let release;
+        const next = new Promise((resolve) => { release = resolve; });
+        const chain = prev.then(() => next, () => next);
+        instanceLocks.set(key, chain);
+        await prev.catch(() => {});
+        try {
+            return await fn();
+        } finally {
+            release();
+            if (instanceLocks.get(key) === chain) {
+                instanceLocks.delete(key);
+            }
+        }
+    }
 
     function getInstanceKey(id) {
         if (!id) throw jsonrpc.MISSING_PARAM('id');
@@ -48,7 +67,11 @@ module.exports = (redis, config, relay = null) => {
     async function loadProfile(profileId) {
         const raw = await redis.get(`${config.redis.profilePrefix}${profileId}`);
         if (!raw) throw jsonrpc.NOT_FOUND(`Profile ${profileId}`);
-        return JSON.parse(raw);
+        const profile = JSON.parse(raw);
+        if (profile && profile.status === 'DELETED') {
+            throw jsonrpc.NOT_FOUND(`Profile ${profileId}`);
+        }
+        return profile;
     }
 
     // `now` = epoch ms, the same shape every factory timestamp uses. Without it a profile
@@ -78,117 +101,129 @@ module.exports = (redis, config, relay = null) => {
         if (!id)    throw jsonrpc.MISSING_PARAM('id');
         if (!event) throw jsonrpc.MISSING_PARAM('event');
 
-        const instance  = await getInstance(id, req);
-        if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
-            const currentTransitionId = instance.history.at(-1)?.transition_id || null;
-            if (currentTransitionId !== expectedTransitionId) {
-                throw jsonrpc.INVALID_PARAM(
-                    `Stale transition_id for instance ${id}: expected "${expectedTransitionId}", current is "${currentTransitionId}"`
-                );
+        const key = getInstanceKey(id);
+        const safeMetaUpdate = (metaUpdate && typeof metaUpdate === 'object' && !Array.isArray(metaUpdate)) ? metaUpdate : {};
+
+        return withInstanceLock(key, async () => {
+            const initialInstance = await getInstance(id, req);
+            const profile = await loadProfile(initialInstance.profileId);
+
+            // Activation gate (in-flight): a profile sent back to review (or rejected) must not
+            // drive ANY instance — new OR in-flight — until re-approved (§7.3). Trusted
+            // direct-create profiles carry no reviewState → never gated. This is what makes the
+            // executable-edit re-review real: editing an APPROVED profile freezes its instances.
+            if (profile && profile.reviewState && profile.reviewState !== 'APPROVED') {
+                throw jsonrpc.FORBIDDEN(`Profile ${initialInstance.profileId} is not activated (reviewState: ${profile.reviewState}) — it must be (re-)approved before its instances can transition`);
             }
-        }
-        const fromState  = instance.state;
-        const profile    = await loadProfile(instance.profileId);
 
-        // Activation gate (in-flight): a profile sent back to review (or rejected) must not
-        // drive ANY instance — new OR in-flight — until re-approved (§7.3). Trusted
-        // direct-create profiles carry no reviewState → never gated. This is what makes the
-        // executable-edit re-review real: editing an APPROVED profile freezes its instances.
-        if (profile && profile.reviewState && profile.reviewState !== 'APPROVED') {
-            throw jsonrpc.FORBIDDEN(`Profile ${instance.profileId} is not activated (reviewState: ${profile.reviewState}) — it must be (re-)approved before its instances can transition`);
-        }
+            let fromState;
+            let toState;
+            let transitionId;
+            let transitionRule;
+            let logicData;
 
-        // Merge metaUpdate BEFORE evaluating conditions so cached values satisfy them.
-        const mergedMeta = { ...instance.meta, ...metaUpdate };
-        const logicData  = buildLogicData(instance, mergedMeta, req);
+            const instance = await optimisticUpdate(redis, key, (current) => {
+                assertOwner(current, req);
+                if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
+                    const currentTransitionId = current.history.at(-1)?.transition_id || null;
+                    if (currentTransitionId !== expectedTransitionId) {
+                        throw jsonrpc.INVALID_PARAM(
+                            `Stale transition_id for instance ${id}: expected "${expectedTransitionId}", current is "${currentTransitionId}"`
+                        );
+                    }
+                }
 
-        // Candidates share (event, from); they may differ by condition (branching).
-        const candidates = (profile.transitions || []).filter(
-            t => t.event === event && t.from === fromState
-        );
-        if (candidates.length === 0) {
-            throw jsonrpc.INVALID_PARAM(
-                `Event "${event}" not defined from state "${fromState}" in profile ${instance.profileId}`
-            );
-        }
+                fromState = current.state;
+                // Merge metaUpdate BEFORE evaluating conditions so cached values satisfy them.
+                const mergedMeta = { ...current.meta, ...safeMetaUpdate };
+                logicData = buildLogicData(current, mergedMeta, req);
 
-        // override skips the condition gate; normal flow takes the first passing rule.
-        const transitionRule = skipCondition
-            ? candidates[0]
-            : candidates.find(t => rules.evaluateCondition(t.condition, logicData));
+                // Candidates share (event, from); they may differ by condition (branching).
+                const candidates = (profile.transitions || []).filter(
+                    t => t.event === event && t.from === fromState
+                );
+                if (candidates.length === 0) {
+                    throw jsonrpc.INVALID_PARAM(
+                        `Event "${event}" not defined from state "${fromState}" in profile ${current.profileId}`
+                    );
+                }
 
-        if (!transitionRule) {
-            throw jsonrpc.INVALID_PARAM(`Condition not met for event "${event}"`);
-        }
+                // override skips the condition gate; normal flow takes the first passing rule.
+                transitionRule = skipCondition
+                    ? candidates[0]
+                    : candidates.find(t => rules.evaluateCondition(t.condition, logicData));
 
-        const toState      = transitionRule.to;
-        // transition_id: monotonic per instance (history slot). Replays reproduce
-        // the same id → downstream dedupe; a fresh push (override) gets a new id.
-        const transitionId = `${id}-T${instance.history.length + 1}`;
+                if (!transitionRule) {
+                    throw jsonrpc.INVALID_PARAM(`Condition not met for event "${event}"`);
+                }
 
-        instance.prevState      = fromState;
-        instance.state          = toState;
-        instance.stateChangedAt = Date.now();
-        instance.meta           = mergedMeta;
-        // trace: chain correlation — which causal chain drove this transition (walContext
-        // carries it from the Router token meta; null for direct/un-traced callers).
-        // meta_update: the guard's INPUT for this hop, kept next to its OUTPUT (the state it
-        // moved to). instance.meta is an overwriting merge with no history, so without this
-        // the one question a reviewer actually asks — "what did the condition read when it
-        // branched here?" — is unanswerable the moment a later hop overwrites the key
-        // (steward FL-20260906-6658: confidence 0.55 → NEEDS_HUMAN → 0.95 → passed; the
-        // library only remembers 0.95). Omitted when empty, so no-payload hops cost nothing.
-        const entry = { state: toState, event, transition_id: transitionId, user: req?.user || null, trace: walContext.getStore()?.trace || null, stamp: Date.now() };
-        if (metaUpdate && Object.keys(metaUpdate).length) entry.meta_update = metaUpdate;
-        if (forced) entry.forced = true;
-        if (reason) entry.reason = reason;
-        instance.history.push(entry);
+                toState = transitionRule.to;
+                // transition_id: monotonic per instance (history slot). Replays reproduce
+                // the same id → downstream dedupe; a fresh push (override) gets a new id.
+                transitionId = `${id}-T${current.history.length + 1}`;
 
-        await redis.set(getInstanceKey(id), JSON.stringify(instance));
+                const next = {
+                    ...current,
+                    prevState:      fromState,
+                    state:          toState,
+                    stateChangedAt: Date.now(),
+                    meta:           mergedMeta,
+                    history:        [...current.history]
+                };
 
-        // Fire-and-forget: emit EVENT:FULFILLMENT:TRANSITIONED so orchestrator/nexus
-        // sentinels can react to state changes. Emit failure must never abort the
-        // transition — the state is already persisted above.
-        if (relay) {
-            relay.call('event.emit', {
-                stream:  'EVENT:FULFILLMENT:TRANSITIONED',
-                type:    'instance.transitioned',
-                actor:   `fulfillment:${id}`,
-                payload: {
-                    instanceId:   id,
-                    profileId:    instance.profileId,
-                    sourceId:     instance.sourceId,
-                    fromState,
-                    toState,
-                    event,
-                    transitionId,
-                    user:         req?.user || null,
-                    stamp:        instance.stateChangedAt,
-                },
-            }).catch((err) => logger.warn(`emit EVENT:FULFILLMENT:TRANSITIONED failed (${transitionId}): ${err.message}`));
-        }
+                const entry = { state: toState, event, transition_id: transitionId, user: req?.user || null, trace: walContext.getStore()?.trace || null, stamp: Date.now() };
+                if (Object.keys(safeMetaUpdate).length) entry.meta_update = safeMetaUpdate;
+                if (forced) entry.forced = true;
+                if (reason) entry.reason = reason;
+                next.history.push(entry);
 
-        // _tasks: Router async dispatch. idempotency_key inside params (a normal RPC
-        // param to downstream); transition_id at top level for audit correlation.
-        const _tasks = [];
-        if (transitionRule.actions) {
-            transitionRule.actions.forEach((action, idx) => {
-                if (action.type === 'workflow') return; // workflow actions use orchestrator's callback model
-                const resolvedParams = rules.resolveParams(action.params, logicData);
-                _tasks.push({
-                    // The Router routes a _task by `service` and posts the FULL method to
-                    // that service's /jsonrpc. Derive service from the method namespace when
-                    // not given (matches the {method:'svc.entity.action'} profile convention).
-                    service:       action.service || (action.method || '').split('.')[0],
-                    method:        action.method,
-                    transition_id: transitionId,
-                    params: { ...resolvedParams, idempotency_key: `${transitionId}:A${idx}` }
-                });
+                return next;
             });
-        }
 
-        logger.info(`Instance ${id}: ${fromState} → ${toState} (${transitionId}, ${_tasks.length} tasks${forced ? ', forced' : ''})`);
-        return { ...instance, _tasks };
+            // Fire-and-forget: emit EVENT:FULFILLMENT:TRANSITIONED so orchestrator/nexus
+            // sentinels can react to state changes. Emit failure must never abort the
+            // transition — the state is already persisted above.
+            if (relay) {
+                relay.call('event.emit', {
+                    stream:  'EVENT:FULFILLMENT:TRANSITIONED',
+                    type:    'instance.transitioned',
+                    actor:   `fulfillment:${id}`,
+                    payload: {
+                        instanceId:   id,
+                        profileId:    instance.profileId,
+                        sourceId:     instance.sourceId,
+                        fromState,
+                        toState,
+                        event,
+                        transitionId,
+                        user:         req?.user || null,
+                        stamp:        instance.stateChangedAt,
+                    },
+                }).catch((err) => logger.warn(`emit EVENT:FULFILLMENT:TRANSITIONED failed (${transitionId}): ${err.message}`));
+            }
+
+            // _tasks: Router async dispatch. idempotency_key inside params (a normal RPC
+            // param to downstream); transition_id at top level for audit correlation.
+            const _tasks = [];
+            if (transitionRule.actions) {
+                transitionRule.actions.forEach((action, idx) => {
+                    if (action.type === 'workflow') return; // workflow actions use orchestrator's callback model
+                    const resolvedParams = rules.resolveParams(action.params, logicData);
+                    _tasks.push({
+                        // The Router routes a _task by `service` and posts the FULL method to
+                        // that service's /jsonrpc. Derive service from the method namespace when
+                        // not given (matches the {method:'svc.entity.action'} profile convention).
+                        service:       action.service || (action.method || '').split('.')[0],
+                        method:        action.method,
+                        transition_id: transitionId,
+                        params: { ...resolvedParams, idempotency_key: `${transitionId}:A${idx}` }
+                    });
+                });
+            }
+
+            logger.info(`Instance ${id}: ${fromState} → ${toState} (${transitionId}, ${_tasks.length} tasks${forced ? ', forced' : ''})`);
+            return { ...instance, _tasks };
+        });
     }
 
     return {
@@ -310,51 +345,82 @@ module.exports = (redis, config, relay = null) => {
          * fulfillment.instance.resume — restore the instance to its prevState. This
          * is a dynamic target (the held-from state) so it bypasses rule matching.
          */
-        async resume({ id } = {}, req) {
-            const instance = await getInstance(id, req);
-            if (!instance.prevState) throw jsonrpc.INVALID_PARAM(`Instance ${id} has no prevState to resume to`);
+        async resume({ id, expectedTransitionId = null } = {}, req) {
+            const key = getInstanceKey(id);
 
-            const profile = await loadProfile(instance.profileId);
-            if (profile && profile.reviewState && profile.reviewState !== 'APPROVED') {
-                throw jsonrpc.FORBIDDEN(`Profile ${instance.profileId} is not activated (reviewState: ${profile.reviewState}) — it must be (re-)approved before its instances can resume`);
-            }
+            return withInstanceLock(key, async () => {
+                const initialInstance = await getInstance(id, req);
+                const initialLastEntry = Array.isArray(initialInstance.history) ? initialInstance.history.at(-1) : null;
+                if (!initialInstance.prevState || !initialLastEntry || initialLastEntry.event !== 'hold_requested') {
+                    throw jsonrpc.INVALID_PARAM(`Instance ${id} is not in a held state and cannot be resumed`);
+                }
 
-            const fromState = instance.state;
-            const toState   = instance.prevState;
-            const transitionId = `${id}-T${instance.history.length + 1}`;
+                const profile = await loadProfile(initialInstance.profileId);
+                if (profile && profile.reviewState && profile.reviewState !== 'APPROVED') {
+                    throw jsonrpc.FORBIDDEN(`Profile ${initialInstance.profileId} is not activated (reviewState: ${profile.reviewState}) — it must be (re-)approved before its instances can resume`);
+                }
 
-            instance.prevState      = fromState;
-            instance.state          = toState;
-            instance.stateChangedAt = Date.now();
-            instance.history.push({
-                state: toState, event: 'resume', transition_id: transitionId,
-                reason: `resumed from ${fromState}`, user: req?.user || null,
-                trace: walContext.getStore()?.trace || null, stamp: Date.now()
+                let fromState;
+                let toState;
+                let transitionId;
+
+                const instance = await optimisticUpdate(redis, key, (current) => {
+                    assertOwner(current, req);
+                    const lastEntry = Array.isArray(current.history) ? current.history.at(-1) : null;
+                    if (!current.prevState || !lastEntry || lastEntry.event !== 'hold_requested') {
+                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is not in a held state and cannot be resumed`);
+                    }
+                    if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
+                        const currentTransitionId = lastEntry?.transition_id || null;
+                        if (currentTransitionId !== expectedTransitionId) {
+                            throw jsonrpc.INVALID_PARAM(
+                                `Stale transition_id for instance ${id}: expected "${expectedTransitionId}", current is "${currentTransitionId}"`
+                            );
+                        }
+                    }
+
+                    fromState = current.state;
+                    toState   = current.prevState;
+                    transitionId = `${id}-T${current.history.length + 1}`;
+
+                    return {
+                        ...current,
+                        prevState:      fromState,
+                        state:          toState,
+                        stateChangedAt: Date.now(),
+                        history: [
+                            ...current.history,
+                            {
+                                state: toState, event: 'resume', transition_id: transitionId,
+                                reason: `resumed from ${fromState}`, user: req?.user || null,
+                                trace: walContext.getStore()?.trace || null, stamp: Date.now()
+                            }
+                        ]
+                    };
+                });
+
+                if (relay) {
+                    relay.call('event.emit', {
+                        stream:  'EVENT:FULFILLMENT:TRANSITIONED',
+                        type:    'instance.transitioned',
+                        actor:   `fulfillment:${id}`,
+                        payload: {
+                            instanceId:   id,
+                            profileId:    instance.profileId,
+                            sourceId:     instance.sourceId,
+                            fromState,
+                            toState,
+                            event:        'resume',
+                            transitionId,
+                            user:         req?.user || null,
+                            stamp:        instance.stateChangedAt,
+                        },
+                    }).catch((err) => logger.warn(`emit EVENT:FULFILLMENT:TRANSITIONED failed (${transitionId}): ${err.message}`));
+                }
+
+                logger.info(`Instance ${id}: ${fromState} → ${toState} (resume, ${transitionId})`);
+                return instance;
             });
-
-            await redis.set(getInstanceKey(id), JSON.stringify(instance));
-
-            if (relay) {
-                relay.call('event.emit', {
-                    stream:  'EVENT:FULFILLMENT:TRANSITIONED',
-                    type:    'instance.transitioned',
-                    actor:   `fulfillment:${id}`,
-                    payload: {
-                        instanceId:   id,
-                        profileId:    instance.profileId,
-                        sourceId:     instance.sourceId,
-                        fromState,
-                        toState,
-                        event:        'resume',
-                        transitionId,
-                        user:         req?.user || null,
-                        stamp:        instance.stateChangedAt,
-                    },
-                }).catch((err) => logger.warn(`emit EVENT:FULFILLMENT:TRANSITIONED failed (${transitionId}): ${err.message}`));
-            }
-
-            logger.info(`Instance ${id}: ${fromState} → ${toState} (resume, ${transitionId})`);
-            return instance;
         },
 
         /**
@@ -371,28 +437,37 @@ module.exports = (redis, config, relay = null) => {
          * fulfillment.instance.update — metadata/field update (restricted fields blocked).
          */
         async update({ id, meta, expectedTransitionId } = {}, req) {
-            const instance = await getInstance(id, req);
-            if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
-                const currentTransitionId = instance.history.at(-1)?.transition_id || null;
-                if (currentTransitionId !== expectedTransitionId) {
-                    throw jsonrpc.INVALID_PARAM(
-                        `Stale transition_id for instance ${id}: expected "${expectedTransitionId}", current is "${currentTransitionId}"`
-                    );
-                }
-            }
+            const key = getInstanceKey(id);
 
-            // updatedBy: this is the ONLY write path for meta that leaves no history entry,
-            // and meta is what the JsonLogic guards judge — so "a probe wrote this fact" vs
-            // "a human edited it" was previously indistinguishable. create/advance both take
-            // req and record createdBy / history[].user; update was the odd one out even
-            // though index.js has been passing req in all along.
-            const updated = { ...instance, updatedBy: req?.user || null, updatedAt: Date.now() };
-            // meta is MERGED, not replaced — caching meta_fields.source values must
-            // not drop other keys.
-            if (meta && typeof meta === 'object' && !Array.isArray(meta)) updated.meta = { ...instance.meta, ...meta };
-            await redis.set(getInstanceKey(id), JSON.stringify(updated));
-            logger.info(`Instance updated: ${id}`);
-            return updated;
+            return withInstanceLock(key, async () => {
+                await getInstance(id, req);
+
+                const updated = await optimisticUpdate(redis, key, (current) => {
+                    assertOwner(current, req);
+                    if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
+                        const currentTransitionId = current.history.at(-1)?.transition_id || null;
+                        if (currentTransitionId !== expectedTransitionId) {
+                            throw jsonrpc.INVALID_PARAM(
+                                `Stale transition_id for instance ${id}: expected "${expectedTransitionId}", current is "${currentTransitionId}"`
+                            );
+                        }
+                    }
+
+                    // updatedBy: this is the ONLY write path for meta that leaves no history entry,
+                    // and meta is what the JsonLogic guards judge — so "a probe wrote this fact" vs
+                    // "a human edited it" was previously indistinguishable. create/advance both take
+                    // req and record createdBy / history[].user; update was the odd one out even
+                    // though index.js has been passing req in all along.
+                    const next = { ...current, updatedBy: req?.user || null, updatedAt: Date.now() };
+                    // meta is MERGED, not replaced — caching meta_fields.source values must
+                    // not drop other keys.
+                    if (meta && typeof meta === 'object' && !Array.isArray(meta)) next.meta = { ...current.meta, ...meta };
+                    return next;
+                });
+
+                logger.info(`Instance updated: ${id}`);
+                return updated;
+            });
         }
     };
 };

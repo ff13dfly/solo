@@ -128,7 +128,7 @@ describe('enroll — retroactive governance for trusted profiles', () => {
         expect(metaEdited.reviewState).toBe('APPROVED');
         expect(metaEdited.submittedBy).toBe('author-1');
 
-        // Executable edit resets to PENDING_REVIEW and records editor-2 as submittedBy so editor-2 cannot self-approve
+        // Executable edit resets to PENDING_REVIEW and records editor-2 as submittedBy so neither editor-2 nor original author-1 can self-approve
         const execEdited = await profile.update({
             id: 'p_sub',
             transitions: [
@@ -136,10 +136,23 @@ describe('enroll — retroactive governance for trusted profiles', () => {
                 { event: 'finish', from: 'STEP2', to: 'DONE' },
             ],
             reviewState: 'APPROVED',
+            contributors: ['forged'],
         }, { user: 'editor-2' });
         expect(execEdited.reviewState).toBe('PENDING_REVIEW');
         expect(execEdited.submittedBy).toBe('editor-2');
+        expect(execEdited.contributors).toEqual(expect.arrayContaining(['author-1', 'editor-2']));
         await expect(profile.approve({ id: 'p_sub' }, { user: 'editor-2' })).rejects.toMatchObject({ code: -32005 });
+        await expect(profile.approve({ id: 'p_sub' }, { user: 'author-1' })).rejects.toMatchObject({ code: -32005 });
+
+        // Unauthenticated update call (missing req.user) preserves existing submittedBy
+        const anonEdited = await profile.update({
+            id: 'p_sub',
+            transitions: [
+                { event: 'go', from: 'DRAFT', to: 'STEP3' },
+                { event: 'finish', from: 'STEP3', to: 'DONE' },
+            ],
+        });
+        expect(anonEdited.submittedBy).toBe('editor-2');
     });
 });
 

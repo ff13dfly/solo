@@ -109,4 +109,13 @@ describe('generateProfile — repair loop', () => {
         await expect(generateProfile({ requirement: '', callLLM: async () => '{}' })).rejects.toThrow(/requirement/);
         await expect(generateProfile({ requirement: 'x' })).rejects.toThrow(/callLLM/);
     });
+
+    test('caps caller-supplied maxRepairs at MAX_REPAIRS_CAP (5) to prevent unbounded LLM loops', async () => {
+        let calls = 0;
+        const callLLM = async () => { calls++; return JSON.stringify(BROKEN); };
+        const r = await generateProfile({ requirement: 'x', callLLM, methodIndex: IDX, maxRepairs: 100 });
+        expect(r.ok).toBe(false);
+        expect(r.attempts).toBe(6); // 1 initial + 5 capped repairs
+        expect(calls).toBe(6);
+    });
 });

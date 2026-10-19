@@ -204,12 +204,20 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
                     return jsonrpc.success(r, { ok: true, count: events.length, ...(stats || {}) }, i);
                 },
                 // Management & Discovery
-                'system.service.status': (p, i, r) => serviceHandlers.checkServiceStatus(p, i, r),
+                'system.service.status': (p, i, r) => {
+                    const access = handlers.access.checkAccess(sessionUser, 'router', 'system.service.status');
+                    if (!access.allowed) return jsonrpc.error(r, jsonrpc.FORBIDDEN(access.reason), i);
+                    return serviceHandlers.checkServiceStatus(p, i, r);
+                },
                 'system.manifest':     (p, i, r) => handlers.manifest(SERVICES)(p, i, r),
                 'system.report':        (p, i, r) => handlers.report(redisClient).submit(p, i, r),
                 'system.report.list':   (p, i, r) => handlers.report(redisClient).list(p, i, r, isAdmin),
                 'system.report.update': (p, i, r) => handlers.report(redisClient).update(p, i, r, isAdmin),
-                'system.service.list': (p, i, r) => serviceHandlers.listServices(i, r),
+                'system.service.list': (p, i, r) => {
+                    const access = handlers.access.checkAccess(sessionUser, 'router', 'system.service.list');
+                    if (!access.allowed) return jsonrpc.error(r, jsonrpc.FORBIDDEN(access.reason), i);
+                    return serviceHandlers.listServices(i, r);
+                },
                 'system.service.add': (p, i, r) => {
                     const isLocal = handlers.auth.isLoopbackRequest(req);
                     if (!isAdmin && !(isLocal && config.debug)) return jsonrpc.error(r, jsonrpc.FORBIDDEN('Admin required'), i);
@@ -219,7 +227,13 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
                     if (!isAdmin) return jsonrpc.error(r, jsonrpc.FORBIDDEN('Admin required'), i);
                     return serviceHandlers.removeService(p, i, r);
                 },
-                'system.capability.list': (p, i, r) => serviceHandlers.capabilities(p, i, r, isAdmin, sessionUser?.permit),
+                'system.capability.list': (p, i, r) => {
+                    if (!isAdmin && !sessionUser.uid) {
+                        const access = handlers.access.checkAccess(sessionUser, 'router', 'system.capability.list');
+                        if (!access.allowed) return jsonrpc.error(r, jsonrpc.FORBIDDEN(access.reason), i);
+                    }
+                    return serviceHandlers.capabilities(p, i, r, isAdmin, sessionUser?.permit);
+                },
                 // Anonymous bootstrap doc; per-service variant self-gates in the
                 // handler (auth required in production, like DISCOVERY_METHODS).
                 'system.guide': (p, i, r) => systemHandlers.systemGuide(p, i, r, isAdmin, !!sessionUser.uid),
@@ -255,11 +269,24 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
                     if (!isAdmin && !handlers.auth.isLoopbackRequest(req)) return jsonrpc.error(r, jsonrpc.FORBIDDEN('Admin or internal (loopback) caller required'), i);
                     return categoryHandlers.delete(p, i, r);
                 },
-                'system.category.locate': (p, i, r) => categoryHandlers.locate(p, i, r),
-                'system.category.list': (p, i, r) => categoryHandlers.list(p, i, r),
+                'system.category.locate': (p, i, r) => {
+                    if (!config.debug && !isAdmin && !sessionUser.uid && !handlers.auth.checkPermission(sessionUser?.permit, 'system', 'system.category.locate') && !handlers.auth.checkPermission(sessionUser?.permit, 'router', 'system.category.locate')) {
+                        return jsonrpc.error(r, jsonrpc.AUTH_REQUIRED(), i);
+                    }
+                    return categoryHandlers.locate(p, i, r);
+                },
+                'system.category.list': (p, i, r) => {
+                    if (!config.debug && !isAdmin && !sessionUser.uid && !handlers.auth.checkPermission(sessionUser?.permit, 'system', 'system.category.list') && !handlers.auth.checkPermission(sessionUser?.permit, 'router', 'system.category.list')) {
+                        return jsonrpc.error(r, jsonrpc.AUTH_REQUIRED(), i);
+                    }
+                    return categoryHandlers.list(p, i, r, isAdmin);
+                },
 
                 // Dynamic Workflows
                 'system.workflow.list': async (p, i, r) => {
+                    if (!config.debug && !isAdmin && !sessionUser.uid && !handlers.auth.checkPermission(sessionUser?.permit, 'system', 'system.workflow.list') && !handlers.auth.checkPermission(sessionUser?.permit, 'router', 'system.workflow.list')) {
+                        return jsonrpc.error(r, jsonrpc.AUTH_REQUIRED(), i);
+                    }
                     try {
                         const dataStr = await redisClient.get('AGENT:WORKFLOW_SNAPSHOT');
                         const workflows = dataStr ? JSON.parse(dataStr) : [];
@@ -358,7 +385,7 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
                 // 3.5 Background Task Processing
                 const tasks = handlers.forward.extractTasks(responseData);
                 if (tasks) {
-                    handlers.tasks.processTasks(tasks, userId, isAdmin, SERVICES, getKeypair(), redisClient, targetServiceName, CAPABILITY_MAP, traceCtx)
+                    handlers.tasks.processTasks(tasks, userId, isAdmin, SERVICES, getKeypair(), redisClient, targetServiceName, CAPABILITY_MAP, traceCtx, sessionUser.permit?.constraints || null)
                         .catch(err => logger.error('Async Task Error:', err));
                 }
 

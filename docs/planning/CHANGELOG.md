@@ -11,6 +11,18 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 > main 上已合入、尚未打 tag 的改动（下一发布点 = 从 main 打下一个 `v1.x`）。
 
+### 🔴 `fulfillment` & `router` 外部哨兵自愈环路补齐与专项安全审计加固（`../security/FULFILLMENT_ROUTER_AUDIT_REPORT.md`）
+
+- **`fulfillment` 状态机乐观锁与生命周期防线（`api/apps/fulfillment/`）**：
+  - `fulfillment.instance.transition`、`fulfillment.instance.update`、`fulfillment.instance.resume` 均支持可选 `expectedTransitionId` 乐观并发守卫，并通过进程内实例级串行锁 `withInstanceLock` + Redis `optimisticUpdate`（`WATCH/MULTI/EXEC` CAS）保证检查与写入的原子性，消除并发回调与超时哨兵的 TOCTOU 覆盖竞态。
+  - `fulfillment.instance.resume` 强制校验最新历史项必须为 `event === 'hold_requested'` 且 `prevState` 非空，阻断从 `COMPLETED` / `CANCELLED` 等非挂起态回滚或连续二次 `resume` 震荡；恢复成功后同步发射 `EVENT:FULFILLMENT:TRANSITIONED`。
+  - `fulfillment.instance.list` 新增 `profileId` 与 `stateChangedBefore` 服务端过滤参数；`loadProfile` 补齐 `status === 'DELETED'` 软删除拦截；`fulfillment.profile.generate` 将 `maxRepairs` 钳制在上限 `5`。
+  - `fulfillment.profile.{create,update,delete,restore,destroy}` 在 RPC 入口强制校验 `isAdmin`；审核流 Profile 累积记录全部参与编辑的 `contributors` 并在 `approve` 中禁止任何贡献者自审通过。
+- **`router` 发现门禁、自省过滤与异步 `_tasks` 约束传播（`api/router/`）**：
+  - `system.capability.list` 在过滤非公开、`ai: false` 方法时仅向 `permit.services[service]` **显式列名授权**的调用方返回对应方法，修复通配符（`*`）泄露管理方法及管理员未传 `all: true` 时过滤失效的问题。
+  - Phase 2 本地 `METHODS`（`system.service.{list,status}`、`system.capability.list`、`system.category.{locate,list}`、`system.workflow.list`）统一接入生产环境未认证拦截门禁；`system.category.list` 仅允许管理员使用 `includeDeleted: true`。
+  - `handlers.tasks.processTasks` 将调用方 `sessionUser.permit.constraints`（如外部护照 `$owner` 行级隔离作用域）签入异步任务 `X-Router-Token` 载荷。
+
 ---
 
 ## [v1.3.1] — 2026-10-16

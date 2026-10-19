@@ -147,7 +147,8 @@ const methods = [
     {
         name: 'fulfillment.instance.resume',
         params: [
-            { name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id', description: 'Instance ID' }
+            { name: 'id',                   type: 'string', required: true,  maxLength: 64, pattern: 'id', description: 'Instance ID' },
+            { name: 'expectedTransitionId', type: 'string', required: false, maxLength: 80, description: 'Optimistic concurrency guard: if supplied, must match the latest history[].transition_id or the resume is rejected' }
         ],
         description: 'Resume a held instance back to its prevState (dynamic target; bypasses rule matching).',
         // ⚠ NON-UNIFORM: resume returns the bare instance — NO _tasks (unlike transition/cancel/
@@ -257,7 +258,7 @@ const methods = [
         params: [
             { name: 'requirement', type: 'string', required: true, maxLength: 4000, description: 'Natural-language description of the desired fulfillment flow' },
             { name: 'profileId',   type: 'string', required: false, maxLength: 64, description: 'Optional id to stamp onto the candidate' },
-            { name: 'maxRepairs',  type: 'number', required: false, description: 'Repair round-trips after the first attempt (default 2)' }
+            { name: 'maxRepairs',  type: 'number', required: false, description: 'Repair round-trips after the first attempt (default 2, max 5)' }
         ],
         // Returns a CANDIDATE (not created): { profile, lintReport:{errors,warnings}, attempts, ok }.
         // ok=true ⇒ lint found 0 errors (activatable); a human reviews then calls profile.create.

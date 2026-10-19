@@ -420,6 +420,66 @@ describe('fulfillment.instance — dedicated operations', () => {
         await expect(logic.instance.resume({ id }, MOCK_REQ)).rejects.toMatchObject({ code: -32005 });
     });
 
+    test('resume — rejects non-held instances, prevents double-resume oscillation, and enforces expectedTransitionId', async () => {
+        const id = await newProcessing('ORD-R-STRICT');
+        // Not held (last event is 'start', not 'hold_requested') → rejected
+        await expect(logic.instance.resume({ id }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
+
+        // Cancelled terminal state → rejected
+        const cancelId = await newProcessing('ORD-R-CANCEL');
+        await logic.instance.cancel({ id: cancelId, reason: 'cancelled' }, MOCK_REQ);
+        await expect(logic.instance.resume({ id: cancelId }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
+
+        // Hold → resume with stale expectedTransitionId rejected; matching expectedTransitionId succeeds; second consecutive resume rejected
+        const held = await logic.instance.hold({ id, reason: 'pause' }, MOCK_REQ);
+        const holdTid = held.history.at(-1).transition_id;
+        await expect(logic.instance.resume({ id, expectedTransitionId: 'stale-tid' }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
+
+        const resumed = await logic.instance.resume({ id, expectedTransitionId: holdTid }, MOCK_REQ);
+        expect(resumed.state).toBe('PROCESSING');
+        await expect(logic.instance.resume({ id }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
+    });
+
+    test('concurrent transitions with the same expectedTransitionId are serialized so only one succeeds (no TOCTOU lost update)', async () => {
+        const id = await newProcessing('ORD-TOCTOU');
+        const current = await logic.instance.get({ id }, MOCK_REQ);
+        const expectedTid = current.history.at(-1).transition_id;
+
+        const results = await Promise.allSettled([
+            logic.instance.transition({ id, event: 'confirm', metaUpdate: { approved: true, winner: 'A' }, expectedTransitionId: expectedTid }, MOCK_REQ),
+            logic.instance.transition({ id, event: 'cancel_requested', metaUpdate: { cancel_reason: 'B' }, expectedTransitionId: expectedTid }, MOCK_REQ),
+        ]);
+
+        const fulfilled = results.filter(r => r.status === 'fulfilled');
+        const rejected  = results.filter(r => r.status === 'rejected');
+        expect(fulfilled).toHaveLength(1);
+        expect(rejected).toHaveLength(1);
+        expect(rejected[0].reason.code).toBe(-32602);
+    });
+
+    test('soft-deleted profile (status: DELETED) cannot be used to create, transition, or resume instances', async () => {
+        const softProfile = await logic.profile.create({
+            id: 'soft_del_prof',
+            name: 'Soft Delete Test',
+            transitions: [
+                { event: 'start', from: 'DRAFT', to: 'PROCESSING', condition: null, actions: [] },
+                { event: 'hold_requested', from: 'PROCESSING', to: 'ON_HOLD', condition: null, actions: [] },
+            ],
+        });
+        const inst = await logic.instance.create({ sourceId: 'ORD-SD-1', profileId: softProfile.id }, MOCK_REQ);
+        await logic.instance.transition({ id: inst.id, event: 'start' }, MOCK_REQ);
+        await logic.instance.hold({ id: inst.id, reason: 'pause before profile delete' }, MOCK_REQ);
+
+        await logic.profile.delete({ id: softProfile.id });
+
+        await expect(logic.instance.create({ sourceId: 'ORD-SD-2', profileId: softProfile.id }, MOCK_REQ)).rejects.toMatchObject({ code: -32002 });
+        await expect(logic.instance.resume({ id: inst.id }, MOCK_REQ)).rejects.toMatchObject({ code: -32002 });
+
+        await logic.profile.restore({ id: softProfile.id });
+        const resumed = await logic.instance.resume({ id: inst.id }, MOCK_REQ);
+        expect(resumed.state).toBe('PROCESSING');
+    });
+
     test('instance key validation rejects colons, whitespace, and control characters; update ignores non-meta top-level fields; $owner scope isolates instances', async () => {
         await expect(logic.instance.get({ id: 'bad:key' }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
         await expect(logic.instance.get({ id: 'bad key' }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
@@ -482,6 +542,37 @@ describe('fulfillment.profile', () => {
 
         expect((await logic.profile.destroy({ id: created.id })).success).toBe(true);
         await expect(logic.profile.get({ id: created.id })).rejects.toBeDefined();
+    });
+
+    test('submit / update / approve — cumulative contributors prevent original submitter from approving after a second editor modifies the profile', async () => {
+        const cleanTransitions = [{ event: 'go', from: 'DRAFT', to: 'DONE' }];
+        const submitted = await logic.profile.submit(
+            { id: 'sod_prof', name: 'SoD Profile', transitions: cleanTransitions, contributors: ['forged'] },
+            { user: 'author-1' }
+        );
+        expect(submitted.ok).toBe(true);
+
+        const edited = await logic.profile.update(
+            {
+                id: 'sod_prof',
+                transitions: [
+                    { event: 'go', from: 'DRAFT', to: 'STEP2' },
+                    { event: 'finish', from: 'STEP2', to: 'DONE' },
+                ],
+                contributors: ['forged'],
+            },
+            { user: 'editor-2' }
+        );
+        expect(edited.submittedBy).toBe('editor-2');
+        expect(edited.contributors).toEqual(expect.arrayContaining(['author-1', 'editor-2']));
+
+        // Neither editor-2 nor original submitter author-1 can approve
+        await expect(logic.profile.approve({ id: 'sod_prof' }, { user: 'editor-2' })).rejects.toMatchObject({ code: -32005 });
+        await expect(logic.profile.approve({ id: 'sod_prof' }, { user: 'author-1' })).rejects.toMatchObject({ code: -32005 });
+
+        // Independent admin-3 can approve
+        const approved = await logic.profile.approve({ id: 'sod_prof' }, { user: 'admin-3' });
+        expect(approved.reviewState).toBe('APPROVED');
     });
 });
 

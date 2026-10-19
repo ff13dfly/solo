@@ -290,7 +290,6 @@ function createServiceHandlers(SERVICES, CAPABILITY_MAP, redisClient) {
          */
         capabilities(params, id, res, isAdmin = false, permit = null) {
             const systemApi = require('../logic/system');
-            const authHandlers = require('./auth');
             const result = { ...CAPABILITY_MAP };
 
             // Inject internal router registry metadata as virtual services
@@ -310,10 +309,12 @@ function createServiceHandlers(SERVICES, CAPABILITY_MAP, redisClient) {
             // Filter for AI-ready, Publicly available, or explicitly permitted methods for this caller
             const discoveryMap = {};
             Object.entries(result).forEach(([key, val]) => {
+                const allowedMethods = permit?.services?.[val.service];
+                const explicitlyPermitted = Array.isArray(allowedMethods) && allowedMethods.includes(key);
                 if (
                     val.ai === true ||
                     val.public === true ||
-                    (permit && val.service && authHandlers.checkPermission(permit, val.service, key))
+                    explicitlyPermitted
                 ) {
                     discoveryMap[key] = val;
                 }

@@ -152,7 +152,7 @@ function createCategoryHandlers(redisClient, SERVICES) {
          * system.category.list
          * Retrieve all registered categories from the global hash.
          */
-        async list(params, id, res) {
+        async list(params, id, res, isAdmin = false) {
             const { includeDeleted } = params || {};
 
             try {
@@ -162,7 +162,7 @@ function createCategoryHandlers(redisClient, SERVICES) {
                     return { key, ...data };
                 });
 
-                const filtered = includeDeleted
+                const filtered = (includeDeleted && isAdmin)
                     ? categories
                     : categories.filter(c => c.status === STATUS.ACTIVE);
 

@@ -214,4 +214,18 @@ describe('Tasks Handler', () => {
         invalidate();                                // 收尾
     });
 
+    test('should propagate caller constraints (e.g. $owner) into signed X-Router-Token payload', async () => {
+        const bs58 = require('bs58').default || require('bs58');
+        const tasks = [{ service: 'gateway', method: 'gateway.email.send', params: { to: 'a@b.c' } }];
+        const constraints = { $owner: { field: 'createdBy', value: 'ext-user-1' } };
+        axios.post.mockResolvedValue({ data: { result: 'ok' } });
+
+        await processTasks(tasks, 'ext-user-1', false, SERVICES, keypair, mockRedis, 'fulfillment', null, null, constraints);
+
+        expect(axios.post).toHaveBeenCalledTimes(1);
+        const [, , opts] = axios.post.mock.calls[0];
+        const decodedPayload = JSON.parse(Buffer.from(bs58.decode(opts.headers['X-Router-Token'])).toString('utf8'));
+        expect(decodedPayload.constraints).toEqual(constraints);
+    });
+
 });
