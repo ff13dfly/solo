@@ -13,6 +13,26 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
+## [v1.3.3] — 2026-11-07
+
+### 🟢 `fulfillment` 五项 RPA 协同原语、`gateway` ↔ `ingress` 跨箱直连与 `run-3` 安全审计加固（`../feedback/done/security-audit-run3.md`）
+
+- **`fulfillment` 五项 RPA 协同原语（`api/apps/fulfillment/`）**：
+  - **状态停留超时自愈（`profile.stateTtls` + `instance.reap`）**：Profile 支持配置各状态超时规则（`{ timeoutSec, event, to, tasks }`），由新增 `fulfillment.instance.reap` 与服务内置周期扫描器自动触发超时迁出并派发补偿 `_tasks`。
+  - **一次性安全回调令牌（`token.issue` + `instance.callback`）**：支持签发绑定 `(instanceId, expectedTransitionId, event)` 的高熵一次性 `callbackToken`（Redis 仅存 SHA-256 哈希与 TTL，审计历史递归剥离明文令牌）；若回调被证据/条件门禁拒收且实例未迁移，自动恢复未过期令牌供调用方修正报文重试。
+  - **可恢复人工协办挂起（`instance.suspend`）**：在实例上记录 `suspension` 快照（`prevState`、`suspendedTransitionId`、`reason`）并进入 `ASSIST_REQUIRED` 等非业务挂起态（拦截终态、`ON_HOLD` 及业务状态伪装，挂起期间锁死常规 `transition`），处理完毕后经 `resume` 原路恢复。
+  - **来源幂等创建（`instance.create` `sourceId` + `idempotent`）**：支持基于 `(ownerScope, profileId, sourceId)` 摘要索引与 `SET NX` 抢占的幂等实例创建，重复触发直接返回既有实例并附带 `deduplicated: true`。
+  - **证据完整性门禁（`transition.evidence` + Rule 9a 静态 Lint）**：支持在状态迁移边上声明 `requiredFields`、`minRows`、`minBytes`、`rejectMasked`（拦截 `***` / `REDACTED` 等脱敏占位符）与 `rejectLoopbackUrls`（拦截 `localhost`、`127.0.0.0/8`、`0.0.0.0/8`、`::1` 及 WHATWG 十六进制 IPv4-mapped IPv6 回环地址）。
+- **`gateway` ↔ `ingress` 跨 SOLO 实例 Solo Bridge 直连（`api/core/gateway/`、`api/core/ingress/`）**：
+  - `gateway.webhook.send` 新增可选 `ingressKey`、`idempotencyKey`、`event`、`meta` 参数，自动封装 `X-Ingress-Key`、`X-Idempotency-Key` 与 `X-Solo-Event` 请求头直连目标 SOLO `ingress.ingest`，并内置自定义 DNS `safeLookup` 防 DNS 重绑定 SSRF；`gateway.delivery.send` 支持透传 Bridge 字段并在跨目标扇出时按 `(channel, target)` 派生子幂等键。
+  - `ingress.ingest` 返回结构化 `{ id, sourceId, event, deduplicated }` 并透传验证后的 `meta`（上限 `4KB` / 深度 `6`）至 `EVENT:WEBHOOK:{sourceId}` 事件总线；`review.approve` 补齐源启用状态复核。
+- **公共库加固（`api/library/`）**：
+  - `injection-detect.js` 对未显式声明 `type` 的 schema 字段按运行时值递归扫描注入载荷；`logger.js` 扩展敏感键脱敏正则并覆盖 `logger.error` 控制台非 Error 对象输出；`health.js` 补齐 Prometheus 标签与 HELP 文本转义。
+
+下游 action：无。全部改动向后兼容；需要使用 RPA 回调令牌、状态停留超时、人工协办挂起、证据完整性门禁或跨 SOLO 实例 `gateway` ↔ `ingress` 直连的消费方升级至 `v1.3.3` 即可直接使用。
+
+---
+
 ## [v1.3.2] — 2026-10-19
 
 ### 🔴 `fulfillment` & `router` 外部哨兵自愈环路补齐与专项安全审计加固（`../feedback/done/fulfillment-external-sentinel-and-loop-concurrency.md`、`../security/FULFILLMENT_ROUTER_AUDIT_REPORT.md`）
