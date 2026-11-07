@@ -58,6 +58,13 @@ module.exports = (redis, { config, relay, source }) => {
         const entry = await findAndRemove(reviewId);
         if (!entry) throw jsonrpc.NOT_FOUND('review entry');
         try {
+            if (source && typeof source.get === 'function' && entry.sourceId) {
+                let src = null;
+                try { src = await source.get({ id: entry.sourceId }); } catch (_) { src = null; }
+                if (src && src.enabled === false) {
+                    throw jsonrpc.INVALID_PARAM(`source '${entry.source}' is disabled`);
+                }
+            }
             const stats = await relay.call('event.emit', {
                 stream: source.streamFor(entry.source),
                 type: config.ingest.eventType,
@@ -72,7 +79,9 @@ module.exports = (redis, { config, relay, source }) => {
             await redis.lTrim(KEY, -MAXLEN, -1);
             throw err;
         }
-        await source.recordFire(entry.sourceId, { outcome: 'accepted' });
+        try {
+            await source.recordFire(entry.sourceId, { outcome: 'accepted' });
+        } catch (_) { /* best-effort if source was deleted */ }
         return { ok: true, reviewId, stream: source.streamFor(entry.source), request_id: entry.requestId };
     }
 

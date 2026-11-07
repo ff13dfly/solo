@@ -45,7 +45,7 @@ let _currentIndexDir = null;
 // ERROR:QUEUE for triage — mask the secret-looking keys so a credential never lands in the
 // error log (the protocol's "params 等同明文密码" concern). Over-masking the error queue is
 // harmless. Exported so any other param-logging site can reuse the same denylist.
-const SENSITIVE_KEY_RE = /^(devicetoken|password|passwd|pwd|pass|secret|token|accesstoken|refreshtoken|callbacktoken|callback_token|apikey|api_key|privatekey|private_key|encpriv|signkey|signingkey|otp|challenge|response|signature|authorization|cookie|salt|hash|proof)$/i;
+const SENSITIVE_KEY_RE = /^(device_?token|password|passwd|pwd|pass|secret|client_?secret|webhook_?secret|token|access_?token|refresh_?token|callback_?token|api_?key|private_?key|encpriv|sign_?key|signing_?key|otp|challenge|response|signature|authorization|cookie|salt|hash|proof)$/i;
 
 function redactSensitive(value, depth = 0) {
     if (value === null || typeof value !== 'object' || depth > 4) return value;
@@ -430,7 +430,8 @@ function createLogger(serviceName) {
             console.warn(chalk.gray(getStamp()), chalk.yellow(prefix), ...args);
         },
         error: (...args) => {
-            console.error(chalk.gray(getStamp()), chalk.red(prefix), ...args);
+            const safeArgs = args.map((a) => (a instanceof Error || a === null || typeof a !== 'object') ? a : redactSensitive(a));
+            console.error(chalk.gray(getStamp()), chalk.red(prefix), ...safeArgs);
 
             // Auto-report to Redis
             if (_redisClient && _redisClient.isOpen) {

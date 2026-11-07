@@ -9,14 +9,22 @@ const clock = require('../../../library/clock');
 const logger = createLogger('fulfillment:instance');
 const DEFAULT_CALLBACK_TTL_MS = 60 * 60 * 1000;          // 1 hour
 const MAX_CALLBACK_TTL_MS     = 7 * 24 * 60 * 60 * 1000; // 7 days
+const MAX_PENDING_CALLBACKS   = 16;
 const STATE_NAME_RE           = /^[A-Z][A-Z0-9_]{0,63}$/;
+const PROTO_KEYS              = new Set(['__proto__', 'constructor', 'prototype']);
 // ADR-002: never persist bearer capability tokens into instance.meta / history.meta_update.
 const sensitiveFields         = ['callbackToken', 'callback_token'];
+const SENSITIVE_META_KEY_RE   = /^callback_?token$/i;
 
-function stripSensitiveMeta(raw) {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-    const copy = { ...raw };
-    for (const k of sensitiveFields) delete copy[k];
+function stripSensitiveMeta(raw, depth = 0) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || depth > 8) return {};
+    const copy = {};
+    for (const [k, v] of Object.entries(raw)) {
+        if (PROTO_KEYS.has(k) || sensitiveFields.includes(k) || SENSITIVE_META_KEY_RE.test(k)) continue;
+        copy[k] = (v && typeof v === 'object' && !Array.isArray(v))
+            ? stripSensitiveMeta(v, depth + 1)
+            : v;
+    }
     return copy;
 }
 
@@ -65,7 +73,11 @@ module.exports = (redis, config, relay = null) => {
 
     function sourceIndexKey(owner, profileId, sourceId) {
         const ownerScope = (owner && owner.field) ? `${owner.field}=${owner.value}` : '_';
-        return `${SOURCE_PREFIX}${ownerScope}:${profileId}:${sourceId}`;
+        const tupleHash = crypto.createHash('sha256')
+            .update(JSON.stringify([ownerScope, String(profileId), String(sourceId)]))
+            .digest('hex')
+            .slice(0, 32);
+        return `${SOURCE_PREFIX}${tupleHash}`;
     }
 
     function emitTransitioned({ id, profileId, sourceId, fromState, toState, event, transitionId, user, stamp }) {
@@ -174,6 +186,14 @@ module.exports = (redis, config, relay = null) => {
                 }
 
                 fromState = current.state;
+                if (current.suspension && !forced && event !== 'cancel_requested') {
+                    const ttlSpec = profile.stateTtls && profile.stateTtls[fromState];
+                    if (!ttlSpec || ttlSpec.event !== event) {
+                        throw jsonrpc.INVALID_PARAM(
+                            `Instance ${id} is suspended in "${fromState}" and must be resumed before transitioning`
+                        );
+                    }
+                }
                 // Merge metaUpdate BEFORE evaluating conditions so cached values satisfy them.
                 const mergedMeta = { ...current.meta, ...safeMetaUpdate };
                 logicData = buildLogicData(current, mergedMeta, req);
@@ -350,18 +370,20 @@ module.exports = (redis, config, relay = null) => {
                     }]
                 };
 
+                if (idempotent) {
+                    const claimed = await redis.set(srcKey, instanceId, { NX: true });
+                    if (!claimed) {
+                        const winnerId = await redis.get(srcKey);
+                        if (winnerId) {
+                            const winnerRaw = await redis.get(getInstanceKey(winnerId));
+                            if (winnerRaw) return { ...JSON.parse(winnerRaw), deduplicated: true };
+                        }
+                    }
+                }
                 await redis.set(getInstanceKey(instanceId), JSON.stringify(instance));
                 await redis.sAdd(INDEX, instanceId);
-                const claimed = await redis.set(srcKey, instanceId, { NX: true });
-                if (idempotent && !claimed) {
-                    // Cross-process race: another node claimed srcKey first — drop orphan and return winner.
-                    await redis.del(getInstanceKey(instanceId));
-                    await redis.sRem(INDEX, instanceId);
-                    const winnerId = await redis.get(srcKey);
-                    if (winnerId) {
-                        const winnerRaw = await redis.get(getInstanceKey(winnerId));
-                        if (winnerRaw) return { ...JSON.parse(winnerRaw), deduplicated: true };
-                    }
+                if (!idempotent) {
+                    await redis.set(srcKey, instanceId, { NX: true });
                 }
 
                 logger.info(`Instance created: ${instanceId} (profile: ${profileId})`);
@@ -474,25 +496,43 @@ module.exports = (redis, config, relay = null) => {
                 if (profile && profile.reviewState && profile.reviewState !== 'APPROVED') {
                     throw jsonrpc.FORBIDDEN(`Profile ${initialInstance.profileId} is not activated (reviewState: ${profile.reviewState}) — it must be (re-)approved before its instances can suspend`);
                 }
+                const profileTransitions = Array.isArray(profile && profile.transitions) ? profile.transitions : [];
+                const businessStates = new Set();
+                for (const t of profileTransitions) {
+                    if (t && t.from) businessStates.add(t.from);
+                    if (t && t.to) businessStates.add(t.to);
+                }
+                if (targetState !== 'ASSIST_REQUIRED' && businessStates.has(targetState)) {
+                    throw jsonrpc.INVALID_PARAM(
+                        `suspendState "${targetState}" collides with a declared business state in profile ${initialInstance.profileId}`
+                    );
+                }
 
                 let fromState;
                 let transitionId;
 
                 const instance = await optimisticUpdate(redis, key, (current) => {
                     assertOwner(current, req);
+                    const lastEntry = Array.isArray(current.history) ? current.history.at(-1) : null;
                     if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
-                        const currentTransitionId = current.history.at(-1)?.transition_id || null;
+                        const currentTransitionId = lastEntry?.transition_id || null;
                         if (currentTransitionId !== expectedTransitionId) {
                             throw jsonrpc.INVALID_PARAM(
                                 `Stale transition_id for instance ${id}: expected "${expectedTransitionId}", current is "${currentTransitionId}"`
                             );
                         }
                     }
-                    if (current.state === 'CANCELLED') {
-                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is CANCELLED and cannot be suspended`);
+                    if (current.state === 'CANCELLED' || current.state === 'COMPLETED') {
+                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is in terminal state ${current.state} and cannot be suspended`);
                     }
-                    if (current.suspension) {
+                    if (profileTransitions.length > 0 && !profileTransitions.some((t) => t && t.from === current.state)) {
+                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is in terminal state ${current.state} (no outgoing transitions) and cannot be suspended`);
+                    }
+                    if (current.suspension || current.state === targetState) {
                         throw jsonrpc.INVALID_PARAM(`Instance ${id} is already suspended in ${current.state}`);
+                    }
+                    if (lastEntry && lastEntry.event === 'hold_requested') {
+                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is currently on hold (${current.state}) and must be resumed before suspending`);
                     }
 
                     const now = clock.now();
@@ -768,11 +808,15 @@ module.exports = (redis, config, relay = null) => {
 
                     await optimisticUpdate(redis, key, (current) => {
                         assertOwner(current, req);
+                        if (current.state === 'CANCELLED' || current.state === 'COMPLETED') {
+                            throw jsonrpc.INVALID_PARAM(`Cannot issue callback token for terminal instance ${id} (${current.state})`);
+                        }
                         expectedTransitionId = bindCurrentTransition
                             ? (current.history.at(-1)?.transition_id || null)
                             : null;
                         const liveCallbacks = (Array.isArray(current.pending_callbacks) ? current.pending_callbacks : [])
-                            .filter((cb) => cb && (!cb.expiresAt || cb.expiresAt > now));
+                            .filter((cb) => cb && (!cb.expiresAt || cb.expiresAt > now))
+                            .slice(-(MAX_PENDING_CALLBACKS - 1));
                         return {
                             ...current,
                             pending_callbacks: [
@@ -865,15 +909,29 @@ module.exports = (redis, config, relay = null) => {
                     consumeCallbackId:    rec.tokenId,
                 }, cbReq);
             } catch (err) {
-                // Token was single-use and is now burned — prune it from pending_callbacks best-effort.
+                // If the instance is still at the bound transition_id and the token hasn't expired
+                // (e.g. evidence gate or condition rejected the payload), restore the token so the
+                // RPA caller can fix its payload and retry. Otherwise prune pending_callbacks.
                 try {
                     const instKey = getInstanceKey(rec.instanceId);
-                    await optimisticUpdate(redis, instKey, (cur) => ({
-                        ...cur,
-                        pending_callbacks: (Array.isArray(cur.pending_callbacks) ? cur.pending_callbacks : [])
-                            .filter((cb) => cb && cb.tokenId !== rec.tokenId),
-                    }));
-                } catch (_) { /* best-effort cleanup */ }
+                    const rawCur = await redis.get(instKey);
+                    const cur = rawCur ? JSON.parse(rawCur) : null;
+                    const curTid = cur && Array.isArray(cur.history) ? (cur.history.at(-1)?.transition_id || null) : null;
+                    const remainingMs = (rec.expiresAt || 0) - clock.now();
+                    const stillValidForRetry = cur && remainingMs > 0 && (!rec.expectedTransitionId || curTid === rec.expectedTransitionId);
+                    if (stillValidForRetry) {
+                        await redis.set(tokenKey, JSON.stringify(rec), { EX: Math.max(1, Math.ceil(remainingMs / 1000)) });
+                        if (typeof redis.getDel !== 'function') {
+                            await redis.del(`${tokenKey}:CLAIMED`);
+                        }
+                    } else {
+                        await optimisticUpdate(redis, instKey, (c) => ({
+                            ...c,
+                            pending_callbacks: (Array.isArray(c.pending_callbacks) ? c.pending_callbacks : [])
+                                .filter((cb) => cb && cb.tokenId !== rec.tokenId),
+                        }));
+                    }
+                } catch (_) { /* best-effort recovery/cleanup */ }
                 throw err;
             }
         },

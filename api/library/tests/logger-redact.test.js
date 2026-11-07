@@ -57,10 +57,24 @@ describe('logger.redactSensitive', () => {
         expect(out.deviceToken).toBe('***');
     });
 
-    test('stops at depth bound (no runaway on deeply nested)', () => {
+    test('stops at depth bound (no runaway on deeply nested) and logger.error redacts console.error object args', () => {
         let deep = { token: 'x' };
         for (let i = 0; i < 10; i++) deep = { nest: deep };
-        // should not throw; shallow levels still get redacted
         expect(() => redactSensitive(deep)).not.toThrow();
+
+        const { createLogger } = require('../logger');
+        const log = createLogger('sec-test');
+        const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            log.error('RPC Error:', new Error('fail'), {
+                request: { secret: 'ingk_live_secret', callbackToken: 'flcb_live_token', webhook_secret: 'wh_sec' },
+            });
+            const printed = JSON.stringify(spy.mock.calls[0]);
+            expect(printed).not.toContain('ingk_live_secret');
+            expect(printed).not.toContain('flcb_live_token');
+            expect(printed).not.toContain('wh_sec');
+        } finally {
+            spy.mockRestore();
+        }
     });
 });

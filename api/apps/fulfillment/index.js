@@ -71,6 +71,16 @@ function extractCallbackToken(req) {
         if (config.reapIntervalMs > 0) {
             reaperTimer = setInterval(() => {
                 Methods.instance.reap({}, { user: 'system:reaper', permit: 'admin' })
+                    .then((res) => {
+                        if (relay && res && Array.isArray(res._tasks)) {
+                            for (const t of res._tasks) {
+                                if (t && t.method) {
+                                    relay.call(t.method, t.params || {})
+                                        .catch((e) => logger.warn(`background reap task ${t.method} failed: ${e.message}`));
+                                }
+                            }
+                        }
+                    })
                     .catch((err) => logger.warn(`background stateTtls reap failed: ${err.message}`));
             }, config.reapIntervalMs);
             if (typeof reaperTimer.unref === 'function') reaperTimer.unref();

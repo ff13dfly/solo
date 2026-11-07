@@ -25,11 +25,19 @@
  * asynchronously after the routes are mounted — resolve it lazily, per request.
  */
 
+function escapePromLabel(v) {
+    return String(v).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/"/g, '\\"');
+}
+
+function escapePromHelp(v) {
+    return String(v).replace(/\\/g, '\\\\').replace(/\n/g, '\\n');
+}
+
 // Render one gauge line set in Prometheus exposition format.
 function renderMetric({ name, value, help, type = 'gauge', labels = {} }, defaults) {
     const all = { ...defaults, ...labels };
-    const labelStr = Object.entries(all).map(([k, v]) => `${k}="${String(v).replace(/"/g, '\\"')}"`).join(',');
-    const head = `# HELP ${name} ${help || name}\n# TYPE ${name} ${type}\n`;
+    const labelStr = Object.entries(all).map(([k, v]) => `${k}="${escapePromLabel(v)}"`).join(',');
+    const head = `# HELP ${name} ${escapePromHelp(help || name)}\n# TYPE ${name} ${type}\n`;
     return head + `${name}{${labelStr}} ${value}\n`;
 }
 

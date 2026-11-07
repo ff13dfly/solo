@@ -366,5 +366,59 @@ describe('SOLO Cross-Box Bridge v1 — gateway.webhook.send(target="solo") ↔ i
             payload: {},
             meta: { hop: 3 },
         })).rejects.toThrow(/hop limit/i);
+
+        // P1-5: 127.evil.com is NOT a valid 4-octet loopback IPv4 and must not be treated as loopback!
+        await expect(boxA.webhook.send({
+            target: 'solo',
+            url: 'http://127.localhost/jsonrpc',
+            secret: src.apiKey,
+            payload: {},
+        })).rejects.toThrow(/internal|reserved|not allowed/i);
+    });
+
+    test('security run-3: idempotencyKey is scoped per (channel, target) so multi-box fan-out with the same business key delivers to BOTH peers', async () => {
+        const src1 = await ingress.source.create({ name: 'peer_one' });
+        const src2 = await ingress.source.create({ name: 'peer_two' });
+        const sharedRedis = makeGatewayRedis();
+        const boxA = createGatewayLogic(sharedRedis, { serviceName: 'gateway', config: gatewayConfig, logger: silentLogger });
+
+        // Second peer server on its own loopback port
+        const peer2Server = http.createServer((req, res) => {
+            const chunks = [];
+            req.on('data', (c) => chunks.push(c));
+            req.on('end', async () => {
+                const rpc = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+                const auth = req.headers['authorization'] || '';
+                const apiKey = auth.startsWith('ApiKey ') ? auth.slice(7).trim() : null;
+                const out = await ingress.ingest.handle(apiKey, rpc.params);
+                res.statusCode = 200;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result: out.body }));
+            });
+        });
+        await new Promise((r) => peer2Server.listen(0, '127.0.0.1', r));
+        const peer2Port = peer2Server.address().port;
+
+        try {
+            const r1 = await boxA.webhook.send({
+                target: 'solo',
+                url: `http://127.0.0.1:${peerPort}/jsonrpc`,
+                secret: src1.apiKey,
+                idempotencyKey: 'fanout-order-1',
+                payload: { orderId: 'O-1' },
+            });
+            const r2 = await boxA.webhook.send({
+                target: 'solo',
+                url: `http://127.0.0.1:${peer2Port}/jsonrpc`,
+                secret: src2.apiKey,
+                idempotencyKey: 'fanout-order-1',
+                payload: { orderId: 'O-1' },
+            });
+            expect(r1.deduplicated).toBeUndefined();
+            expect(r2.deduplicated).toBeUndefined();
+            expect(peerBusEvents).toHaveLength(2);
+        } finally {
+            await new Promise((r) => peer2Server.close(r));
+        }
     });
 });

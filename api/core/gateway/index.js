@@ -178,7 +178,7 @@ app.post('/jsonrpc', async (req, res) => {
         if (err.message && err.message.includes('Method entities not found')) {
             logger.warn(`Introspection:`, err.message);
         } else {
-            logger.error(`Error:`, err.message, { request: params });
+            logger.error(`Error:`, err, { request: params });
         }
         
             jsonrpc.error(res, err.code ? err : jsonrpc.INTERNAL_ERROR(err.message), id);

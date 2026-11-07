@@ -340,6 +340,31 @@ describe('lintProfile — robustness', () => {
     test('empty / malformed profiles never throw', () => {
         expect(() => lintProfile(null, methodIndex)).not.toThrow();
         expect(() => lintProfile({}, methodIndex)).not.toThrow();
-        expect(lintProfile({ meta_fields: 'nope', transitions: 5 }, methodIndex)).toEqual({ errors: [], warnings: [] });
+        const malformed = lintProfile({ meta_fields: 'nope', transitions: 5 }, methodIndex);
+        expect(malformed.errors.length).toBeGreaterThan(0);
+    });
+
+    test('security run-3: prototype properties (toString/constructor) do not satisfy methodIndex or taskWhitelist, and unknown evidence keys are flagged', () => {
+        const r = lintProfile({
+            id: 'proto-check',
+            meta_fields: [{ name: 'x', source: 'toString' }],
+            transitions: [{
+                event: 'go',
+                from: 'DRAFT',
+                to: 'DONE',
+                actions: [{ service: 'constructor', method: 'toString' }],
+                evidence: {
+                    requiredFields: ['   '],
+                    rejectMasked: 'yes',
+                    unknownKey: true,
+                    minRows: {},
+                },
+            }],
+        }, methodIndex, { taskWhitelist: { notification: { allowFrom: ['*'], allowMethods: ['*'] } } });
+        expect(r.errors.join('\n')).toMatch(/toString/);
+        expect(r.errors.join('\n')).toMatch(/constructor/);
+        expect(r.errors.join('\n')).toMatch(/unknownKey/);
+        expect(r.errors.join('\n')).toMatch(/rejectMasked/);
+        expect(r.errors.join('\n')).toMatch(/minRows/);
     });
 });

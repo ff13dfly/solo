@@ -36,7 +36,7 @@ const REVIEW = { PENDING: 'PENDING_REVIEW', APPROVED: 'APPROVED', REJECTED: 'REJ
 const GOVERNANCE_FIELDS = new Set([
     'reviewState', 'approvals', 'approvedDigest', 'submittedBy', 'submittedAt',
     'reReviewOf', 'rejectedBy', 'rejectedAt', 'rejectReason', 'enrolledBy', 'enrolledAt',
-    'contributors',
+    'contributors', 'status', 'createdAt', 'updatedAt',
 ]);
 function stripGovernance(params = {}) {
     const clean = {};

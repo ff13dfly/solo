@@ -15,6 +15,7 @@
  */
 const http = require('http');
 const https = require('https');
+const dns = require('dns');
 const crypto = require('crypto');
 const { URL } = require('url');
 const clock = require('../../../library/clock');
@@ -23,6 +24,14 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const MAX_SOLO_HOPS = 3;
 const PATTERNS_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const IPV4_LOOPBACK_RE = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+function clientError(message, httpStatus = 400, code = -32602) {
+    const err = new Error(message);
+    err.httpStatus = httpStatus;
+    err.code = code;
+    return err;
+}
 
 function normalizeHostname(hostname) {
     if (!hostname || typeof hostname !== 'string') return '';
@@ -52,7 +61,7 @@ function isLoopbackHost(hostname) {
     const h = normalizeHostname(hostname);
     if (!h) return false;
     if (h === 'localhost' || h === '::1' || /^(?:0+:){7}0*1$/.test(h)) return true;
-    if (/^127\./.test(h)) return true;
+    if (IPV4_LOOPBACK_RE.test(h)) return true;
     return false;
 }
 
@@ -110,17 +119,15 @@ function send({ url, payload, type, targetId, secret, timeoutMs, target: targetM
         try {
             target = new URL(url);
         } catch (_) {
-            return reject(new Error(`webhook.send: invalid url "${url}"`));
+            return reject(clientError(`webhook.send: invalid url "${url}"`));
         }
         if (target.protocol !== 'http:' && target.protocol !== 'https:') {
-            return reject(new Error(`webhook.send: unsupported protocol "${target.protocol}"`));
+            return reject(clientError(`webhook.send: unsupported protocol "${target.protocol}"`));
         }
 
         const mode = targetMode || 'webhook';
         if (mode !== 'webhook' && mode !== 'solo') {
-            const err = new Error(`webhook.send: unsupported target "${mode}" (expected 'webhook' or 'solo')`);
-            err.httpStatus = 400;
-            return reject(err);
+            return reject(clientError(`webhook.send: unsupported target "${mode}" (expected 'webhook' or 'solo')`));
         }
 
         const sentAt = clock.now();
@@ -130,33 +137,23 @@ function send({ url, payload, type, targetId, secret, timeoutMs, target: targetM
 
         if (mode === 'solo') {
             if (target.pathname !== '/jsonrpc') {
-                const err = new Error(`webhook.send (solo): target url path must be '/jsonrpc', got '${target.pathname}'`);
-                err.httpStatus = 400;
-                return reject(err);
+                return reject(clientError(`webhook.send (solo): target url path must be '/jsonrpc', got '${target.pathname}'`));
             }
             if (!secret || typeof secret !== 'string' || !secret.trim()) {
-                const err = new Error('webhook.send (solo): secret (peer ingress source API key) is required');
-                err.httpStatus = 400;
-                return reject(err);
+                return reject(clientError('webhook.send (solo): secret (peer ingress source API key) is required'));
             }
             if (!ALLOW_LOOPBACK && isInternalOrReservedHost(target.hostname) && !isLoopbackHost(target.hostname)) {
-                return reject(new Error('webhook.send: internal or reserved targets are not allowed'));
+                return reject(clientError('webhook.send: internal or reserved targets are not allowed'));
             }
             if (meta !== undefined && (typeof meta !== 'object' || meta === null || Array.isArray(meta))) {
-                const err = new Error('webhook.send (solo): meta must be an object');
-                err.httpStatus = 400;
-                return reject(err);
+                return reject(clientError('webhook.send (solo): meta must be an object'));
             }
             const inHop = (meta && meta.hop !== undefined) ? meta.hop : 0;
             if (!Number.isInteger(inHop) || inHop < 0) {
-                const err = new Error('webhook.send (solo): meta.hop must be a non-negative integer');
-                err.httpStatus = 400;
-                return reject(err);
+                return reject(clientError('webhook.send (solo): meta.hop must be a non-negative integer'));
             }
             if (inHop >= MAX_SOLO_HOPS) {
-                const err = new Error(`webhook.send (solo): federation hop limit reached (hop=${inHop}, max=${MAX_SOLO_HOPS})`);
-                err.httpStatus = 400;
-                return reject(err);
+                return reject(clientError(`webhook.send (solo): federation hop limit reached (hop=${inHop}, max=${MAX_SOLO_HOPS})`));
             }
 
             const nextMeta = { ...(meta || {}), hop: inHop + 1 };
@@ -197,7 +194,7 @@ function send({ url, payload, type, targetId, secret, timeoutMs, target: targetM
             };
         } else {
             if (!ALLOW_LOOPBACK && isInternalOrReservedHost(target.hostname)) {
-                return reject(new Error('webhook.send: loopback targets are not allowed (internal calls go via the Router)'));
+                return reject(clientError('webhook.send: loopback targets are not allowed (internal calls go via the Router)'));
             }
             body = JSON.stringify({ type: type || 'notification', targetId: targetId || null, payload: payload || {}, sent_at: sentAt });
             headers = {
@@ -210,6 +207,29 @@ function send({ url, payload, type, targetId, secret, timeoutMs, target: targetM
             }
         }
 
+        const safeLookup = (hostname, opts, cb) => {
+            const callback = typeof opts === 'function' ? opts : cb;
+            const options  = typeof opts === 'object' && opts !== null ? opts : {};
+            dns.lookup(hostname, options, (err, address, family) => {
+                if (err) return callback(err);
+                const checkIp = (ip) => {
+                    if (ALLOW_LOOPBACK) return true;
+                    if (mode === 'solo' && isLoopbackHost(ip)) return true;
+                    return !isInternalOrReservedHost(ip);
+                };
+                if (Array.isArray(address)) {
+                    for (const entry of address) {
+                        if (!checkIp(entry && entry.address)) {
+                            return callback(clientError(`webhook.send: resolved IP for "${hostname}" is internal or reserved`));
+                        }
+                    }
+                } else if (!checkIp(address)) {
+                    return callback(clientError(`webhook.send: resolved IP for "${hostname}" is internal or reserved`));
+                }
+                return callback(null, address, family);
+            });
+        };
+
         const client = target.protocol === 'https:' ? https : http;
         const req = client.request({
             hostname: target.hostname,
@@ -218,6 +238,7 @@ function send({ url, payload, type, targetId, secret, timeoutMs, target: targetM
             method: 'POST',
             timeout: timeoutMs || DEFAULT_TIMEOUT_MS,
             headers,
+            lookup: safeLookup,
         }, (res) => {
             const chunks = [];
             let size = 0;

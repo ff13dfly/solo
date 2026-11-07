@@ -60,20 +60,27 @@ function createDeliveryLedger(redis, { logger, relay } = {}) {
     const idemKey = (key) => IDEM_PREFIX + key;
 
     /**
-     * @returns {Promise<{ok:true}|{ok:false,replay:object}>} ok:true → proceed with the send.
+     * @returns {Promise<{ok:true,effectiveKey:string|null}|{ok:false,replay:object}>} ok:true → proceed with the send.
      * @throws  temporary error when an identical send is still in flight.
      */
-    async function claim(key) {
-        if (!key) return { ok: true };
+    async function claim(key, { channel = null, target = null } = {}) {
+        if (!key) return { ok: true, effectiveKey: null };
         const claimed = await redis.set(
             idemKey(key),
-            JSON.stringify({ state: 'IN_FLIGHT', at: clock.now() }),
+            JSON.stringify({ state: 'IN_FLIGHT', channel, target, at: clock.now() }),
             { NX: true, EX: IDEM_TTL_SEC }
         );
-        if (claimed) return { ok: true };
+        if (claimed) return { ok: true, effectiveKey: key };
 
         let prior = null;
         try { prior = JSON.parse(await redis.get(idemKey(key))); } catch (_) { /* treat as in-flight */ }
+
+        // If the same business idempotencyKey is fanned out to a different (channel, target),
+        // isolate its slot by scoping the key rather than silently dropping or colliding.
+        if (prior && prior.channel && prior.target && (prior.channel !== channel || prior.target !== target)) {
+            const scopedKey = `${channel}:${target}:${key}`;
+            return claim(scopedKey, { channel, target });
+        }
 
         if (prior && prior.state === 'DONE' && prior.result) {
             return { ok: false, replay: { ...prior.result, deduplicated: true } };
@@ -87,10 +94,10 @@ function createDeliveryLedger(redis, { logger, relay } = {}) {
         throw err;
     }
 
-    async function settle(key, result) {
+    async function settle(key, result, { channel = null, target = null } = {}) {
         if (!key) return;
         try {
-            await redis.set(idemKey(key), JSON.stringify({ state: 'DONE', at: clock.now(), result }), { EX: IDEM_TTL_SEC });
+            await redis.set(idemKey(key), JSON.stringify({ state: 'DONE', channel, target, at: clock.now(), result }), { EX: IDEM_TTL_SEC });
         } catch (e) {
             if (logger) logger.warn(`delivery.idem.settle failed: ${e.message}`);
         }
@@ -130,15 +137,17 @@ function createDeliveryLedger(redis, { logger, relay } = {}) {
      */
     async function run(spec) {
         const { channel, target, templateId, subject, idempotencyKey, send } = spec;
+        const targetStr = String(target ?? '');
 
-        const gate = await claim(idempotencyKey);
+        const gate = await claim(idempotencyKey, { channel, target: targetStr });
         if (!gate.ok) return gate.replay;
+        const effectiveKey = gate.effectiveKey;
 
         let result;
         try {
             result = await send();
         } catch (err) {
-            await release(idempotencyKey);
+            await release(effectiveKey);
             const errText = String(err && err.message || err).slice(0, 500);
             const failId = await record({
                 channel, target, templateId, subject, idempotencyKey,
@@ -182,7 +191,7 @@ function createDeliveryLedger(redis, { logger, relay } = {}) {
             error: result.error || null,
         });
 
-        await settle(idempotencyKey, { ...result, ...(deliveryId ? { deliveryId } : {}) });
+        await settle(effectiveKey, { ...result, ...(deliveryId ? { deliveryId } : {}) }, { channel, target: targetStr });
 
         return {
             ...result,

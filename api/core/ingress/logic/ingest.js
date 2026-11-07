@@ -28,6 +28,47 @@ const { scanDeclaredStrings, scanValue } = require('../../../library/injection-d
  * envelope `actor` (= webhook:{source}); payload carries the upstream request_id
  * (correlation / reverse-trace) plus the raw normalized data.
  */
+const MAX_META_BYTES = 4096;
+const MAX_META_DEPTH = 6;
+const PROTO_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function sanitizeMetaValue(val, depth = 0) {
+    if (depth > MAX_META_DEPTH) {
+        const err = new Error(`meta nesting depth exceeds maximum (${MAX_META_DEPTH})`);
+        err.invalidMeta = true;
+        throw err;
+    }
+    if (val === null || typeof val !== 'object') return val;
+    if (Array.isArray(val)) return val.map((item) => sanitizeMetaValue(item, depth + 1));
+    const out = {};
+    for (const [k, v] of Object.entries(val)) {
+        if (PROTO_KEYS.has(k)) continue;
+        out[k] = sanitizeMetaValue(v, depth + 1);
+    }
+    return out;
+}
+
+function validateAndSanitizeMeta(rawMeta, maxBytes = MAX_META_BYTES) {
+    if (rawMeta === undefined) return { ok: true, meta: undefined };
+    if (typeof rawMeta !== 'object' || rawMeta === null || Array.isArray(rawMeta)) {
+        return { ok: false, error: 'meta must be an object' };
+    }
+    let bytes = 0;
+    try {
+        bytes = Buffer.byteLength(JSON.stringify(rawMeta));
+    } catch (_) {
+        return { ok: false, error: 'meta must be JSON-serializable' };
+    }
+    if (bytes > maxBytes) {
+        return { ok: false, error: `meta exceeds maximum size (${bytes} > ${maxBytes} bytes)` };
+    }
+    try {
+        return { ok: true, meta: sanitizeMetaValue(rawMeta, 0) };
+    } catch (e) {
+        return { ok: false, error: e.message || 'invalid meta' };
+    }
+}
+
 module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
     const C = config.ingest;
 
@@ -116,10 +157,13 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
             return { status: 400, body: { ok: false, error: msg } };
         };
         if (!rawBody || typeof rawBody !== 'object' || Array.isArray(rawBody)) return invalid('body must be a JSON object');
-        if (!reqId || typeof reqId !== 'string' || reqId.length > C.maxRequestIdLen) return invalid('request_id required (non-empty string)');
+        if (!reqId || typeof reqId !== 'string' || reqId.length > C.maxRequestIdLen || /[\s\x00-\x1f]/.test(reqId)) {
+            return invalid('request_id required (non-empty string without whitespace or control chars)');
+        }
         if (rawBody.data !== undefined && (typeof rawBody.data !== 'object' || rawBody.data === null || Array.isArray(rawBody.data))) return invalid('data must be an object');
-        if (rawBody.meta !== undefined && (typeof rawBody.meta !== 'object' || rawBody.meta === null || Array.isArray(rawBody.meta))) return invalid('meta must be an object');
-        const meta = rawBody.meta;
+        const metaCheck = validateAndSanitizeMeta(rawBody.meta, C.maxMetaBytes || MAX_META_BYTES);
+        if (!metaCheck.ok) return invalid(metaCheck.error);
+        const meta = metaCheck.meta;
         if (meta && meta.hop !== undefined) {
             if (!Number.isInteger(meta.hop) || meta.hop < 0) {
                 return invalid('meta.hop must be a non-negative integer');
@@ -140,6 +184,7 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
         }
 
         let data = rawBody.data || {};
+        const reqIdViolations = scanValue(reqId, 'request_id').map((h) => `'${h.path}' matched suspected prompt-injection pattern(s): ${h.hits.join(', ')}`);
         const metaViolations = meta
             ? scanValue(meta, 'meta').map((h) => `'${h.path}' matched suspected prompt-injection pattern(s): ${h.hits.join(', ')}`)
             : [];
@@ -148,6 +193,7 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
                 ...checkParams(src.dataSchema, data),
                 ...undeclaredKeys(src.dataSchema, data).map((k) => `'${k}' is not declared in this source's dataSchema`),
                 ...scanDeclaredStrings(src.dataSchema, data),
+                ...reqIdViolations,
                 ...metaViolations,
             ];
             if (violations.length > 0) {
@@ -162,6 +208,7 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
             const hits = scanValue(data);
             const violations = [
                 ...hits.map((h) => `'${h.path}' matched suspected prompt-injection pattern(s): ${h.hits.join(', ')}`),
+                ...reqIdViolations,
                 ...metaViolations,
             ];
             if (violations.length > 0) {

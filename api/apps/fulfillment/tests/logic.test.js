@@ -728,6 +728,109 @@ describe('fulfillment.instance — dedicated operations', () => {
         expect(after.state).toBe('CONFIRMED');
         expect(after.pending_callbacks).toEqual([]);
     });
+
+    test('security run-3: suspend rejects business-state spoofing, terminal states, and held instances; transition is blocked while suspended', async () => {
+        const inst = await logic.instance.create({ sourceId: 'sec-susp-1', profileId: SM_ID }, MOCK_REQ);
+
+        // P0-1: cannot jump into a declared business state (e.g. PROCESSING or CONFIRMED) via suspendState
+        await expect(logic.instance.suspend({
+            id: inst.id,
+            reason: 'spoof state',
+            suspendState: 'CONFIRMED',
+        }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
+
+        // Suspend into legitimate ASSIST_REQUIRED
+        const suspended = await logic.instance.suspend({
+            id: inst.id,
+            reason: 'captcha',
+        }, MOCK_REQ);
+        expect(suspended.state).toBe('ASSIST_REQUIRED');
+
+        // P1-1: cannot suspend an ON_HOLD instance (would overwrite prevState and brick resume)
+        await logic.instance.resume({ id: inst.id }, MOCK_REQ);
+        await logic.instance.transition({ id: inst.id, event: 'start' }, MOCK_REQ);
+        await logic.instance.hold({ id: inst.id, reason: 'waiting' }, MOCK_REQ);
+        await expect(logic.instance.suspend({
+            id: inst.id,
+            reason: 'double pause',
+        }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
+        await logic.instance.resume({ id: inst.id }, MOCK_REQ);
+
+        // P1-1: terminal instance (CONFIRMED in sm-test has no outgoing transitions) cannot be suspended
+        const termInst = await logic.instance.create({ sourceId: 'sec-term-1', profileId: SM_ID }, MOCK_REQ);
+        await logic.instance.transition({ id: termInst.id, event: 'start' }, MOCK_REQ);
+        await logic.instance.transition({ id: termInst.id, event: 'confirm', metaUpdate: { approved: true } }, MOCK_REQ);
+        expect((await logic.instance.get({ id: termInst.id }, MOCK_REQ)).state).toBe('CONFIRMED');
+        await expect(logic.instance.suspend({
+            id: termInst.id,
+            reason: 'reopen terminal',
+        }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
+    });
+
+    test('security run-3: callback preserves single-use token when evidence/condition gate rejects, so caller can fix payload and retry', async () => {
+        await logic.profile.create({
+            id: 'cb-ev-prof',
+            name: 'Callback Evidence Profile',
+            transitions: [
+                {
+                    event: 'finish',
+                    from: 'DRAFT',
+                    to: 'COMPLETED',
+                    evidence: {
+                        requiredFields: ['taxId', 'proofUrl'],
+                        rejectMasked: true,
+                        rejectLoopbackUrls: true,
+                    },
+                },
+            ],
+        });
+        const inst = await logic.instance.create({ sourceId: 'sec-cb-1', profileId: 'cb-ev-prof' }, MOCK_REQ);
+        const issued = await logic.instance.token.issue({
+            id: inst.id,
+            allowedEvents: ['finish'],
+            ttlMs: 60000,
+        }, MOCK_REQ);
+
+        // Attempt 1: masked value & IPv6-mapped loopback URL → rejected by evidence gate
+        await expect(logic.instance.callback({
+            event: 'finish',
+            metaUpdate: { taxId: '9132****MA1X', proofUrl: 'http://[::ffff:127.0.0.1]:8124/a.pdf' },
+        }, { callbackToken: issued.callbackToken })).rejects.toMatchObject({ code: -32602 });
+
+        // Attempt 2: empty object must NOT bypass requiredFields, and token was NOT burned by Attempt 1!
+        await expect(logic.instance.callback({
+            event: 'finish',
+            metaUpdate: { taxId: {}, proofUrl: 'https://oss.example.com/a.pdf' },
+        }, { callbackToken: issued.callbackToken })).rejects.toMatchObject({ code: -32602 });
+
+        // Attempt 3: fixed payload with the SAME token now succeeds and consumes the token!
+        const ok = await logic.instance.callback({
+            event: 'finish',
+            metaUpdate: { taxId: '91320100MA1X999999', proofUrl: 'https://oss.example.com/a.pdf' },
+        }, { callbackToken: issued.callbackToken });
+        expect(ok.state).toBe('COMPLETED');
+
+        // Attempt 4: token is now consumed → 401 UNAUTHORIZED
+        await expect(logic.instance.callback({
+            event: 'finish',
+            metaUpdate: { taxId: '91320100MA1X999999', proofUrl: 'https://oss.example.com/a.pdf' },
+        }, { callbackToken: issued.callbackToken })).rejects.toMatchObject({ code: -32003 });
+    });
+
+    test('security run-3: idempotent create does not collide across colon-containing owner/sourceId', async () => {
+        const first = await logic.instance.create({
+            profileId: SM_ID,
+            sourceId: 'c',
+            idempotent: true,
+        }, { user: 'u1', constraints: { $owner: { field: 'tenantId', value: `t1:${SM_ID}` } } });
+        const second = await logic.instance.create({
+            profileId: SM_ID,
+            sourceId: `${SM_ID}:c`,
+            idempotent: true,
+        }, { user: 'u2', constraints: { $owner: { field: 'tenantId', value: 't1' } } });
+        expect(second.id).not.toBe(first.id);
+        expect(second.deduplicated).toBeUndefined();
+    });
 });
 
 // ============================================================

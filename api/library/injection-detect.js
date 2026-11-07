@@ -57,12 +57,12 @@ function scanDeclaredStrings(a, b) {
         if (!item || typeof item.name !== 'string') continue;
         const val = data[item.name];
         if (val === undefined || val === null) continue;
-        if (item.type === 'string' && typeof val === 'string') {
+        if (typeof val === 'string' && (!item.type || item.type === 'string')) {
             const hits = scanString(val);
             if (hits.length > 0) {
                 violations.push(`'${item.name}' matched suspected prompt-injection pattern(s): ${hits.join(', ')}`);
             }
-        } else if ((item.type === 'object' || item.type === 'array') && typeof val === 'object') {
+        } else if (typeof val === 'object' && (!item.type || item.type === 'object' || item.type === 'array')) {
             const found = scanValue(val, item.name);
             for (const h of found) {
                 const patterns = h.hits || [h.pattern];
@@ -73,11 +73,14 @@ function scanDeclaredStrings(a, b) {
     return violations;
 }
 
+const MAX_SCAN_DEPTH = 16;
+
 /**
  * Recursively scan any JavaScript object, array, or string for prompt injection patterns.
  * Returns an array of { path, hits, pattern }.
  */
-function scanValue(val, path = '', seen = new WeakSet()) {
+function scanValue(val, path = '', seen = new WeakSet(), depth = 0) {
+    if (depth > MAX_SCAN_DEPTH) return [];
     if (typeof val === 'string') {
         const hits = scanString(val);
         return hits.length ? [{ path: path || 'root', hits, pattern: hits[0] }] : [];
@@ -89,7 +92,7 @@ function scanValue(val, path = '', seen = new WeakSet()) {
     if (Array.isArray(val)) {
         const out = [];
         val.forEach((item, idx) => {
-            out.push(...scanValue(item, path ? `${path}[${idx}]` : `[${idx}]`, seen));
+            out.push(...scanValue(item, path ? `${path}[${idx}]` : `[${idx}]`, seen, depth + 1));
         });
         return out;
     }
@@ -100,7 +103,7 @@ function scanValue(val, path = '', seen = new WeakSet()) {
         if (keyHits.length) {
             out.push({ path: `${subPath}[key]`, hits: keyHits, pattern: keyHits[0] });
         }
-        out.push(...scanValue(v, subPath, seen));
+        out.push(...scanValue(v, subPath, seen, depth + 1));
     }
     return out;
 }

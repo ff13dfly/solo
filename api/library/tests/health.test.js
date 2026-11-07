@@ -193,4 +193,18 @@ describe('library/health — /metrics (toFix §6.5)', () => {
         expect(res._body).toContain('# TYPE solo_events_total counter');
         expect(res._body).toContain('solo_events_total{service="svc-t",kind="x"} 5');
     });
+
+    test('security run-3: escapes backslashes and newlines in Prometheus label values and help text', async () => {
+        const app = fakeApp();
+        mountHealth(app, {
+            serviceName: 'svc-esc', getRedis: () => null,
+            getMetrics: async () => [
+                { name: 'solo_test_metric', value: 1, help: 'line1\n# injected', labels: { path: 'a\\b\nc"d' } },
+            ],
+        });
+        const res = metricsRes();
+        await app._routes['/metrics']({}, res);
+        expect(res._body).toContain('# HELP solo_test_metric line1\\n# injected');
+        expect(res._body).toContain('solo_test_metric{service="svc-esc",path="a\\\\b\\nc\\"d"} 1');
+    });
 });

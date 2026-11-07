@@ -36,10 +36,12 @@
 const { checkPickPath } = require('../../../library/contract');
 
 const META_VAR_PREFIX = 'instance.meta.';
+const ALLOWED_EVIDENCE_KEYS = new Set(['requiredFields', 'rejectMasked', 'rejectLoopbackUrls', 'minRows', 'minBytes']);
+const hasOwn = (obj, k) => Boolean(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, k));
 
 /** Build { 'service.method': methodDecl } from an array of introspection arrays. */
 function buildMethodIndex(introspectionArrays = []) {
-    const idx = {};
+    const idx = Object.create(null);
     for (const arr of introspectionArrays) {
         if (!Array.isArray(arr)) continue;
         for (const m of arr) {
@@ -103,6 +105,12 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
     const errors = [];
     const warnings = [];
     const pname = (profile && (profile.id || profile.name)) || '(profile)';
+    if (profile && profile.meta_fields !== undefined && !Array.isArray(profile.meta_fields)) {
+        errors.push(`${pname}: meta_fields must be an array`);
+    }
+    if (profile && profile.transitions !== undefined && !Array.isArray(profile.transitions)) {
+        errors.push(`${pname}: transitions must be an array`);
+    }
     const metaFields = Array.isArray(profile && profile.meta_fields) ? profile.meta_fields : [];
     const fieldKeys = new Set(metaFields.map((f) => f && f.key).filter(Boolean));
 
@@ -121,7 +129,7 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
             continue;
         }
         const methodName = `${s.service}.${s.method}`;
-        const method = methodIndex[methodName];
+        const method = hasOwn(methodIndex, methodName) ? methodIndex[methodName] : null;
         if (!method) {
             errors.push(`${pname}: meta_field '${f.key}' source method '${methodName}' is not a registered API method`);
             continue;
@@ -184,7 +192,7 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
                 errors.push(`${pname}: transition '${t.event || '?'}' has a task action with no method`);
                 continue;
             }
-            if (!methodIndex[a.method]) {
+            if (!hasOwn(methodIndex, a.method)) {
                 errors.push(`${pname}: transition '${t.event || '?'}' action method '${a.method}' is not a registered API method`);
             }
             for (const pv of metaVarsInCondition(a.params)) {
@@ -261,7 +269,7 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
                 // method's namespace.
                 const target = a.service || a.method.split('.')[0];
                 const where = `${pname}: transition '${t.event || '?'}' action '${a.method}'`;
-                const rule = wl[target];
+                const rule = hasOwn(wl, target) ? wl[target] : null;
                 if (!rule) {
                     errors.push(`${where} dispatches to service '${target}', which is not in the Router task whitelist — the _task is dropped at runtime AFTER the transition returns 200 (silently). Add it via setting.task.update (read-modify-write: setting.task.get replaces the WHOLE map).`);
                     continue;
@@ -312,12 +320,22 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
             errors.push(`${where} must be an object`);
             continue;
         }
+        for (const k of Object.keys(ev)) {
+            if (!ALLOWED_EVIDENCE_KEYS.has(k)) {
+                errors.push(`${where} has unknown property '${k}' (allowed: ${Array.from(ALLOWED_EVIDENCE_KEYS).join(', ')})`);
+            }
+        }
+        for (const boolKey of ['rejectMasked', 'rejectLoopbackUrls']) {
+            if (ev[boolKey] !== undefined && typeof ev[boolKey] !== 'boolean') {
+                errors.push(`${where}.${boolKey} must be a boolean`);
+            }
+        }
         if (ev.requiredFields !== undefined) {
-            if (!Array.isArray(ev.requiredFields) || ev.requiredFields.some((f) => typeof f !== 'string' || !f)) {
+            if (!Array.isArray(ev.requiredFields) || ev.requiredFields.some((f) => typeof f !== 'string' || !f.trim())) {
                 errors.push(`${where}.requiredFields must be an array of non-empty field paths`);
             } else {
                 for (const f of ev.requiredFields) {
-                    const head = f.split('.')[0];
+                    const head = f.trim().split('.')[0];
                     if (head && !fieldKeys.has(head)) {
                         warnings.push(`${where} requires '${f}' with no declared meta_field '${head}' — ensure it is supplied via metaUpdate`);
                     }
@@ -330,7 +348,11 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
             if (typeof v === 'number') {
                 if (!Number.isFinite(v) || v <= 0) errors.push(`${where}.${numKey} must be a positive number`);
             } else if (typeof v === 'object' && !Array.isArray(v)) {
-                for (const [k, min] of Object.entries(v)) {
+                const entries = Object.entries(v);
+                if (entries.length === 0) {
+                    errors.push(`${where}.${numKey} map must not be empty`);
+                }
+                for (const [k, min] of entries) {
                     if (typeof min !== 'number' || !Number.isFinite(min) || min <= 0) {
                         errors.push(`${where}.${numKey}['${k}'] must be a positive number`);
                     }

@@ -266,6 +266,7 @@ const methods = [
             { name: 'id',          type: 'string', required: true,  maxLength: 64, pattern: 'id', description: 'Profile unique key (e.g. standard_trade)' },
             { name: 'name',        type: 'string', required: true,  maxLength: 128, description: 'Human-readable profile name' },
             { name: 'transitions', type: 'array',  required: false, description: 'Transition rules array (optional evidence gate per rule)' },
+            { name: 'meta_fields', type: 'array',  required: false, description: 'Sourced/metaUpdate fields' },
             { name: 'stateTtls',   type: 'object', required: false, description: 'Optional per-state TTL map { STATE: { ttlMs, event, reason? } } swept by instance.reap' }
         ],
         description: 'Create a fulfillment profile (state machine configuration)',
@@ -291,7 +292,11 @@ const methods = [
     {
         name: 'fulfillment.profile.update',
         params: [
-            { name: 'id', type: 'string', required: true, maxLength: 64, pattern: 'id', description: 'Profile ID' }
+            { name: 'id',          type: 'string', required: true,  maxLength: 64, pattern: 'id', description: 'Profile ID' },
+            { name: 'name',        type: 'string', required: false, maxLength: 128, description: 'Human-readable profile name' },
+            { name: 'transitions', type: 'array',  required: false, description: 'Transition rules array' },
+            { name: 'meta_fields', type: 'array',  required: false, description: 'Sourced/metaUpdate fields' },
+            { name: 'stateTtls',   type: 'object', required: false, description: 'Optional per-state TTL map { STATE: { ttlMs, event, reason? } }' }
         ],
         description: 'Update a fulfillment profile',
         returns_schema: PROFILE_RETURN,   // entity.update() → merged record + updatedAt
