@@ -38,6 +38,8 @@ if (!servicesJson || !outputFile) {
 }
 
 const services = JSON.parse(fs.readFileSync(servicesJson, 'utf8'));
+const rootPkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf8'));
+const bundleVersion = rootPkg.version || null;
 
 const factoryLines = services
     .map(s => `  '${s.name}': () => require('./${s.path}'),`)
@@ -89,6 +91,7 @@ ${guideLines}
 // the bundle they land one level too high. Code that needs the root reads this first.
 // See docs/feedback/done/bundle-upload-dir-escapes-project-root.md.
 global.__SOLO_ROOT__ = require('path').resolve(__dirname, '..', '..');
+global.__SOLO_BUNDLE_VERSION__ = ${JSON.stringify(bundleVersion)};
 
 function resolveConfig() {
   if (process.env.SOLO_SERVICES_JSON) {

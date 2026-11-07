@@ -1,7 +1,9 @@
 /**
  * Fulfillment Service — Unit Tests (hermetic, mock Redis).
  */
+process.env.CLOCK_TEST_MODE = 'true';
 
+const clock          = require('../../../library/clock');
 const createLogic    = require('../logic');
 const introspection  = require('../handlers/introspection');
 const entities       = require('../handlers/entities');
@@ -506,6 +508,226 @@ describe('fulfillment.instance — dedicated operations', () => {
         expect(updated.pending_callbacks).toEqual([]);
         expect(updated.meta).toEqual({ k: 2 });
     });
+
+    // ── 5 RPA × Fulfillment Convergence Primitives (2026-11-07) ─────────────
+
+    test('create({ idempotent: true }) deduplicates by (profileId, sourceId) within $owner scope', async () => {
+        const ownerA = { user: 'u-a', permit: 'user', constraints: { $owner: { field: 'ownerId', value: 'tenant-A' } } };
+        const ownerB = { user: 'u-b', permit: 'user', constraints: { $owner: { field: 'ownerId', value: 'tenant-B' } } };
+
+        const first = await logic.instance.create({ sourceId: 'ERP-SYNC-20261107', profileId: SM_ID, idempotent: true }, ownerA);
+        expect(first.deduplicated).toBeUndefined();
+
+        const replay = await logic.instance.create({ sourceId: 'ERP-SYNC-20261107', profileId: SM_ID, idempotent: true }, ownerA);
+        expect(replay.id).toBe(first.id);
+        expect(replay.deduplicated).toBe(true);
+
+        // Different $owner tenant with same sourceId gets its own isolated instance!
+        const otherTenant = await logic.instance.create({ sourceId: 'ERP-SYNC-20261107', profileId: SM_ID, idempotent: true }, ownerB);
+        expect(otherTenant.id).not.toBe(first.id);
+        expect(otherTenant.deduplicated).toBeUndefined();
+    });
+
+    test('suspend & resume — enters ASSIST_REQUIRED from any state with checkpoint stack and restores blockedState with resolution + metaUpdate', async () => {
+        const created = await logic.instance.create({ sourceId: 'INV-SUSP-1', profileId: SM_ID }, MOCK_REQ);
+        const started = await logic.instance.transition({ id: created.id, event: 'start' }, MOCK_REQ);
+        expect(started.state).toBe('PROCESSING');
+
+        // Notice SM_PROFILE has NO transition to ASSIST_REQUIRED — suspend works orthogonal to transitions!
+        const suspended = await logic.instance.suspend({
+            id: created.id,
+            reason: '税务局人脸扫码验证拦截',
+            reasonCode: 'OTP_REQUIRED',
+            checkpoint: { step: 'baiwang_login', pageUrl: 'https://dppt.jiangsu.chinatax.gov.cn' },
+            aiSuggestion: '请开票员扫码完成后点击恢复',
+            metaUpdate: { screenshotId: 'ast_01' },
+            expectedTransitionId: started.history.at(-1).transition_id,
+        }, MOCK_REQ);
+
+        expect(suspended.state).toBe('ASSIST_REQUIRED');
+        expect(suspended.suspension).toMatchObject({
+            blockedState: 'PROCESSING',
+            suspendState: 'ASSIST_REQUIRED',
+            reasonCode: 'OTP_REQUIRED',
+            reason: '税务局人脸扫码验证拦截',
+            checkpoint: { step: 'baiwang_login', pageUrl: 'https://dppt.jiangsu.chinatax.gov.cn' },
+            aiSuggestion: '请开票员扫码完成后点击恢复',
+        });
+        expect(suspended.meta.screenshotId).toBe('ast_01');
+
+        // Double suspend rejected
+        await expect(logic.instance.suspend({ id: created.id, reason: 'again' }, MOCK_REQ)).rejects.toMatchObject({ code: -32602 });
+
+        // Resume with resolution + metaUpdate restores PROCESSING and clears suspension
+        const resumed = await logic.instance.resume({
+            id: created.id,
+            resolution: '开票员已完成扫码登录',
+            metaUpdate: { approved: true, authSessionReady: true },
+            expectedTransitionId: suspended.history.at(-1).transition_id,
+        }, MOCK_REQ);
+
+        expect(resumed.state).toBe('PROCESSING');
+        expect(resumed.suspension).toBeNull();
+        expect(resumed.meta).toMatchObject({ screenshotId: 'ast_01', approved: true, authSessionReady: true, last_assist_resolution: '开票员已完成扫码登录' });
+        expect(resumed.history.at(-1)).toMatchObject({ state: 'PROCESSING', event: 'resume', resolution: '开票员已完成扫码登录' });
+
+        // Can immediately continue normal profile transitions from restored state!
+        const confirmed = await logic.instance.transition({ id: created.id, event: 'confirm' }, MOCK_REQ);
+        expect(confirmed.state).toBe('CONFIRMED');
+    });
+
+    test('stateTtls & instance.reap — automatically transitions expired instances and emits _tasks', async () => {
+        const ttlProfileId = 'rpa-ttl-prof';
+        await redis.set(`${config.redis.profilePrefix}${ttlProfileId}`, JSON.stringify({
+            id: ttlProfileId,
+            name: 'RPA TTL Profile',
+            status: 'ACTIVE',
+            stateTtls: {
+                PROCESSING: { ttlMs: 1800000, event: 'timeout_exceeded', reason: 'RPA job stuck > 30m' },
+            },
+            transitions: [
+                { event: 'start', from: 'DRAFT', to: 'PROCESSING', condition: null, actions: [] },
+                {
+                    event: 'timeout_exceeded',
+                    from: 'PROCESSING',
+                    to: 'TIMED_OUT',
+                    condition: null,
+                    actions: [{ service: 'notification', method: 'notification.send', params: { targetId: 'ops', type: 'rpa.timeout' } }],
+                },
+            ],
+        }));
+
+        const t0 = 1_760_000_000_000;
+        clock.freeze(t0);
+        try {
+            const stale = await logic.instance.create({ sourceId: 'JOB-STALE', profileId: ttlProfileId }, MOCK_REQ);
+            await logic.instance.transition({ id: stale.id, event: 'start' }, MOCK_REQ);
+
+            clock.freeze(t0 + 600_000); // +10m: fresh instance
+            const fresh = await logic.instance.create({ sourceId: 'JOB-FRESH', profileId: ttlProfileId }, MOCK_REQ);
+            await logic.instance.transition({ id: fresh.id, event: 'start' }, MOCK_REQ);
+
+            clock.freeze(t0 + 1_800_001); // +30m+1ms: stale is expired, fresh is at 20m
+
+            // Dry run reports without mutating
+            const preview = await logic.instance.reap({ profileId: ttlProfileId, dryRun: true }, ADMIN_REQ);
+            expect(preview).toMatchObject({ scanned: 2, expired: 1, dryRun: true });
+            expect((await logic.instance.get({ id: stale.id })).state).toBe('PROCESSING');
+
+            // Real reap transitions stale → TIMED_OUT and returns _tasks
+            const reaped = await logic.instance.reap({ profileId: ttlProfileId }, ADMIN_REQ);
+            expect(reaped.expired).toBe(1);
+            expect(reaped.reaped).toHaveLength(1);
+            expect(reaped.reaped[0]).toMatchObject({ id: stale.id, fromState: 'PROCESSING', toState: 'TIMED_OUT', event: 'timeout_exceeded' });
+            expect(reaped._tasks).toHaveLength(1);
+            expect((await logic.instance.get({ id: stale.id })).state).toBe('TIMED_OUT');
+            expect((await logic.instance.get({ id: fresh.id })).state).toBe('PROCESSING');
+        } finally {
+            clock.reset();
+        }
+    });
+
+    test('transition.evidence quality gate — blocks masked values (•••••• / ****), loopback URLs, and low row counts', async () => {
+        const evProfileId = 'rpa-evidence-prof';
+        await redis.set(`${config.redis.profilePrefix}${evProfileId}`, JSON.stringify({
+            id: evProfileId,
+            name: 'Evidence Gate Profile',
+            status: 'ACTIVE',
+            transitions: [
+                {
+                    event: 'complete',
+                    from: 'DRAFT',
+                    to: 'COMPLETED',
+                    condition: null,
+                    evidence: {
+                        requiredFields: ['taxId', 'artifactUrl'],
+                        rejectMasked: true,
+                        rejectLoopbackUrls: true,
+                        minRows: 1,
+                    },
+                    actions: [],
+                },
+            ],
+        }));
+
+        const inst = await logic.instance.create({ sourceId: 'CAT-1688-01', profileId: evProfileId }, MOCK_REQ);
+
+        // 1. Missing requiredFields
+        await expect(logic.instance.transition({
+            id: inst.id,
+            event: 'complete',
+            metaUpdate: { taxId: '91320214MA1X', rowCount: 5 },
+        }, MOCK_REQ)).rejects.toMatchObject({ code: -32602, message: expect.stringMatching(/artifactUrl.*required/i) });
+
+        // 2. Masked value (•••••• or ****)
+        await expect(logic.instance.transition({
+            id: inst.id,
+            event: 'complete',
+            metaUpdate: { taxId: '••••••', artifactUrl: 'https://oss.w3os.net/a/1.pdf', rowCount: 5 },
+        }, MOCK_REQ)).rejects.toMatchObject({ code: -32602, message: expect.stringMatching(/masked/i) });
+
+        await expect(logic.instance.transition({
+            id: inst.id,
+            event: 'complete',
+            metaUpdate: { taxId: '9132****MA1X', artifactUrl: 'https://oss.w3os.net/a/1.pdf', rowCount: 5 },
+        }, MOCK_REQ)).rejects.toMatchObject({ code: -32602, message: expect.stringMatching(/masked/i) });
+
+        // 3. Loopback URL (127.0.0.1 / localhost)
+        await expect(logic.instance.transition({
+            id: inst.id,
+            event: 'complete',
+            metaUpdate: { taxId: '91320214MA1X', artifactUrl: 'http://127.0.0.1:8124/a/1.pdf', rowCount: 5 },
+        }, MOCK_REQ)).rejects.toMatchObject({ code: -32602, message: expect.stringMatching(/loopback/i) });
+
+        // 4. Zero rows
+        await expect(logic.instance.transition({
+            id: inst.id,
+            event: 'complete',
+            metaUpdate: { taxId: '91320214MA1X', artifactUrl: 'https://oss.w3os.net/a/1.pdf', rowCount: 0 },
+        }, MOCK_REQ)).rejects.toMatchObject({ code: -32602, message: expect.stringMatching(/row count/i) });
+
+        // 5. Genuine unmasked evidence + public URL + rows >= 1 succeeds!
+        const ok = await logic.instance.transition({
+            id: inst.id,
+            event: 'complete',
+            metaUpdate: { taxId: '91320214MA1X', artifactUrl: 'https://oss.w3os.net/a/1.pdf', rowCount: 12 },
+        }, MOCK_REQ);
+        expect(ok.state).toBe('COMPLETED');
+    });
+
+    test('token.issue & callback — single-use capability token enforces allowedEvents, atomic consumption, and ABA expectedTransitionId', async () => {
+        const inst = await logic.instance.create({ sourceId: 'RPA-CB-01', profileId: SM_ID }, MOCK_REQ);
+        await logic.instance.transition({ id: inst.id, event: 'start' }, MOCK_REQ);
+
+        const issued = await logic.instance.token.issue({
+            id: inst.id,
+            allowedEvents: ['confirm'],
+            ttlMs: 60000,
+        }, MOCK_REQ);
+        expect(issued.callbackToken).toMatch(/^flcb_[0-9a-f]{48}$/);
+        expect((await logic.instance.get({ id: inst.id }, MOCK_REQ)).pending_callbacks).toHaveLength(1);
+
+        // Disallowed event rejected with 403 FORBIDDEN without burning the token
+        await expect(logic.instance.callback(
+            { event: 'cancel_requested', metaUpdate: { cancel_reason: 'hack' } },
+            { callbackToken: issued.callbackToken }
+        )).rejects.toMatchObject({ code: -32005 });
+
+        // Concurrent valid callbacks: exactly ONE wins, second gets 401 UNAUTHORIZED!
+        const race = await Promise.allSettled([
+            logic.instance.callback({ event: 'confirm', metaUpdate: { approved: true } }, { callbackToken: issued.callbackToken }),
+            logic.instance.callback({ event: 'confirm', metaUpdate: { approved: true } }, { callbackToken: issued.callbackToken }),
+        ]);
+        const winners = race.filter((r) => r.status === 'fulfilled');
+        const losers = race.filter((r) => r.status === 'rejected');
+        expect(winners).toHaveLength(1);
+        expect(losers).toHaveLength(1);
+        expect(losers[0].reason.code).toBe(-32003);
+
+        const after = await logic.instance.get({ id: inst.id }, MOCK_REQ);
+        expect(after.state).toBe('CONFIRMED');
+        expect(after.pending_callbacks).toEqual([]);
+    });
 });
 
 // ============================================================
@@ -598,7 +820,7 @@ describe('introspection compliance', () => {
 
     test('the dedicated-operation methods are declared', () => {
         const names = new Set(introspection.map(m => m.name));
-        for (const m of ['cancel', 'hold', 'resume', 'override']) {
+        for (const m of ['cancel', 'hold', 'suspend', 'resume', 'override', 'reap', 'token.issue', 'callback']) {
             expect(names.has(`fulfillment.instance.${m}`)).toBe(true);
         }
     });

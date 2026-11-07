@@ -22,9 +22,11 @@ module.exports = {
             'prevState':      { type: 'string',   description: 'Previous state before last transition' },
             'stateChangedAt': { type: 'datetime', description: 'Timestamp of last state change' },
             'createdAt':      { type: 'datetime', description: 'Creation timestamp' },
-            'createdBy':      { type: 'string',   description: 'User who created the instance' },
-            'meta':           { type: 'object',   description: 'Free-form metadata updated per transition' },
-            'history':        { type: 'array',    description: 'Ordered log of state transitions' }
+            'createdBy':         { type: 'string',   description: 'User who created the instance' },
+            'suspension':        { type: 'object',   description: 'Active ASSIST_REQUIRED breakpoint frame { blockedState, suspendState, reasonCode, reason, checkpoint, aiSuggestion, suspendedAt }' },
+            'pending_callbacks': { type: 'array',    description: 'Active single-use capability callback tokens awaiting external RPA/webhook completion' },
+            'meta':              { type: 'object',   description: 'Free-form metadata updated per transition' },
+            'history':           { type: 'array',    description: 'Ordered log of state transitions' }
         }
     },
 
@@ -34,7 +36,8 @@ module.exports = {
         fields: {
             'id':          { type: 'string',   description: 'Profile unique key (e.g. standard_trade)', required: true },
             'name':        { type: 'string',   description: 'Human-readable profile name', required: true },
-            'transitions': { type: 'array',    description: 'Transition rules (JsonLogic conditions + actions)' },
+            'transitions': { type: 'array',    description: 'Transition rules (JsonLogic conditions + evidence gates + actions)' },
+            'stateTtls':   { type: 'object',   description: 'Per-state驻留超时配置 { STATE: { ttlMs, event, reason? } }' },
             'status':      { type: 'enum',     options: [STATUS.ACTIVE, STATUS.DELETED], description: 'Entity lifecycle status (soft-delete axis)' },
             'reviewState': { type: 'enum',     options: ['PENDING_REVIEW', 'APPROVED', 'REJECTED'], description: 'Governance review axis (submission lane). ABSENT for trusted direct-create profiles (immediately usable); set by profile.submit/approve/reject. Instances may only be created on an absent-or-APPROVED profile.' },
             'submittedBy': { type: 'string',   description: 'UID that submitted the profile for review (null for direct-create)' },

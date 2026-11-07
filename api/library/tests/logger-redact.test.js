@@ -6,16 +6,19 @@
 const { redactSensitive } = require('../logger');
 
 describe('logger.redactSensitive', () => {
-    test('masks credential-named keys at the top level', () => {
+    test('masks credential-named keys at the top level (including callbackToken)', () => {
         const out = redactSensitive({
             anchor: 'user@x.com', deviceId: 'dev-1',
             deviceToken: 'SECRET32', password: 'p', challenge: 'c', response: 'r', otp: '123456',
+            callbackToken: 'flcb_secret123', callback_token: 'flcb_secret456',
         });
         expect(out.deviceToken).toBe('***');
         expect(out.password).toBe('***');
         expect(out.challenge).toBe('***');
         expect(out.response).toBe('***');
         expect(out.otp).toBe('***');
+        expect(out.callbackToken).toBe('***');
+        expect(out.callback_token).toBe('***');
         // non-sensitive preserved
         expect(out.anchor).toBe('user@x.com');
         expect(out.deviceId).toBe('dev-1');

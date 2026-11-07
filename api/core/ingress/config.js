@@ -36,6 +36,7 @@ module.exports = {
         // queue instead of forwarding it — a human decides via ingress.review.approve/discard.
         reviewQueueKey: 'INGRESS:REVIEW',
         reviewMaxlen: Number(process.env.INGRESS_REVIEW_MAXLEN) || 500,
+        maxFederationHops: Number(process.env.INGRESS_MAX_FEDERATION_HOPS) || 3,
     },
 
     // AI semantic description (Agent intent recognition).

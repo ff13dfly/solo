@@ -268,6 +268,74 @@ describe('lintProfile — task egress (rule 7: can the action actually leave the
     });
 });
 
+describe('lintProfile — stateTtls, evidence gates, and state case-drift (rules 8 & 9)', () => {
+    test('rule 8: valid stateTtls pointing to a real transition from that state passes', () => {
+        const r = lintProfile({
+            id: 'ttl-ok',
+            transitions: [
+                { event: 'start', from: 'DRAFT', to: 'DISPATCHED' },
+                { event: 'timeout_exceeded', from: 'DISPATCHED', to: 'TIMED_OUT' },
+            ],
+            stateTtls: {
+                DISPATCHED: { ttlMs: 1800000, event: 'timeout_exceeded' },
+            },
+        }, methodIndex);
+        expect(r.errors).toEqual([]);
+    });
+
+    test('rule 8: stateTtls referencing an undefined transition or non-positive ttlMs errors', () => {
+        const r1 = lintProfile({
+            id: 'ttl-bad-ev',
+            transitions: [{ event: 'start', from: 'DRAFT', to: 'DISPATCHED' }],
+            stateTtls: { DISPATCHED: { ttlMs: 60000, event: 'no_such_timeout' } },
+        }, methodIndex);
+        expect(r1.errors.join('\n')).toMatch(/stateTtls\['DISPATCHED'\].*no_such_timeout/);
+
+        const r2 = lintProfile({
+            id: 'ttl-bad-ms',
+            transitions: [
+                { event: 'start', from: 'DRAFT', to: 'DISPATCHED' },
+                { event: 'timeout_exceeded', from: 'DISPATCHED', to: 'TIMED_OUT' },
+            ],
+            stateTtls: { DISPATCHED: { ttlMs: 0, event: 'timeout_exceeded' } },
+        }, methodIndex);
+        expect(r2.errors.join('\n')).toMatch(/stateTtls\['DISPATCHED'\].*ttlMs/);
+    });
+
+    test('rule 9a: transition.evidence validates schema and warns on unbacked requiredFields', () => {
+        const bad = lintProfile({
+            id: 'ev-bad',
+            transitions: [{ event: 'done', from: 'DRAFT', to: 'DONE', evidence: { minRows: -1 } }],
+        }, methodIndex);
+        expect(bad.errors.join('\n')).toMatch(/evidence.*minRows/);
+
+        const warn = lintProfile({
+            id: 'ev-warn',
+            transitions: [{ event: 'done', from: 'DRAFT', to: 'DONE', evidence: { requiredFields: ['invoiceUrl'], rejectMasked: true } }],
+        }, methodIndex);
+        expect(warn.errors).toEqual([]);
+        expect(warn.warnings.join('\n')).toMatch(/invoiceUrl.*meta_field/);
+    });
+
+    test('rule 9b: conflicting state casing (completed vs COMPLETED) is a hard error; lowercase state warns', () => {
+        const split = lintProfile({
+            id: 'case-split',
+            transitions: [
+                { event: 'a', from: 'DRAFT', to: 'COMPLETED' },
+                { event: 'b', from: 'DRAFT', to: 'completed' },
+            ],
+        }, methodIndex);
+        expect(split.errors.join('\n')).toMatch(/conflicting state casing.*COMPLETED/i);
+
+        const lower = lintProfile({
+            id: 'case-lower',
+            transitions: [{ event: 'a', from: 'DRAFT', to: 'needs_assist' }],
+        }, methodIndex);
+        expect(lower.errors).toEqual([]);
+        expect(lower.warnings.join('\n')).toMatch(/needs_assist.*UPPER_SNAKE_CASE/);
+    });
+});
+
 describe('lintProfile — robustness', () => {
     test('empty / malformed profiles never throw', () => {
         expect(() => lintProfile(null, methodIndex)).not.toThrow();

@@ -43,11 +43,19 @@ webhook）的镜像。
   且 Twilio 的 `ContentVariables` 是**位置键** `{"1":…,"2":…}`，所以模版要声明
   `variableOrder: ['code','ttl']` 把命名变量映射成位置——**不声明就发不对**。
 
-## 配方三：发 webhook（机器目标）
+## 配方三：发 webhook（机器目标 / 跨箱直连对端 SOLO）
 
-`gateway.webhook.send { url, payload, type?, targetId?, secret?, timeoutMs? }`——
-把 JSON POST 到外部端点。body 会被包成 `{ type, targetId, payload, sent_at }`。
-`url` 来自调用方（notification 规则参数 / sentinel 配置），**绝不取自用户资料**。
+`gateway.webhook.send { url, payload, type?, targetId?, secret?, timeoutMs?, idempotencyKey?, target?, meta? }`——支持两种目标方言：
+
+1. **第三方机器端点（默认，`target: 'webhook'` 或不传）**：
+   把 JSON POST 到外部端点，body 包成 `{ type, targetId, payload, sent_at }`；传了 `secret` 则附 `X-Solo-Signature: sha256=<hex>`。`url` 来自调用方（notification 规则 / sentinel / fulfillment `_tasks`），**绝不取自用户资料**。
+2. **跨箱直连另一套 SOLO（`target: 'solo'`，SOLO Bridge 同主体层）**：
+   对端管理员先调 `ingress.source.create` 拿到 `apiKey`，本箱直接调：
+   - `url`: 对端 Router 的 `/jsonrpc`（如 `https://peer.example.com/jsonrpc` 或同机异栈 `http://127.0.0.1:8600/jsonrpc`——`target: 'solo'` 对 `/jsonrpc` 窄口放行 loopback，无需开 `WEBHOOK_ALLOW_LOOPBACK=1`，仍严格拦截云 metadata 与非 `/jsonrpc` 路径）。
+   - `secret`: 对端 `ingress` 源的 `apiKey`（走 `Authorization: ApiKey <secret>` 头，**绝不进入 JSON-RPC `params`**）。
+   - `idempotencyKey`: 自动映射为对端 `ingress.ingest` 的 `request_id`（若含 `:` / `/` 等非 `PATTERNS.id` 字符如 `notification` 或 `fulfillment` 任务键，自动确定性 SHA-256 归一化并在 `meta.idempotency_key` 保留原键），两端去重贯通。
+   - `meta`: 可选跨箱信封，gateway 自动把 `meta.hop` 加 1（`hop >= 3` 发前即拦，防 A→B→A 事件风暴）。
+   - 返回：`provider: 'solo'`，正常接受带 `stream` 与 `duplicate: boolean`；若被对端 `dataSchema`/防注入扣入复核队列，诚实返回 `{ success: false, held: true, status: 422, violations }`（对端已收下待审，不触发重试风暴）；`401`/`403`/`502` 抛错并释放本箱 `idempotencyKey` 供恢复后重发。
 
 ## 配方四：查"到底发出去了没"（投递台账 + 回执）
 

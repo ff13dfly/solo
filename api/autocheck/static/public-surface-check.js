@@ -52,6 +52,9 @@ const ALLOWED_PUBLIC_METHODS = {
         'ping',
         'methods',
         'entities',
+        // Single-use capability callback token (SHA-256 hashed in FULFILLMENT:CBTOKEN:*,
+        // scoped to one instance + allowedEvents + expectedTransitionId, consumed atomically).
+        'fulfillment.instance.callback',
     ]),
 };
 

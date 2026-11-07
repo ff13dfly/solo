@@ -40,6 +40,18 @@ mountHealth(app, { serviceName: config.serviceName, version: config.version, get
 // --- BOOTSTRAP ---
 
 let Methods;
+let reaperTimer = null;
+
+function extractCallbackToken(req) {
+    const xHeader = req && req.headers && req.headers['x-callback-token'];
+    if (typeof xHeader === 'string' && xHeader.trim()) return xHeader.trim();
+    const auth = req && req.headers && req.headers['authorization'];
+    if (typeof auth === 'string') {
+        if (auth.startsWith('Bearer flcb_')) return auth.slice(7).trim();
+        if (auth.startsWith('ApiKey flcb_')) return auth.slice(7).trim();
+    }
+    return null;
+}
 
 (async () => {
     try {
@@ -55,6 +67,15 @@ let Methods;
 
         await ensureDefaultCategories(redisClient, config.serviceName);
         Methods = createLogic(redisClient, config, { relay });
+
+        if (config.reapIntervalMs > 0) {
+            reaperTimer = setInterval(() => {
+                Methods.instance.reap({}, { user: 'system:reaper', permit: 'admin' })
+                    .catch((err) => logger.warn(`background stateTtls reap failed: ${err.message}`));
+            }, config.reapIntervalMs);
+            if (typeof reaperTimer.unref === 'function') reaperTimer.unref();
+            process.once('SIGTERM', () => { if (reaperTimer) clearInterval(reaperTimer); });
+        }
 
         app.listen(config.port, bindAddr('fulfillment'), () => {
             logger.info(`Fulfillment service running on port ${config.port}`);
@@ -98,15 +119,19 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'fulfillment.token.clear':  async ()  => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); await relay.clear(); return { ok: true }; },
 
                 // Instance
-                'fulfillment.instance.create':     (p) => Methods.instance.create(p, req),
-                'fulfillment.instance.get':        (p) => Methods.instance.get(p, req),
-                'fulfillment.instance.list':       (p) => Methods.instance.list(p, req),
-                'fulfillment.instance.transition': (p) => Methods.instance.transition(p, req),
-                'fulfillment.instance.cancel':     (p) => Methods.instance.cancel(p, req),
-                'fulfillment.instance.hold':       (p) => Methods.instance.hold(p, req),
-                'fulfillment.instance.resume':     (p) => Methods.instance.resume(p, req),
-                'fulfillment.instance.override':   (p) => Methods.instance.override(p, req),
-                'fulfillment.instance.update':     (p) => Methods.instance.update(p, req),
+                'fulfillment.instance.create':      (p) => Methods.instance.create(p, req),
+                'fulfillment.instance.get':         (p) => Methods.instance.get(p, req),
+                'fulfillment.instance.list':        (p) => Methods.instance.list(p, req),
+                'fulfillment.instance.transition':  (p) => Methods.instance.transition(p, req),
+                'fulfillment.instance.cancel':      (p) => Methods.instance.cancel(p, req),
+                'fulfillment.instance.hold':        (p) => Methods.instance.hold(p, req),
+                'fulfillment.instance.suspend':     (p) => Methods.instance.suspend(p, req),
+                'fulfillment.instance.resume':      (p) => Methods.instance.resume(p, req),
+                'fulfillment.instance.reap':        (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.instance.reap(p, req); },
+                'fulfillment.instance.token.issue': (p) => Methods.instance.token.issue(p, req),
+                'fulfillment.instance.callback':    (p) => { req.callbackToken = extractCallbackToken(req); return Methods.instance.callback(p, req); },
+                'fulfillment.instance.override':    (p) => Methods.instance.override(p, req),
+                'fulfillment.instance.update':      (p) => Methods.instance.update(p, req),
 
                 // Profile
                 'fulfillment.profile.create':  (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.create(p); },

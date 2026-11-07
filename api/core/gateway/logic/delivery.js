@@ -179,6 +179,7 @@ function createDeliveryLedger(redis, { logger, relay } = {}) {
             provider: result.provider,
             providerMessageId: result.messageId,
             deliveryStatus,
+            error: result.error || null,
         });
 
         await settle(idempotencyKey, { ...result, ...(deliveryId ? { deliveryId } : {}) });

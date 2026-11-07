@@ -35,17 +35,19 @@
 // prevState/createdBy are null at create → typed but not required. pending_callbacks/
 // updatedAt are present-but-optional (updatedAt only after update()).
 const INSTANCE_BASE = [
-    { name: 'id',                type: 'string', required: true },
-    { name: 'sourceId',         type: 'string', required: true },
-    { name: 'profileId',        type: 'string', required: true },
-    { name: 'state',            type: 'string', required: true },   // BUSINESS lifecycle (no `status` key)
-    { name: 'stateChangedAt',   type: 'number', required: true },
-    { name: 'createdAt',        type: 'number', required: true },
-    { name: 'meta',             type: 'object', required: true },
-    { name: 'history',          type: 'array',  required: true },
+    { name: 'id',                type: 'string',  required: true },
+    { name: 'sourceId',         type: 'string',  required: true },
+    { name: 'profileId',        type: 'string',  required: true },
+    { name: 'state',            type: 'string',  required: true },   // BUSINESS lifecycle (no `status` key)
+    { name: 'stateChangedAt',   type: 'number',  required: true },
+    { name: 'createdAt',        type: 'number',  required: true },
+    { name: 'meta',             type: 'object',  required: true },
+    { name: 'history',          type: 'array',   required: true },
     { name: 'prevState',        type: 'string' },                   // null at create; set after a transition
     { name: 'createdBy',        type: 'string' },                   // req.user || null
-    { name: 'pending_callbacks', type: 'array' },                   // [] at create
+    { name: 'pending_callbacks', type: 'array' },                   // [] at create; populated by instance.token.issue
+    { name: 'suspension',       type: 'object' },                   // populated while suspended in ASSIST_REQUIRED; null/absent otherwise
+    { name: 'deduplicated',     type: 'boolean' },                  // true when create({ idempotent: true }) replays existing instance
     { name: 'updatedAt',        type: 'number' },                   // only stamped by instance.update()
     { name: 'updatedBy',        type: 'string' },                   // req.user || null; only stamped by instance.update()
 ];
@@ -63,6 +65,7 @@ const PROFILE_RETURN = [
     { name: 'status',      type: 'string', required: true },   // ENTITY lifecycle: ACTIVE | DELETED (no `state` key)
     { name: 'name',        type: 'string' },
     { name: 'transitions', type: 'array'  },                   // optional create param
+    { name: 'stateTtls',   type: 'object' },                   // optional per-state timeout map { STATE: { ttlMs, event, reason? } }
     { name: 'createdAt',   type: 'number' },
     { name: 'updatedAt',   type: 'number' },
 ];
@@ -78,10 +81,11 @@ const methods = [
         params: [
             { name: 'sourceId',   type: 'string',  required: true,  maxLength: 64, pattern: 'id', description: 'Source order ID' },
             { name: 'profileId',  type: 'string',  required: true,  maxLength: 64, pattern: 'id', description: 'Fulfillment profile to apply' },
-            { name: 'meta',       type: 'object',  required: false, description: 'Initial metadata' }
+            { name: 'meta',       type: 'object',  required: false, description: 'Initial metadata' },
+            { name: 'idempotent', type: 'boolean', required: false, description: 'When true, deduplicates by (profileId, sourceId) within caller $owner scope and returns the existing instance with deduplicated:true' }
         ],
-        description: 'Create a new fulfillment instance for an order',
-        returns_schema: INSTANCE_BASE,   // fresh DRAFT instance; no _tasks
+        description: 'Create a new fulfillment instance for an order (set idempotent:true to deduplicate by (profileId, sourceId))',
+        returns_schema: INSTANCE_BASE,   // fresh DRAFT instance (or deduplicated replay); no _tasks
         ai: true
     },
     {
@@ -145,16 +149,86 @@ const methods = [
         ai: false
     },
     {
+        name: 'fulfillment.instance.suspend',
+        params: [
+            { name: 'id',                   type: 'string', required: true,  maxLength: 64,   pattern: 'id', description: 'Instance ID' },
+            { name: 'reason',               type: 'string', required: true,  maxLength: 512,  description: 'Human-readable suspension reason (e.g. CAPTCHA or QR login required)' },
+            { name: 'reasonCode',           type: 'string', required: false, maxLength: 64,   description: 'Structured reason code (e.g. CAPTCHA, OTP_REQUIRED, SESSION_EXPIRED, DOM_DRIFT, MANUAL_INTERVENTION)' },
+            { name: 'suspendState',         type: 'string', required: false, maxLength: 64,   description: 'Target parked state (UPPER_SNAKE_CASE; default ASSIST_REQUIRED)' },
+            { name: 'checkpoint',           type: 'object', required: false, description: 'Structured RPA breakpoint context (step, cursor, pageUrl) restored on resume' },
+            { name: 'aiSuggestion',         type: 'string', required: false, maxLength: 1000, description: 'Optional operator guidance / remediation hint' },
+            { name: 'metaUpdate',           type: 'object', required: false, description: 'Metadata merged into instance.meta upon suspension' },
+            { name: 'meta',                 type: 'object', required: false, description: 'Alias for metaUpdate' },
+            { name: 'expectedTransitionId', type: 'string', required: false, maxLength: 80,   description: 'Optimistic concurrency guard against stale suspend calls' }
+        ],
+        description: 'Suspend an instance from ANY active state into ASSIST_REQUIRED with a structured breakpoint stack (blockedState + checkpoint), orthogonal to profile.transitions.',
+        returns_schema: INSTANCE_BASE,
+        ai: false
+    },
+    {
         name: 'fulfillment.instance.resume',
         params: [
-            { name: 'id',                   type: 'string', required: true,  maxLength: 64, pattern: 'id', description: 'Instance ID' },
-            { name: 'expectedTransitionId', type: 'string', required: false, maxLength: 80, description: 'Optimistic concurrency guard: if supplied, must match the latest history[].transition_id or the resume is rejected' }
+            { name: 'id',                   type: 'string', required: true,  maxLength: 64,  pattern: 'id', description: 'Instance ID' },
+            { name: 'resolution',           type: 'string', required: false, maxLength: 512, description: 'Human assist resolution note (recorded in history and meta.last_assist_resolution)' },
+            { name: 'metaUpdate',           type: 'object', required: false, description: 'Metadata merged into instance.meta on resume' },
+            { name: 'meta',                 type: 'object', required: false, description: 'Alias for metaUpdate' },
+            { name: 'expectedTransitionId', type: 'string', required: false, maxLength: 80,  description: 'Optimistic concurrency guard: if supplied, must match the latest history[].transition_id or the resume is rejected' }
         ],
-        description: 'Resume a held instance back to its prevState (dynamic target; bypasses rule matching).',
+        description: 'Resume a suspended (ASSIST_REQUIRED) or held instance back to its blockedState / prevState.',
         // ⚠ NON-UNIFORM: resume returns the bare instance — NO _tasks (unlike transition/cancel/
         //   hold/override, its advance() siblings). prevState is non-null here (resume requires it).
         returns_schema: INSTANCE_BASE,
         ai: false
+    },
+    {
+        name: 'fulfillment.instance.reap',
+        params: [
+            { name: 'profileId', type: 'string',  required: false, maxLength: 64, pattern: 'id', description: 'Optional profile filter' },
+            { name: 'dryRun',    type: 'boolean', required: false, description: 'When true, reports expired instances without mutating state' },
+            { name: 'limit',     type: 'number',  required: false, description: 'Max expired instances to reap in one sweep (default 100, max 1000)' }
+        ],
+        description: 'Admin/scheduled reaper: sweep instances whose current state exceeded profile.stateTtls[state].ttlMs and fire the configured timeout transition.',
+        returns_schema: [
+            { name: 'scanned', type: 'number',  required: true },
+            { name: 'expired', type: 'number',  required: true },
+            { name: 'reaped',  type: 'array',   required: true },
+            { name: 'skipped', type: 'array',   required: true },
+            { name: 'dryRun',  type: 'boolean', required: true },
+            { name: '_tasks',  type: 'array',   required: true },
+        ],
+        ai: false
+    },
+    {
+        name: 'fulfillment.instance.token.issue',
+        params: [
+            { name: 'id',                    type: 'string',  required: true,  maxLength: 64, pattern: 'id', description: 'Instance ID to scope the callback token to' },
+            { name: 'allowedEvents',         type: 'array',   required: true,  description: 'Non-empty whitelist of transition event names this token is allowed to trigger' },
+            { name: 'ttlMs',                 type: 'number',  required: false, description: 'Token lifetime in ms (default 3600000 = 1h, max 7d)' },
+            { name: 'bindCurrentTransition', type: 'boolean', required: false, description: 'When true (default), binds expectedTransitionId to current history tail to prevent ABA stale callbacks' }
+        ],
+        description: 'Issue a single-use capability callback token scoped to one instance + allowedEvents (returned once; SHA-256 stored).',
+        returns_schema: [
+            { name: 'callbackToken',        type: 'string', required: true },
+            { name: 'tokenId',              type: 'string', required: true },
+            { name: 'instanceId',           type: 'string', required: true },
+            { name: 'allowedEvents',        type: 'array',  required: true },
+            { name: 'expiresAt',            type: 'number', required: true },
+            { name: 'expectedTransitionId', type: 'string' },
+        ],
+        ai: false
+    },
+    {
+        name: 'fulfillment.instance.callback',
+        params: [
+            { name: 'event',         type: 'string', required: true,  maxLength: 64,  description: 'Transition event name (must be in the token allowedEvents)' },
+            { name: 'metaUpdate',    type: 'object', required: false, description: 'Evidence/metadata merged into instance.meta before condition & evidence gates' },
+            { name: 'meta',          type: 'object', required: false, description: 'Alias for metaUpdate' },
+            { name: 'callbackToken', type: 'string', required: false, maxLength: 128, description: 'Fallback when Authorization: Bearer <flcb_...> or X-Callback-Token header cannot be set (redacted in logs)' }
+        ],
+        description: 'PUBLIC single-use capability callback endpoint: atomically consumes flcb_... token (prefer Authorization: Bearer header) and advances the bound instance.',
+        returns_schema: INSTANCE_WITH_TASKS,
+        ai: false,
+        public: true
     },
     {
         name: 'fulfillment.instance.override',
@@ -191,7 +265,8 @@ const methods = [
         params: [
             { name: 'id',          type: 'string', required: true,  maxLength: 64, pattern: 'id', description: 'Profile unique key (e.g. standard_trade)' },
             { name: 'name',        type: 'string', required: true,  maxLength: 128, description: 'Human-readable profile name' },
-            { name: 'transitions', type: 'array',  required: false, description: 'Transition rules array' }
+            { name: 'transitions', type: 'array',  required: false, description: 'Transition rules array (optional evidence gate per rule)' },
+            { name: 'stateTtls',   type: 'object', required: false, description: 'Optional per-state TTL map { STATE: { ttlMs, event, reason? } } swept by instance.reap' }
         ],
         description: 'Create a fulfillment profile (state machine configuration)',
         returns_schema: PROFILE_RETURN,   // entity.create() → { status, ...params, id, createdAt, updatedAt }
@@ -279,6 +354,7 @@ const methods = [
             { name: 'id',             type: 'string', required: false, maxLength: 64,  description: 'Optional explicit profile id' },
             { name: 'transitions',    type: 'array',  required: false, description: 'Transition rules' },
             { name: 'meta_fields',    type: 'array',  required: false, description: 'Sourced/metaUpdate fields' },
+            { name: 'stateTtls',      type: 'object', required: false, description: 'Optional per-state TTL map { STATE: { ttlMs, event, reason? } }' },
             { name: 'allowedActions', type: 'array',  required: false, description: 'Optional action allow-list (policy/footprint pre-check)' },
             { name: 'enroll',         type: 'boolean', required: false, description: 'Admin only: move the EXISTING trusted profile {id} into the review lane (re-lints it; its instances freeze until approved) instead of creating a new one' }
         ],

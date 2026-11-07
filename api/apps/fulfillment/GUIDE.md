@@ -15,8 +15,9 @@
 1. `fulfillment.profile.create { id, name, transitions }` — 直建的 profile **无 reviewState → 立即可用**。
    `transitions` 每条 = `{ event, from, to, condition?, actions? }`；实例初始态固定是 `DRAFT`，
    至少要有一条 `from: 'DRAFT'` 的转移，否则实例起来就卡死。
-2. `fulfillment.instance.create { sourceId, profileId, meta? }` — 新实例落在 `state: 'DRAFT'`。
-   `sourceId` 是外部订单号，`profileId` 指向上一步的模板。
+2. `fulfillment.instance.create { sourceId, profileId, meta?, idempotent? }` — 新实例落在 `state: 'DRAFT'`。
+   `sourceId` 是外部订单号，`profileId` 指向上一步的模板；传 `idempotent: true` 时按 `($owner, profileId, sourceId)`
+   幂等去重，已存在则直接返回原实例并附 `deduplicated: true`（防定时巡检/重试建重单）。
 3. （条件读 `instance.meta.<X>` 时）先把这些值备好：`fulfillment.instance.update { id, meta }` 把值
    **合并**进 meta（不是替换），或在下一步用 `metaUpdate` 一次带上。
 4. `fulfillment.instance.transition { id, event, metaUpdate? }` — 引擎按 `(event, from=当前state)` 匹配规则，
@@ -117,7 +118,10 @@ await call('setting.task.update', { whitelist: wl }); // ← 整体替换，不�
 - **写方法对 AI 关闭（但向已获授权账号开放自省）**：只有 create/get/list 类是 `ai:true`（LLM 自由对话可自主调）；所有 transition/cancel/hold/
   override/审批类是 `ai:false`——状态推进走人工或明确授权的执行层，不由 LLM 自由触发（决策/执行分层）。若外部哨兵使用最小权限账号（非 admin），只要在 RBAC `permit.services.fulfillment` 中显式授予了这些写方法，调用 `system.capability.list` 即可自省到已授权方法的完整参数契约，同时也可随时调 `system.guide { service: "fulfillment" }` 查阅本配方。
 - **自愈环路防 ABA 并发覆盖（`expectedTransitionId`）**：当状态机存在 `EXECUTING <-> needs_assist` 等环路时，迟到的上一轮回调可能因 `fromState` 再次同名而误推状态或覆盖 `meta`。`transition` 与 `update` 均支持可选参数 `expectedTransitionId`（传当前轮次的 `instance.history.at(-1).transition_id`，如 `FL-xxx-T2`），若实例已被推进到新轮次则立即拒绝（`-32602`）。
-- **多车道与僵尸单巡检（`list` 过滤）**：`fulfillment.instance.list` 支持 `profileId`（按车道过滤）与 `stateChangedBefore`（epoch ms，筛选 `stateChangedAt <= stateChangedBefore` 的超时驻留实例），供外部定时哨兵扫描超时卡死单。
+- **多车道与僵尸单巡检（`stateTtls` + `reap` + `list` 过滤）**：profile 可声明 `stateTtls: { DISPATCHED: { ttlMs: 1800000, event: "timeout_exceeded", reason? } }`（lint 规则 8 校验 `event` 必须存在于该状态出发的 `transitions`），由管理员/定时任务调 `fulfillment.instance.reap { profileId?, dryRun?, limit? }`（或设环境变量 `FULFILLMENT_REAP_INTERVAL_MS` 开启内置巡检）自动收割超时实例并触发下游 `_tasks`；`fulfillment.instance.list` 同时支持 `profileId` 与 `stateChangedBefore` 供只读观测。
+- **任意态人工协助断点栈（`suspend` + `resume`）**：RPA 遇验证码/扫码/DOM 漂移时无需在每个状态写 N×M 条 `hold_requested` 规则，直接调 `fulfillment.instance.suspend { id, reason, reasonCode?, checkpoint?, aiSuggestion?, metaUpdate?, expectedTransitionId? }` 进入 `ASSIST_REQUIRED` 并保存 `suspension.blockedState` 与 `checkpoint`；人工排障后调 `fulfillment.instance.resume { id, resolution?, metaUpdate?, expectedTransitionId? }` 原路恢复至阻塞前状态。
+- **反静默假成功证据闸门（`transition.evidence`）**：每条 transition 可选配 `evidence: { requiredFields?, rejectMasked?, rejectLoopbackUrls?, minRows?, minBytes? }`，在状态落定前自动拦截 `••••••`/`****` 脱敏乱码、`127.0.0.1`/`localhost` 死链、空表（0 行）等伪成功回执；lint 规则 9b 同时拦截同一模板中 `completed` vs `COMPLETED` 大小写状态分裂。
+- **外部执行手最小权限单次回调凭证（`token.issue` + `callback`）**：派单方调 `fulfillment.instance.token.issue { id, allowedEvents, ttlMs?, bindCurrentTransition? }` 签发绑定单实例、允许事件白名单与当前 `transition_id` 的一次性 `flcb_...` 凭证（仅存 SHA-256，同步登记在 `instance.pending_callbacks`）；外部执行手/跨箱回调经 `POST /jsonrpc` public 方法 `fulfillment.instance.callback`（优先走 `Authorization: Bearer flcb_...` 或 `X-Callback-Token` 头，不赋予全局状态推进权限）原子单次消费推进状态。
 - **时间戳是 epoch 毫秒数字**（`stateChangedAt`/`createdAt`），不是 ISO 字符串；例外：`hold` 的
   `expectedResume` 参数按 ISO 8601 字符串传。
 - **外键 `{targetService}Id`**：`profileId` 指模板；`sourceId` 是外部订单号，刻意不带命名空间（来自任意上游）。

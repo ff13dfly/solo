@@ -124,6 +124,13 @@ steward / finance 两侧都未在只读区打补丁；steward → finance 这一
 - `docs/planning/v2-bridge-interaction.md`：主箱/子箱改为角色而非拓扑要求；§2 通道一传输层落名；§6 清单改写；§8 指针更新。
 - `docs/planning/BACKLOG.md` §3：登记「bridge 消息档 v1：gateway solo 目标模式 + `meta.hop`」。
 
-**未做、留后续**：代码（建议 1）；Router 审计 params 核实（建议 3）；ingress README D2 回填（建议 4，随实现）。
-本篇因此留在 `docs/feedback/` 顶层，代码落地后再移 `done/`。论文 `docs/paper/draft-pattern-first.md` §4.5「deployment has not begun」
-仍属实，未改；接通后再进该节括注。
+**2026-11-07 落地闭环（已归档 `done/`）**：
+- ✅ **建议 1（`gateway.webhook.send` `target: 'solo'` + `ingress.ingest` `meta.hop`）**：
+  - `api/core/gateway/logic/webhook.js`、`logic/index.js`、`logic/delivery.js`、`handlers/introspection.js`、`GUIDE.md`：新增 `target: 'solo'`，外壳切为 JSON-RPC 2.0 `ingress.ingest`（`request_id` 贯穿 `idempotencyKey`；若不满足 `PATTERNS.id` 则确定性哈希归一化为 `idem_<sha256>`，发方与收方仍共享同一键），鉴权头改 `Authorization: ApiKey <secret>`，仅在 `target === 'solo'` 且路径为 `/jsonrpc` 时放行同机 loopback（`127.0.0.1` / `localhost` / `[::1]`），发方递增 `meta.hop`（`hop >= 3` 发前拒绝），并解析 JSON-RPC 回执将 `duplicate: true` 与 422 `held: true`（不计失败、不盲目重试）如实透出到 `solo` 返回字段。
+  - `api/core/ingress/logic/ingest.js`、`logic/review.js`、`config.js`、`handlers/introspection.js`：接受可选 `meta` 对象、做注入扫描与 `meta.hop >= maxFederationHops(3)` 环路刹车（在 `dedup.claim` 之前拦截，不污染去重槽），并将 `meta` 原样透传至 `EVENT:WEBHOOK:*` 事件 `payload.meta`（含 `422` 待审后 `approve` 重放路径）。
+  - 顺带补齐前置依赖「bundle 运行时自报版本」（`deploy/gen-entry.js` `global.__SOLO_BUNDLE_VERSION__` + `api/library/health.js` `/health` `bundle` 字段）。
+  - 端到端契约单测：`api/core/gateway/tests/solo-bridge.test.js`（真实本地 HTTP 对端 + `ingress` `createLogic` 串联，覆盖投递成功、幂等去重、422 待审、同机 loopback 窄放行、`meta.hop` 双向环路刹车、401/403 鉴权拒绝、Router 0-write 502）已入 `api/jest.ci.config.js` 白名单。
+- ✅ **建议 3（Router 审计是否记 `params` 源码核实）**：
+  - `api/router/index.js:402-463`：成功/上游异常路径下 `logInteraction` **仅对 `method.startsWith('agent.')` 调用**（`:403, :412`），`gateway.webhook.send` 完全不触发；即使在 401/403/404 拒绝分支（`:339, :349, :354`），`logInteraction` 也只提取 `params.text`/`image`/`audio`/`user_input`（缺省记固定字面量 `"RAW_PAYLOAD"`，`:434-455`），**从不序列化完整 `params` 或 `params.secret`**。
+  - `api/core/gateway/logic/delivery.js:32-47`：`DELIVERY` 台账实体只落 `channel / target / recipient / payloadPreview / status / attempts / providerId / error / idempotencyKey`，**不落 `secret`**；`api/library/logger.js` `SENSITIVE_KEY_RE` 对含 `secret` 键名自动掩码。因此同运营者档直传 `secret` 无审计落盘泄漏。
+- ✅ **建议 4（ingress 文档同步）**：`api/core/ingress/README.md` §15 D2 与 `GUIDE.md` 已同步更新 `meta` / `meta.hop` 契约。

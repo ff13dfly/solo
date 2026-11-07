@@ -200,6 +200,29 @@ describe('fulfillment.* — actual return satisfies declared returns_schema', ()
         expect(out._tasks).toBeUndefined();
     });
 
+    test('instance.create(idempotent=true), suspend, reap, token.issue, and callback all match declared returns_schema', async () => {
+        const first = await logic.instance.create({ sourceId: 'ORD-IDEM', profileId: SM_ID, idempotent: true }, REQ);
+        const dup = await logic.instance.create({ sourceId: 'ORD-IDEM', profileId: SM_ID, idempotent: true }, REQ);
+        expect(checkReturn(method('fulfillment.instance.create'), first)).toEqual([]);
+        expect(checkReturn(method('fulfillment.instance.create'), dup)).toEqual([]);
+
+        await logic.instance.transition({ id: first.id, event: 'start' }, REQ);
+        const susp = await logic.instance.suspend({ id: first.id, reason: 'captcha' }, REQ);
+        expect(checkReturn(method('fulfillment.instance.suspend'), susp)).toEqual([]);
+
+        const resm = await logic.instance.resume({ id: first.id, resolution: 'solved', metaUpdate: { ok: true } }, REQ);
+        expect(checkReturn(method('fulfillment.instance.resume'), resm)).toEqual([]);
+
+        const tok = await logic.instance.token.issue({ id: first.id, allowedEvents: ['confirm'] }, REQ);
+        expect(checkReturn(method('fulfillment.instance.token.issue'), tok)).toEqual([]);
+
+        const cbOut = await logic.instance.callback({ event: 'confirm' }, { callbackToken: tok.callbackToken });
+        expect(checkReturn(method('fulfillment.instance.callback'), cbOut)).toEqual([]);
+
+        const reapOut = await logic.instance.reap({ dryRun: true }, ADMIN_REQ);
+        expect(checkReturn(method('fulfillment.instance.reap'), reapOut)).toEqual([]);
+    });
+
     // ── PROFILE (Entity Factory) ────────────────────────────────────────────────
 
     test('profile.create → entity record matches contract; lifecycle is `status` not `state`', async () => {

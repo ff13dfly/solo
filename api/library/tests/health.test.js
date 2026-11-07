@@ -11,12 +11,43 @@ function fakeRes() {
 }
 
 describe('library/health', () => {
-    test('/health — always live (200 ok), echoes service + version', () => {
-        const app = fakeApp();
-        mountHealth(app, { serviceName: 'svc', version: '1.0.0', getRedis: () => null });
-        const res = fakeRes();
-        app._routes['/health']({}, res);
-        expect(res._json).toMatchObject({ status: 'ok', service: 'svc', version: '1.0.0' });
+    test('/health — always live (200 ok), echoes service + version + bundle version', () => {
+        const prev = global.__SOLO_BUNDLE_VERSION__;
+        delete global.__SOLO_BUNDLE_VERSION__;
+        try {
+            const app = fakeApp();
+            mountHealth(app, { serviceName: 'svc', version: '1.0.0', getRedis: () => null });
+            const res = fakeRes();
+            app._routes['/health']({}, res);
+            expect(res._json).toMatchObject({ status: 'ok', service: 'svc', version: '1.0.0', bundle: null });
+
+            global.__SOLO_BUNDLE_VERSION__ = '1.3.2';
+            const resBundled = fakeRes();
+            app._routes['/health']({}, resBundled);
+            expect(resBundled._json).toMatchObject({ status: 'ok', service: 'svc', version: '1.0.0', bundle: '1.3.2' });
+        } finally {
+            if (prev === undefined) delete global.__SOLO_BUNDLE_VERSION__;
+            else global.__SOLO_BUNDLE_VERSION__ = prev;
+        }
+    });
+
+    test('deploy/gen-entry.js embeds root package.json version into global.__SOLO_BUNDLE_VERSION__', () => {
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+        const { execFileSync } = require('child_process');
+        const rootPkg = require('../../../package.json');
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'solo-gen-entry-'));
+        try {
+            const svcsFile = path.join(tmpDir, 'services.json');
+            const outFile = path.join(tmpDir, '_entry.js');
+            fs.writeFileSync(svcsFile, JSON.stringify([{ name: 'gateway', path: 'core/gateway/index.js', port: 8020 }]));
+            execFileSync(process.execPath, [path.resolve(__dirname, '../../../deploy/gen-entry.js'), svcsFile, outFile]);
+            const generated = fs.readFileSync(outFile, 'utf8');
+            expect(generated).toContain(`global.__SOLO_BUNDLE_VERSION__ = ${JSON.stringify(rootPkg.version)};`);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
     });
 
     test('/readyz — 200 when Redis pings', async () => {

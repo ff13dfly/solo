@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const createEntity = require('../../../library/entity');
+const clock = require('../../../library/clock');
 const jsonrpc = require('../handlers/jsonrpc');
 const { buildMethodIndex, lintProfile } = require('./lint');
 const { generateProfile } = require('./generate');
@@ -18,7 +19,11 @@ function canonical(v) {
     return JSON.stringify(v === undefined ? null : v);
 }
 function execDigest(profile) {
-    return crypto.createHash('sha256').update(canonical({ transitions: profile.transitions || [], meta_fields: profile.meta_fields || [] })).digest('hex');
+    return crypto.createHash('sha256').update(canonical({
+        transitions: profile.transitions || [],
+        meta_fields: profile.meta_fields || [],
+        ...(profile.stateTtls ? { stateTtls: profile.stateTtls } : {}),
+    })).digest('hex');
 }
 
 // Governance review axis (separate from the Entity Factory's ACTIVE/DELETED soft-delete
@@ -140,7 +145,8 @@ module.exports = (redis, config, relay) => {
             if (!existing.reviewState) return factory.update(clean);
             const execChanged =
                 ('transitions' in clean && canonical(clean.transitions) !== canonical(existing.transitions)) ||
-                ('meta_fields' in clean && canonical(clean.meta_fields) !== canonical(existing.meta_fields));
+                ('meta_fields' in clean && canonical(clean.meta_fields) !== canonical(existing.meta_fields)) ||
+                ('stateTtls' in clean && canonical(clean.stateTtls) !== canonical(existing.stateTtls));
             if (!execChanged) return factory.update(clean);   // metadata-only edit — no re-review
             const lintReport = lintProfile({ ...existing, ...clean }, localMethodIndex(), await lintOptions());
             if (lintReport.errors.length) {
@@ -158,7 +164,7 @@ module.exports = (redis, config, relay) => {
                 approvedDigest: null,
                 reReviewOf: existing.approvedDigest || null,
                 submittedBy: (req && req.user) || existing.submittedBy || null,
-                submittedAt: Date.now(),
+                submittedAt: clock.now(),
                 contributors: nextContributors,
             });
         },
@@ -220,14 +226,14 @@ module.exports = (redis, config, relay) => {
                     approvals: [],
                     approvedDigest: null,
                     enrolledBy: req?.user || null,
-                    enrolledAt: Date.now(),
+                    enrolledAt: clock.now(),
                 });
                 return { ok: true, id: updated.id, reviewState: REVIEW.PENDING, lintReport };
             }
 
             if (!profile.name && !profile.id) throw jsonrpc.MISSING_PARAM('name');
             if (!profile.id) {
-                profile.id = String(profile.name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 32) || `p_${Date.now()}`;
+                profile.id = String(profile.name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 32) || `p_${clock.now()}`;
             }
             const lintReport = lintProfile(profile, localMethodIndex(), await lintOptions(allowedActions));
             if (lintReport.errors.length) {
@@ -241,7 +247,7 @@ module.exports = (redis, config, relay) => {
                     submittedBy: req?.user || null,
                     contributors: req?.user ? [req.user] : [],
                     approvals: [],
-                    submittedAt: Date.now(),
+                    submittedAt: clock.now(),
                 });
             } catch (e) {
                 // The Entity Factory's generic "already exists" points callers the wrong way
@@ -280,7 +286,7 @@ module.exports = (redis, config, relay) => {
                 id,
                 reviewState: REVIEW.APPROVED,
                 approvedDigest: digest,
-                approvals: [...(profile.approvals || []), { approvedBy: caller, approvedAt: Date.now(), digest }],
+                approvals: [...(profile.approvals || []), { approvedBy: caller, approvedAt: clock.now(), digest }],
             });
         },
 
@@ -289,7 +295,7 @@ module.exports = (redis, config, relay) => {
             if (!id) throw jsonrpc.MISSING_PARAM('id');
             const profile = await factory.get({ id });
             if (profile.reviewState !== REVIEW.PENDING) throw jsonrpc.FORBIDDEN(`Cannot reject a profile in reviewState: ${profile.reviewState || '(none)'}`);
-            return factory.update({ id, reviewState: REVIEW.REJECTED, rejectReason: reason, rejectedBy: req?.user || null, rejectedAt: Date.now() });
+            return factory.update({ id, reviewState: REVIEW.REJECTED, rejectReason: reason, rejectedBy: req?.user || null, rejectedAt: clock.now() });
         },
     };
 };

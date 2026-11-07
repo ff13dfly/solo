@@ -1,5 +1,6 @@
 require('dotenv').config();
 const pkg = require('./package.json');
+const { intFromEnv } = require('../../library/env');
 const { portFor, urlFor } = require('../../library/ports');
 
 module.exports = {
@@ -11,15 +12,20 @@ module.exports = {
     routerUrl: process.env.ROUTER_URL || urlFor('router', 8600),
     routerPublicKey: process.env.ROUTER_PUBLIC_KEY || '8HrBBG5X9BSKWFaX8QW7hoektDyRZFePb2R9Ad5D84ji',
 
+    // Optional background reaper sweep interval (ms). 0 = disabled (external schedule / RPC calls reap).
+    reapIntervalMs: intFromEnv('FULFILLMENT_REAP_INTERVAL_MS', 0),
+
     idLengths: {
         profile: 8
     },
 
     redis: {
-        instancePrefix: 'FULFILLMENT:INSTANCE:',
-        instanceIndex:  'FULFILLMENT:INSTANCE:INDEX',
-        profilePrefix:  'FULFILLMENT:PROFILE:',
-        profileIndex:   'FULFILLMENT:PROFILE:INDEX',
+        instancePrefix:      'FULFILLMENT:INSTANCE:',
+        instanceIndex:       'FULFILLMENT:INSTANCE:INDEX',
+        sourceIndexPrefix:   'FULFILLMENT:SOURCE:',
+        callbackTokenPrefix: 'FULFILLMENT:CBTOKEN:',
+        profilePrefix:       'FULFILLMENT:PROFILE:',
+        profileIndex:        'FULFILLMENT:PROFILE:INDEX',
 
         // READ-ONLY mirror of the Router's own key (router/config.js `redis.taskWhitelistKey`,
         // seeded at Router boot, edited via the admin RPC setting.task.update). The profile
@@ -46,7 +52,11 @@ module.exports = {
                 'fulfillment.instance.transition': ['Trigger a state transition on a fulfillment instance'],
                 'fulfillment.instance.cancel':     ['Cancel a fulfillment instance (fires cancel_requested)'],
                 'fulfillment.instance.hold':       ['Pause a fulfillment instance (fires hold_requested)'],
-                'fulfillment.instance.resume':     ['Resume a held fulfillment instance to its prevState'],
+                'fulfillment.instance.suspend':    ['Suspend a fulfillment instance into ASSIST_REQUIRED from any state with a structured checkpoint'],
+                'fulfillment.instance.resume':     ['Resume a held or suspended fulfillment instance back to its blocked/previous state'],
+                'fulfillment.instance.reap':       ['Sweep and transition instances whose current state exceeded profile.stateTtls'],
+                'fulfillment.instance.token.issue': ['Issue a single-use capability callback token scoped to an instance and allowedEvents'],
+                'fulfillment.instance.callback':   ['Consume a single-use capability callback token to advance a fulfillment instance'],
                 'fulfillment.instance.override':   ['Admin force-advance, skipping the JsonLogic condition'],
                 'fulfillment.instance.update':     ['Update instance metadata (merges meta; caches meta_fields.source values)'],
                 'fulfillment.profile.generate':    ['Generate a fulfillment profile candidate from a natural-language requirement (LLM + lint + repair); returns a reviewed candidate, does not create it'],
@@ -77,7 +87,11 @@ module.exports = {
                 'fulfillment.instance.transition': ['触发履约实例状态流转'],
                 'fulfillment.instance.cancel':     ['取消履约实例（触发 cancel_requested）'],
                 'fulfillment.instance.hold':       ['暂停履约实例（触发 hold_requested）'],
-                'fulfillment.instance.resume':     ['恢复已暂停的履约实例至上一状态'],
+                'fulfillment.instance.suspend':    ['从任意活跃状态将履约实例挂入 ASSIST_REQUIRED 人工协助栈并保存断点上下文'],
+                'fulfillment.instance.resume':     ['恢复已暂停或人工协助挂起的履约实例至原阻塞状态'],
+                'fulfillment.instance.reap':       ['扫描并推进超过 profile.stateTtls 驻留时限的僵尸履约实例'],
+                'fulfillment.instance.token.issue': ['签发绑定单实例与允许事件集的一次性回调凭证（Capability Token）'],
+                'fulfillment.instance.callback':   ['凭一次性回调凭证推进履约实例（原子单次消费 + 防重放）'],
                 'fulfillment.instance.override':   ['管理员强制推进（跳过 JsonLogic 条件）'],
                 'fulfillment.instance.update':     ['更新履约实例元数据（合并 meta；缓存 meta_fields.source 值）'],
                 'fulfillment.profile.generate':    ['用自然语言需求生成履约配置模板候选（LLM + 校验 + 修复）；返回经校验的候选，不直接创建'],

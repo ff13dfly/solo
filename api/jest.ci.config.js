@@ -173,5 +173,7 @@ module.exports = {
         // fake-redis scanIterator 契约测试：锁定 node-redis v5 逐批 yield 数组的假设
         // 本身，而不是靠 e2e 数据量凑巧撞上多批次才发现语义变了（2026-08-04）
         '<rootDir>/library/tests/redis-scan-contract.test.js',
+        // SOLO Bridge v1 端到端契约测试：gateway.webhook.send(target:'solo') → ingress.ingest（2026-11-07）
+        '<rootDir>/core/gateway/tests/solo-bridge.test.js',
     ],
 };

@@ -19,9 +19,9 @@ module.exports = (redis, { config, relay, source }) => {
     const KEY = config.ingest.reviewQueueKey;
     const MAXLEN = config.ingest.reviewMaxlen;
 
-    async function push({ sourceId, source: sourceName, requestId, data, violations }) {
+    async function push({ sourceId, source: sourceName, requestId, data, meta, violations }) {
         const reviewId = 'rvw_' + crypto.randomBytes(8).toString('hex');
-        const entry = { reviewId, sourceId, source: sourceName, requestId, data: data ?? {}, violations, rejectedAt: clock.now() };
+        const entry = { reviewId, sourceId, source: sourceName, requestId, data: data ?? {}, ...(meta ? { meta } : {}), violations, rejectedAt: clock.now() };
         await redis.rPush(KEY, JSON.stringify(entry));
         // Bound — under sustained abuse the oldest held reviews fall off rather than
         // growing this list without limit (same tradeoff as every other DLQ in SOLO).
@@ -62,7 +62,7 @@ module.exports = (redis, { config, relay, source }) => {
                 stream: source.streamFor(entry.source),
                 type: config.ingest.eventType,
                 actor: `webhook:${entry.source}`,
-                payload: { request_id: entry.requestId, data: entry.data },
+                payload: { request_id: entry.requestId, data: entry.data, ...(entry.meta ? { meta: entry.meta } : {}) },
             });
             if (!stats || typeof stats.written !== 'number' || stats.written < 1) {
                 throw jsonrpc.INTERNAL_ERROR('event not delivered by Router');

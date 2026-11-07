@@ -349,20 +349,31 @@ function createLogic(redisClient, options = {}) {
         // --- OUTBOUND WEBHOOK (machine targets — third-party endpoints) ---
         webhook: {
             send: async (params) => {
-                const { url, payload, type, targetId, secret, timeoutMs } = params;
+                const { url, payload, type, targetId, secret, timeoutMs, target, meta } = params;
                 if (!url) throw jsonrpc.MISSING_PARAM('url');
-                logger.info(`webhook.send → ${url}`);
+                const idemKey = params.idempotencyKey || params.idempotency_key;
+                logger.info(`webhook.send → ${url}${target === 'solo' ? ' (target=solo)' : ''}`);
                 const result = await ledger.run({
                     channel: 'webhook',
                     target: url,
-                    idempotencyKey: params.idempotencyKey,
-                    send: () => webhookProvider.send({ url, payload, type, targetId, secret, timeoutMs }),
+                    idempotencyKey: idemKey,
+                    send: () => webhookProvider.send({
+                        url,
+                        payload,
+                        type,
+                        targetId,
+                        secret,
+                        timeoutMs,
+                        target,
+                        meta,
+                        idempotencyKey: idemKey,
+                    }),
                 });
                 insert(`webhook:${url}`, {
                     op: 'webhook.send',
                     stamp: clock.now(),
                     url,
-                    type: type || 'notification',
+                    type: type || (target === 'solo' ? 'solo_bridge' : 'notification'),
                     status: result.status,
                     messageId: result.messageId
                 });

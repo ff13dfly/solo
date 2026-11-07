@@ -279,6 +279,95 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
         }
     }
 
+    // 8 — stateTtls validation: every state key in profile.stateTtls must declare a positive
+    //     ttlMs and an event that actually exists as an outgoing transition from that state.
+    const stateTtls = profile && profile.stateTtls;
+    if (stateTtls !== undefined && stateTtls !== null) {
+        if (typeof stateTtls !== 'object' || Array.isArray(stateTtls)) {
+            errors.push(`${pname}: stateTtls must be an object mapping state names to { ttlMs, event, reason? }`);
+        } else {
+            for (const [st, spec] of Object.entries(stateTtls)) {
+                if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+                    errors.push(`${pname}: stateTtls['${st}'] must be an object { ttlMs, event }`);
+                    continue;
+                }
+                if (typeof spec.ttlMs !== 'number' || !Number.isFinite(spec.ttlMs) || spec.ttlMs <= 0) {
+                    errors.push(`${pname}: stateTtls['${st}'].ttlMs must be a positive number (epoch ms duration)`);
+                }
+                if (typeof spec.event !== 'string' || !spec.event) {
+                    errors.push(`${pname}: stateTtls['${st}'].event must be a non-empty transition event string`);
+                } else if (!transitions.some((t) => t && t.from === st && t.event === spec.event)) {
+                    errors.push(`${pname}: stateTtls['${st}'] fires event '${spec.event}', which is not defined from state '${st}' in transitions`);
+                }
+            }
+        }
+    }
+
+    // 9a — transition.evidence schema + meta_fields coupling check.
+    for (const t of transitions) {
+        if (!t || t.evidence === undefined || t.evidence === null) continue;
+        const ev = t.evidence;
+        const where = `${pname}: transition '${t.event || '?'}' evidence`;
+        if (typeof ev !== 'object' || Array.isArray(ev)) {
+            errors.push(`${where} must be an object`);
+            continue;
+        }
+        if (ev.requiredFields !== undefined) {
+            if (!Array.isArray(ev.requiredFields) || ev.requiredFields.some((f) => typeof f !== 'string' || !f)) {
+                errors.push(`${where}.requiredFields must be an array of non-empty field paths`);
+            } else {
+                for (const f of ev.requiredFields) {
+                    const head = f.split('.')[0];
+                    if (head && !fieldKeys.has(head)) {
+                        warnings.push(`${where} requires '${f}' with no declared meta_field '${head}' — ensure it is supplied via metaUpdate`);
+                    }
+                }
+            }
+        }
+        for (const numKey of ['minRows', 'minBytes']) {
+            if (ev[numKey] === undefined || ev[numKey] === null) continue;
+            const v = ev[numKey];
+            if (typeof v === 'number') {
+                if (!Number.isFinite(v) || v <= 0) errors.push(`${where}.${numKey} must be a positive number`);
+            } else if (typeof v === 'object' && !Array.isArray(v)) {
+                for (const [k, min] of Object.entries(v)) {
+                    if (typeof min !== 'number' || !Number.isFinite(min) || min <= 0) {
+                        errors.push(`${where}.${numKey}['${k}'] must be a positive number`);
+                    }
+                }
+            } else {
+                errors.push(`${where}.${numKey} must be a positive number or field→number map`);
+            }
+        }
+    }
+
+    // 9b — state case-drift guard: prevents split terminal states (e.g. 'completed' vs 'COMPLETED')
+    //     observed in live multi-agent RPA profiles (2026-11-07 audit).
+    const allStates = new Set();
+    for (const t of transitions) {
+        if (t && typeof t.from === 'string' && t.from) allStates.add(t.from);
+        if (t && typeof t.to === 'string' && t.to) allStates.add(t.to);
+    }
+    if (stateTtls && typeof stateTtls === 'object' && !Array.isArray(stateTtls)) {
+        for (const st of Object.keys(stateTtls)) {
+            if (st) allStates.add(st);
+        }
+    }
+    const byUpper = new Map();
+    for (const s of allStates) {
+        const up = s.toUpperCase();
+        if (!byUpper.has(up)) byUpper.set(up, []);
+        byUpper.get(up).push(s);
+        if (/[a-z]/.test(s)) {
+            warnings.push(`${pname}: state '${s}' contains lowercase characters — SOLO convention is UPPER_SNAKE_CASE (e.g. '${up}')`);
+        }
+    }
+    for (const [up, variants] of byUpper.entries()) {
+        if (variants.length > 1) {
+            errors.push(`${pname}: conflicting state casing for '${up}': [${variants.join(', ')}] — state machine will split into divergent states`);
+        }
+    }
+
     return { errors, warnings };
 }
 

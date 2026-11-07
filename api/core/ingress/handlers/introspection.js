@@ -61,7 +61,7 @@ const methods = [
     // never landed on the bus (commonly a ROUTER_URL leaked from a sibling stack silently
     // pointing this call at the WRONG Router) — the dedup claim is released so a retry of
     // the SAME request_id is treated as new, not as a duplicate of something that never arrived.
-    { name: 'ingress.ingest', params: [{ name: 'request_id', type: 'string', required: true, maxLength: 64, pattern: 'id' }, { name: 'data', type: 'object' }], returns: ['ok'], returns_schema: [
+    { name: 'ingress.ingest', params: [{ name: 'request_id', type: 'string', required: true, maxLength: 64, pattern: 'id' }, { name: 'data', type: 'object' }, { name: 'meta', type: 'object' }], returns: ['ok'], returns_schema: [
         { name: 'ok',         type: 'boolean', required: true }, // true on accept/duplicate, false on reject
         { name: 'stream',     type: 'string' },   // accept path only
         { name: 'request_id', type: 'string' },   // accept + duplicate paths

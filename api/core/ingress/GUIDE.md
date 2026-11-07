@@ -25,16 +25,17 @@
 
 ## 配方二：外部 listener 投递一条 webhook（去重 → 发事件）
 
-listener（每个外部对接独立开发，吸收各家格式/验签、归一化）经 **Router** 调：
+listener（每个外部对接独立开发，吸收各家格式/验签、归一化）或对端 SOLO 的 `gateway.webhook.send { target: "solo" }` 经 **Router** 调：
 ```
-POST {Router}/jsonrpc   { "method":"ingress.ingest", "params":{ "request_id", "data" } }
+POST {Router}/jsonrpc   { "method":"ingress.ingest", "params":{ "request_id", "data", "meta"? } }
 Authorization: ApiKey <该源的 key>     ← 走头，不进 RPC params，也不落 Router 审计日志
 ```
 - **`request_id` = 幂等键，必须在同一外部事件的多次重投间保持稳定**（如 GitHub `X-GitHub-Delivery`、
   Stripe `evt_xxx`，或 listener 自生成的 UUID）。去重键 = `(源, request_id)`，窗口内重复直接短路。
+- **可选 `meta` 信封与跨箱防环**：跨箱投递（SOLO Bridge）会携带 `meta: { hop, origin?, trace_id?, ... }`。`meta.hop` 为非负整数，超 `INGRESS_MAX_FEDERATION_HOPS`（默认 **3**）在抢占去重键前直接返 400（审计 `loop_detected`）；`meta` 同样经过防提示注入扫描，若被扣入人工复核，批准后 `meta` 原样保留。
 - **来源不由 listener 自报**——由 API key 反查（防伪造来源）；`data` 原样透传，ingress 不裁剪不解释。
 - 接受路径发出 `EVENT:WEBHOOK:{源}`，`type: "webhook.received"`，`actor: "webhook:{源}"`，
-  `payload: { request_id, data }`。
+  `payload: { request_id, data, ...(meta ? { meta } : {}) }`。
 - 返回是 6 条路径的联合，**只有 `ok` 恒有**：接受 `{ok:true, stream, request_id}`；
   重复 `{ok:true, duplicate:true, request_id}`（不再发事件）；拒绝 `{ok:false, error}`
   （无效 key / 源停用 / 结构非法 / dataSchema 违规——违规额外带 `violations`）。

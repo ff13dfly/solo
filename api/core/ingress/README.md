@@ -328,7 +328,7 @@ redis-cli -p 6699 XREVRANGE EVENT:WEBHOOK:MOCK + - COUNT 1 # 看事件落流
 | # | 决策 | 选项 | 结论 |
 |---|------|------|------|
 | ~~D1~~ | 发布档 | 现在进 services.json / 孵化档 | **已定：发布档**（进发行包，三件套一起加，§13） |
-| D2 | 信封是否要可选 `meta` | 只 request_id+data / 加可选 meta | 先只两字段，需要再加 |
+| ~~D2~~ | 信封是否要可选 `meta` | 只 request_id+data / 加可选 meta | **已落地（2026-11-07）**：支持可选 `meta` 对象（透传至事件 `payload.meta`，经启发式防注入扫描与复核队列保真），并内置 `meta.hop` 跨箱回环刹车（默认上限 `maxFederationHops = 3`，超限在去重前记 `loop_detected` 返 400） |
 | D3 | 去重 TTL 默认 | 24h / 7d / per-source 配 | per-source 配，默认 24h |
 | D4 | listener 是否纳入本仓 | 各自独立仓/外部 / 仓内放 dev mock listener | 仓内放一个 dev mock listener 打链路，真 listener 各自独立 |
 | D5 | 端口 | 8070 / 其他 | 8070（未占用） |

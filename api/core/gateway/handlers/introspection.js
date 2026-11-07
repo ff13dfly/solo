@@ -161,20 +161,26 @@ module.exports = [
         ai: true
     },
 
-    // --- Outbound Webhook Send ---
+    // --- Outbound Webhook Send (+ Cross-Box SOLO Bridge mode) ---
     {
         name: 'gateway.webhook.send',
-        params: ['url', 'payload', 'type', 'targetId', 'secret', 'timeoutMs', 'idempotencyKey'],
+        params: ['url', 'payload', 'type', 'targetId', 'secret', 'timeoutMs', 'idempotencyKey', 'target', 'meta'],
         returns: ['success', 'status', 'provider', 'messageId'],
         returns_schema: [
             { name: 'success',      type: 'boolean', required: true },
-            { name: 'status',       type: 'number',  required: true },  // upstream HTTP status (2xx)
-            { name: 'provider',     type: 'string',  required: true },  // always 'webhook'
-            { name: 'messageId',    type: 'string',  required: true },  // `wh-<sentAt>`
+            { name: 'status',       type: 'number',  required: true },  // upstream HTTP status (2xx, or 422 when held in peer review)
+            { name: 'provider',     type: 'string',  required: true },  // 'webhook' | 'solo'
+            { name: 'messageId',    type: 'string',  required: true },  // `wh-<sentAt>` (webhook) or `request_id` (solo)
             { name: 'deliveryId',   type: 'string' },                   // ledger row (best-effort)
             { name: 'deduplicated', type: 'boolean' },                  // idempotencyKey replay
+            { name: 'requestId',    type: 'string' },                   // solo mode: peer ingress request_id
+            { name: 'stream',       type: 'string' },                   // solo mode: peer EVENT:WEBHOOK:{SOURCE} on fresh accept
+            { name: 'duplicate',    type: 'boolean' },                  // solo mode: peer ingress dedup hit
+            { name: 'held',         type: 'boolean' },                  // solo mode: 422 dataSchema / injection hold in peer review queue
+            { name: 'violations',   type: 'array' },                    // solo mode: 422 violations list
+            { name: 'error',        type: 'string' },                   // solo mode: 422 hold summary
         ],
-        description: 'POST a JSON payload to an external endpoint (machine target). Optional secret → HMAC-SHA256 X-Solo-Signature header.',
+        description: 'POST a JSON payload to an external endpoint (target="webhook", optional HMAC-SHA256 X-Solo-Signature) or to a peer SOLO stack Router /jsonrpc ingress.ingest (target="solo", Authorization: ApiKey <secret>, end-to-end dedup + meta.hop loop brake).',
         ai: false
     },
 

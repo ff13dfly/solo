@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const jsonrpc = require('../../../library/jsonrpc');
 const rules = require('./rules');
 const { createLogger } = require('../../../library/logger');
@@ -6,6 +7,18 @@ const { optimisticUpdate } = require('../../../library/optimistic');
 const clock = require('../../../library/clock');
 
 const logger = createLogger('fulfillment:instance');
+const DEFAULT_CALLBACK_TTL_MS = 60 * 60 * 1000;          // 1 hour
+const MAX_CALLBACK_TTL_MS     = 7 * 24 * 60 * 60 * 1000; // 7 days
+const STATE_NAME_RE           = /^[A-Z][A-Z0-9_]{0,63}$/;
+// ADR-002: never persist bearer capability tokens into instance.meta / history.meta_update.
+const sensitiveFields         = ['callbackToken', 'callback_token'];
+
+function stripSensitiveMeta(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    const copy = { ...raw };
+    for (const k of sensitiveFields) delete copy[k];
+    return copy;
+}
 
 /**
  * Fulfillment Instance Logic
@@ -15,8 +28,10 @@ const logger = createLogger('fulfillment:instance');
  */
 module.exports = (redis, config, relay = null) => {
 
-    const PREFIX = config.redis.instancePrefix;
-    const INDEX  = config.redis.instanceIndex;
+    const PREFIX        = config.redis.instancePrefix;
+    const INDEX         = config.redis.instanceIndex;
+    const SOURCE_PREFIX = config.redis.sourceIndexPrefix   || 'FULFILLMENT:SOURCE:';
+    const CBTOKEN_PREF  = config.redis.callbackTokenPrefix || 'FULFILLMENT:CBTOKEN:';
     const instanceLocks = new Map();
 
     async function withInstanceLock(key, fn) {
@@ -46,6 +61,31 @@ module.exports = (redis, config, relay = null) => {
 
     function resolveOwner(req) {
         return walContext.getStore()?.owner || req?.constraints?.$owner || null;
+    }
+
+    function sourceIndexKey(owner, profileId, sourceId) {
+        const ownerScope = (owner && owner.field) ? `${owner.field}=${owner.value}` : '_';
+        return `${SOURCE_PREFIX}${ownerScope}:${profileId}:${sourceId}`;
+    }
+
+    function emitTransitioned({ id, profileId, sourceId, fromState, toState, event, transitionId, user, stamp }) {
+        if (!relay) return;
+        relay.call('event.emit', {
+            stream:  'EVENT:FULFILLMENT:TRANSITIONED',
+            type:    'instance.transitioned',
+            actor:   `fulfillment:${id}`,
+            payload: {
+                instanceId: id,
+                profileId,
+                sourceId,
+                fromState,
+                toState,
+                event,
+                transitionId,
+                user: user || null,
+                stamp,
+            },
+        }).catch((err) => logger.warn(`emit EVENT:FULFILLMENT:TRANSITIONED failed (${transitionId}): ${err.message}`));
     }
 
     function assertOwner(instance, req) {
@@ -97,12 +137,12 @@ module.exports = (redis, config, relay = null) => {
      * JsonLogic condition (override), applies the state change + history, and
      * builds idempotency-keyed _tasks. See docs/IMPLEMENTATION.md §幂等契约.
      */
-    async function advance({ id, event, metaUpdate = {}, skipCondition = false, forced = false, reason = null, expectedTransitionId = null }, req) {
+    async function advance({ id, event, metaUpdate = {}, skipCondition = false, forced = false, reason = null, expectedTransitionId = null, consumeCallbackId = null }, req) {
         if (!id)    throw jsonrpc.MISSING_PARAM('id');
         if (!event) throw jsonrpc.MISSING_PARAM('event');
 
         const key = getInstanceKey(id);
-        const safeMetaUpdate = (metaUpdate && typeof metaUpdate === 'object' && !Array.isArray(metaUpdate)) ? metaUpdate : {};
+        const safeMetaUpdate = stripSensitiveMeta(metaUpdate);
 
         return withInstanceLock(key, async () => {
             const initialInstance = await getInstance(id, req);
@@ -157,21 +197,38 @@ module.exports = (redis, config, relay = null) => {
                     throw jsonrpc.INVALID_PARAM(`Condition not met for event "${event}"`);
                 }
 
+                if (!skipCondition && transitionRule.evidence) {
+                    const ev = rules.evaluateEvidenceGate(transitionRule.evidence, mergedMeta);
+                    if (!ev.ok) {
+                        throw jsonrpc.INVALID_PARAM(
+                            `Evidence gate failed for event "${event}": ${ev.violations.join('; ')}`
+                        );
+                    }
+                }
+
+                const now = clock.now();
                 toState = transitionRule.to;
                 // transition_id: monotonic per instance (history slot). Replays reproduce
                 // the same id → downstream dedupe; a fresh push (override) gets a new id.
                 transitionId = `${id}-T${current.history.length + 1}`;
 
+                const prevPending = Array.isArray(current.pending_callbacks) ? current.pending_callbacks : [];
+                const nextPending = prevPending.filter(
+                    (cb) => cb && cb.tokenId !== consumeCallbackId && (!cb.expiresAt || cb.expiresAt > now)
+                );
+
                 const next = {
                     ...current,
-                    prevState:      fromState,
-                    state:          toState,
-                    stateChangedAt: Date.now(),
-                    meta:           mergedMeta,
-                    history:        [...current.history]
+                    prevState:         fromState,
+                    state:             toState,
+                    stateChangedAt:    now,
+                    meta:              mergedMeta,
+                    pending_callbacks: nextPending,
+                    ...(current.suspension ? { suspension: null } : {}),
+                    history:           [...current.history]
                 };
 
-                const entry = { state: toState, event, transition_id: transitionId, user: req?.user || null, trace: walContext.getStore()?.trace || null, stamp: Date.now() };
+                const entry = { state: toState, event, transition_id: transitionId, user: req?.user || null, trace: walContext.getStore()?.trace || null, stamp: now };
                 if (Object.keys(safeMetaUpdate).length) entry.meta_update = safeMetaUpdate;
                 if (forced) entry.forced = true;
                 if (reason) entry.reason = reason;
@@ -183,24 +240,17 @@ module.exports = (redis, config, relay = null) => {
             // Fire-and-forget: emit EVENT:FULFILLMENT:TRANSITIONED so orchestrator/nexus
             // sentinels can react to state changes. Emit failure must never abort the
             // transition — the state is already persisted above.
-            if (relay) {
-                relay.call('event.emit', {
-                    stream:  'EVENT:FULFILLMENT:TRANSITIONED',
-                    type:    'instance.transitioned',
-                    actor:   `fulfillment:${id}`,
-                    payload: {
-                        instanceId:   id,
-                        profileId:    instance.profileId,
-                        sourceId:     instance.sourceId,
-                        fromState,
-                        toState,
-                        event,
-                        transitionId,
-                        user:         req?.user || null,
-                        stamp:        instance.stateChangedAt,
-                    },
-                }).catch((err) => logger.warn(`emit EVENT:FULFILLMENT:TRANSITIONED failed (${transitionId}): ${err.message}`));
-            }
+            emitTransitioned({
+                id,
+                profileId:    instance.profileId,
+                sourceId:     instance.sourceId,
+                fromState,
+                toState,
+                event,
+                transitionId,
+                user:         req?.user || null,
+                stamp:        instance.stateChangedAt,
+            });
 
             // _tasks: Router async dispatch. idempotency_key inside params (a normal RPC
             // param to downstream); transition_id at top level for audit correlation.
@@ -229,8 +279,9 @@ module.exports = (redis, config, relay = null) => {
     return {
         /**
          * fulfillment.instance.create — new lifecycle record in DRAFT state.
+         * Optional `idempotent: true` deduplicates by (profileId, sourceId) within $owner scope.
          */
-        async create({ sourceId, profileId, meta = {} }, req) {
+        async create({ sourceId, profileId, meta = {}, idempotent = false }, req) {
             if (!sourceId)  throw jsonrpc.MISSING_PARAM('sourceId');
             if (!profileId) throw jsonrpc.MISSING_PARAM('profileId');
 
@@ -242,31 +293,80 @@ module.exports = (redis, config, relay = null) => {
                 throw jsonrpc.FORBIDDEN(`Profile ${profileId} is not activated (reviewState: ${profile.reviewState}) — it must be approved before instances can be created`);
             }
 
-            const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-            const suffix = Math.floor(Math.random() * 9000 + 1000);
-            const instanceId = `FL-${date}-${suffix}`;
             const owner = resolveOwner(req);
+            const srcKey = sourceIndexKey(owner, profileId, sourceId);
 
-            const instance = {
-                id:                instanceId,
-                sourceId,
-                profileId,
-                state:             'DRAFT',
-                prevState:         null,
-                stateChangedAt:    Date.now(),
-                createdAt:         Date.now(),
-                createdBy:         req?.user || null,
-                ...(owner && owner.field ? { [owner.field]: owner.value } : {}),
-                meta,
-                pending_callbacks: [],
-                history: [{ state: 'DRAFT', event: null, reason: 'CREATED', user: req?.user || null, stamp: Date.now() }]
-            };
+            return withInstanceLock(srcKey, async () => {
+                if (idempotent) {
+                    const existingId = await redis.get(srcKey);
+                    if (existingId) {
+                        const raw = await redis.get(getInstanceKey(existingId));
+                        if (raw) {
+                            const existing = JSON.parse(raw);
+                            assertOwner(existing, req);
+                            return { ...existing, deduplicated: true };
+                        }
+                    }
+                    // Backfill check for pre-upgrade instances created before FULFILLMENT:SOURCE:* existed.
+                    const allIds = await redis.sMembers(INDEX); // SAFE: bounded — one index entry per fulfillment instance
+                    if (allIds && allIds.length > 0) {
+                        const rows = await redis.mGet(allIds.map((x) => `${PREFIX}${x}`));
+                        const match = rows
+                            .filter(Boolean)
+                            .map((r) => JSON.parse(r))
+                            .find((i) => i.profileId === profileId && i.sourceId === sourceId && (!owner || !owner.field || i[owner.field] === owner.value));
+                        if (match) {
+                            await redis.set(srcKey, match.id);
+                            return { ...match, deduplicated: true };
+                        }
+                    }
+                }
 
-            await redis.set(getInstanceKey(instanceId), JSON.stringify(instance));
-            await redis.sAdd(INDEX, instanceId);
+                const now = clock.now();
+                const date = new Date(now).toISOString().slice(0, 10).replace(/-/g, '');
+                const suffix = Math.floor(Math.random() * 9000 + 1000);
+                const instanceId = `FL-${date}-${suffix}`;
+                const safeMeta = stripSensitiveMeta(meta);
 
-            logger.info(`Instance created: ${instanceId} (profile: ${profileId})`);
-            return instance;
+                const instance = {
+                    id:                instanceId,
+                    sourceId,
+                    profileId,
+                    state:             'DRAFT',
+                    prevState:         null,
+                    stateChangedAt:    now,
+                    createdAt:         now,
+                    createdBy:         req?.user || null,
+                    ...(owner && owner.field ? { [owner.field]: owner.value } : {}),
+                    meta:              safeMeta,
+                    pending_callbacks: [],
+                    history: [{
+                        state: 'DRAFT',
+                        event: null,
+                        transition_id: `${instanceId}-T0`,
+                        reason: 'CREATED',
+                        user: req?.user || null,
+                        stamp: now,
+                    }]
+                };
+
+                await redis.set(getInstanceKey(instanceId), JSON.stringify(instance));
+                await redis.sAdd(INDEX, instanceId);
+                const claimed = await redis.set(srcKey, instanceId, { NX: true });
+                if (idempotent && !claimed) {
+                    // Cross-process race: another node claimed srcKey first — drop orphan and return winner.
+                    await redis.del(getInstanceKey(instanceId));
+                    await redis.sRem(INDEX, instanceId);
+                    const winnerId = await redis.get(srcKey);
+                    if (winnerId) {
+                        const winnerRaw = await redis.get(getInstanceKey(winnerId));
+                        if (winnerRaw) return { ...JSON.parse(winnerRaw), deduplicated: true };
+                    }
+                }
+
+                logger.info(`Instance created: ${instanceId} (profile: ${profileId})`);
+                return instance;
+            });
         },
 
         /**
@@ -342,17 +442,133 @@ module.exports = (redis, config, relay = null) => {
         },
 
         /**
-         * fulfillment.instance.resume — restore the instance to its prevState. This
-         * is a dynamic target (the held-from state) so it bypasses rule matching.
+         * fulfillment.instance.suspend — orthogonal breakpoint stack for RPA / human-in-the-loop
+         * intervention (CAPTCHA, OTP/QR scan, DOM drift). Enters `suspendState` (default
+         * `ASSIST_REQUIRED`) from ANY active state without requiring N×M `transitions` rules,
+         * saving `blockedState` + `checkpoint` so `resume` returns to the exact interrupted state.
          */
-        async resume({ id, expectedTransitionId = null } = {}, req) {
+        async suspend({
+            id,
+            reason,
+            reasonCode = 'MANUAL_INTERVENTION',
+            suspendState = 'ASSIST_REQUIRED',
+            checkpoint = null,
+            aiSuggestion = null,
+            metaUpdate,
+            meta,
+            expectedTransitionId = null,
+        } = {}, req) {
+            if (!id)     throw jsonrpc.MISSING_PARAM('id');
+            if (!reason) throw jsonrpc.MISSING_PARAM('reason');
+            const targetState = suspendState || 'ASSIST_REQUIRED';
+            if (typeof targetState !== 'string' || !STATE_NAME_RE.test(targetState)) {
+                throw jsonrpc.INVALID_PARAM(`suspendState must match ${STATE_NAME_RE}`);
+            }
+            const rawMeta = metaUpdate ?? meta ?? {};
+            const safeMetaUpdate = stripSensitiveMeta(rawMeta);
             const key = getInstanceKey(id);
 
             return withInstanceLock(key, async () => {
                 const initialInstance = await getInstance(id, req);
+                const profile = await loadProfile(initialInstance.profileId);
+                if (profile && profile.reviewState && profile.reviewState !== 'APPROVED') {
+                    throw jsonrpc.FORBIDDEN(`Profile ${initialInstance.profileId} is not activated (reviewState: ${profile.reviewState}) — it must be (re-)approved before its instances can suspend`);
+                }
+
+                let fromState;
+                let transitionId;
+
+                const instance = await optimisticUpdate(redis, key, (current) => {
+                    assertOwner(current, req);
+                    if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
+                        const currentTransitionId = current.history.at(-1)?.transition_id || null;
+                        if (currentTransitionId !== expectedTransitionId) {
+                            throw jsonrpc.INVALID_PARAM(
+                                `Stale transition_id for instance ${id}: expected "${expectedTransitionId}", current is "${currentTransitionId}"`
+                            );
+                        }
+                    }
+                    if (current.state === 'CANCELLED') {
+                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is CANCELLED and cannot be suspended`);
+                    }
+                    if (current.suspension) {
+                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is already suspended in ${current.state}`);
+                    }
+
+                    const now = clock.now();
+                    fromState = current.state;
+                    transitionId = `${id}-T${current.history.length + 1}`;
+                    const mergedMeta = { ...current.meta, ...safeMetaUpdate };
+                    const suspension = {
+                        blockedState: fromState,
+                        suspendState: targetState,
+                        reasonCode:   reasonCode || 'MANUAL_INTERVENTION',
+                        reason,
+                        checkpoint:   (checkpoint && typeof checkpoint === 'object' && !Array.isArray(checkpoint)) ? checkpoint : null,
+                        aiSuggestion: aiSuggestion || null,
+                        suspendedAt:  now,
+                        suspendedBy:  req?.user || null,
+                        transitionId,
+                    };
+
+                    const entry = {
+                        state:         targetState,
+                        event:         'suspend',
+                        transition_id: transitionId,
+                        reason,
+                        reason_code:   suspension.reasonCode,
+                        user:          req?.user || null,
+                        trace:         walContext.getStore()?.trace || null,
+                        stamp:         now,
+                    };
+                    if (suspension.checkpoint) entry.checkpoint = suspension.checkpoint;
+                    if (Object.keys(safeMetaUpdate).length) entry.meta_update = safeMetaUpdate;
+
+                    return {
+                        ...current,
+                        prevState:      fromState,
+                        state:          targetState,
+                        stateChangedAt: now,
+                        suspension,
+                        meta:           mergedMeta,
+                        history:        [...current.history, entry],
+                    };
+                });
+
+                emitTransitioned({
+                    id,
+                    profileId:    instance.profileId,
+                    sourceId:     instance.sourceId,
+                    fromState,
+                    toState:      targetState,
+                    event:        'suspend',
+                    transitionId,
+                    user:         req?.user || null,
+                    stamp:        instance.stateChangedAt,
+                });
+
+                logger.info(`Instance ${id}: ${fromState} → ${targetState} (suspend:${reasonCode}, ${transitionId})`);
+                return instance;
+            });
+        },
+
+        /**
+         * fulfillment.instance.resume — restore a suspended (`suspend()`) or held (`hold()`)
+         * instance back to its blockedState / prevState. Accepts optional `resolution` and
+         * `metaUpdate` (`meta` alias) so human assist context feeds the next transition guard.
+         */
+        async resume({ id, resolution = null, metaUpdate, meta, expectedTransitionId = null } = {}, req) {
+            const key = getInstanceKey(id);
+            const rawMeta = metaUpdate ?? meta ?? {};
+            const safeMetaUpdate = stripSensitiveMeta(rawMeta);
+
+            return withInstanceLock(key, async () => {
+                const initialInstance = await getInstance(id, req);
                 const initialLastEntry = Array.isArray(initialInstance.history) ? initialInstance.history.at(-1) : null;
-                if (!initialInstance.prevState || !initialLastEntry || initialLastEntry.event !== 'hold_requested') {
-                    throw jsonrpc.INVALID_PARAM(`Instance ${id} is not in a held state and cannot be resumed`);
+                const isSuspended = Boolean(initialInstance.suspension && initialInstance.suspension.blockedState);
+                const isHeld = Boolean(initialInstance.prevState && initialLastEntry && initialLastEntry.event === 'hold_requested');
+                if (!isSuspended && !isHeld) {
+                    throw jsonrpc.INVALID_PARAM(`Instance ${id} is not in a held state or suspended state and cannot be resumed`);
                 }
 
                 const profile = await loadProfile(initialInstance.profileId);
@@ -367,8 +583,10 @@ module.exports = (redis, config, relay = null) => {
                 const instance = await optimisticUpdate(redis, key, (current) => {
                     assertOwner(current, req);
                     const lastEntry = Array.isArray(current.history) ? current.history.at(-1) : null;
-                    if (!current.prevState || !lastEntry || lastEntry.event !== 'hold_requested') {
-                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is not in a held state and cannot be resumed`);
+                    const curSuspended = Boolean(current.suspension && current.suspension.blockedState);
+                    const curHeld = Boolean(current.prevState && lastEntry && lastEntry.event === 'hold_requested');
+                    if (!curSuspended && !curHeld) {
+                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is not in a held state or suspended state and cannot be resumed`);
                     }
                     if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
                         const currentTransitionId = lastEntry?.transition_id || null;
@@ -379,48 +597,285 @@ module.exports = (redis, config, relay = null) => {
                         }
                     }
 
+                    const now = clock.now();
                     fromState = current.state;
-                    toState   = current.prevState;
+                    toState   = curSuspended ? current.suspension.blockedState : current.prevState;
                     transitionId = `${id}-T${current.history.length + 1}`;
+
+                    const mergedMeta = {
+                        ...current.meta,
+                        ...safeMetaUpdate,
+                        ...(resolution ? { last_assist_resolution: resolution } : {}),
+                    };
+                    const entry = {
+                        state:         toState,
+                        event:         'resume',
+                        transition_id: transitionId,
+                        reason:        resolution || `resumed from ${fromState}`,
+                        user:          req?.user || null,
+                        trace:         walContext.getStore()?.trace || null,
+                        stamp:         now,
+                    };
+                    if (resolution) entry.resolution = resolution;
+                    if (Object.keys(safeMetaUpdate).length) entry.meta_update = safeMetaUpdate;
 
                     return {
                         ...current,
                         prevState:      fromState,
                         state:          toState,
-                        stateChangedAt: Date.now(),
-                        history: [
-                            ...current.history,
-                            {
-                                state: toState, event: 'resume', transition_id: transitionId,
-                                reason: `resumed from ${fromState}`, user: req?.user || null,
-                                trace: walContext.getStore()?.trace || null, stamp: Date.now()
-                            }
-                        ]
+                        stateChangedAt: now,
+                        ...(curSuspended ? { suspension: null } : {}),
+                        meta:           mergedMeta,
+                        history:        [...current.history, entry],
                     };
                 });
 
-                if (relay) {
-                    relay.call('event.emit', {
-                        stream:  'EVENT:FULFILLMENT:TRANSITIONED',
-                        type:    'instance.transitioned',
-                        actor:   `fulfillment:${id}`,
-                        payload: {
-                            instanceId:   id,
-                            profileId:    instance.profileId,
-                            sourceId:     instance.sourceId,
-                            fromState,
-                            toState,
-                            event:        'resume',
-                            transitionId,
-                            user:         req?.user || null,
-                            stamp:        instance.stateChangedAt,
-                        },
-                    }).catch((err) => logger.warn(`emit EVENT:FULFILLMENT:TRANSITIONED failed (${transitionId}): ${err.message}`));
-                }
+                emitTransitioned({
+                    id,
+                    profileId:    instance.profileId,
+                    sourceId:     instance.sourceId,
+                    fromState,
+                    toState,
+                    event:        'resume',
+                    transitionId,
+                    user:         req?.user || null,
+                    stamp:        instance.stateChangedAt,
+                });
 
                 logger.info(`Instance ${id}: ${fromState} → ${toState} (resume, ${transitionId})`);
                 return instance;
             });
+        },
+
+        /**
+         * fulfillment.instance.reap — sweep instances whose current state exceeded
+         * `profile.stateTtls[state].ttlMs` and fire the declared timeout transition event.
+         */
+        async reap({ profileId = null, dryRun = false, limit = config.pageSize || 100 } = {}, req) {
+            const ids = await redis.sMembers(INDEX); // SAFE: bounded — one index entry per fulfillment instance
+            if (!ids || ids.length === 0) {
+                return { scanned: 0, expired: 0, reaped: [], skipped: [], dryRun: !!dryRun, _tasks: [] };
+            }
+
+            const rows = await redis.mGet(ids.map((x) => `${PREFIX}${x}`));
+            let items = rows.filter(Boolean).map((r) => JSON.parse(r));
+            const owner = resolveOwner(req);
+            if (owner && owner.field) items = items.filter((i) => i[owner.field] === owner.value);
+            if (profileId) items = items.filter((i) => i.profileId === profileId);
+
+            const scanned = items.length;
+            const maxItems = Math.max(1, Math.min(Number(limit) || config.pageSize || 100, 1000));
+            const profileCache = new Map();
+            const now = clock.now();
+
+            const reaped = [];
+            const skipped = [];
+            const reapedTasks = [];
+            let expired = 0;
+
+            for (const inst of items) {
+                if (reaped.length >= maxItems) break;
+                let prof = profileCache.get(inst.profileId);
+                if (prof === undefined) {
+                    try {
+                        prof = await loadProfile(inst.profileId);
+                    } catch (_) {
+                        prof = null;
+                    }
+                    profileCache.set(inst.profileId, prof);
+                }
+                if (!prof || (prof.reviewState && prof.reviewState !== 'APPROVED')) continue;
+                const spec = prof.stateTtls && prof.stateTtls[inst.state];
+                if (!spec || typeof spec.ttlMs !== 'number' || spec.ttlMs <= 0 || !spec.event) continue;
+
+                const ageMs = now - (inst.stateChangedAt || inst.createdAt || now);
+                if (ageMs < spec.ttlMs) continue;
+
+                expired += 1;
+                if (dryRun) {
+                    reaped.push({
+                        id:        inst.id,
+                        profileId: inst.profileId,
+                        fromState: inst.state,
+                        event:     spec.event,
+                        ageMs,
+                    });
+                    continue;
+                }
+
+                try {
+                    const expectedTid = inst.history.at(-1)?.transition_id ?? null;
+                    const res = await advance({
+                        id:                   inst.id,
+                        event:                spec.event,
+                        reason:               spec.reason || `state TTL exceeded (${spec.ttlMs}ms)`,
+                        metaUpdate:           { timed_out_from: inst.state, timed_out_at: now, timed_out_age_ms: ageMs },
+                        expectedTransitionId: expectedTid,
+                    }, req || { user: 'system:reaper', permit: 'admin' });
+                    reaped.push({
+                        id:           inst.id,
+                        profileId:    inst.profileId,
+                        fromState:    inst.state,
+                        toState:      res.state,
+                        event:        spec.event,
+                        transitionId: res.history.at(-1)?.transition_id || null,
+                    });
+                    if (Array.isArray(res._tasks) && res._tasks.length > 0) {
+                        reapedTasks.push(...res._tasks);
+                    }
+                } catch (err) {
+                    skipped.push({ id: inst.id, reason: err && err.message ? err.message : String(err) });
+                }
+            }
+
+            return { scanned, expired, reaped, skipped, dryRun: !!dryRun, _tasks: reapedTasks };
+        },
+
+        /**
+         * fulfillment.instance.token.issue — mint a single-use capability callback token
+         * scoped to ONE instance + `allowedEvents` + optional `expectedTransitionId`.
+         */
+        token: {
+            async issue({ id, allowedEvents, ttlMs = DEFAULT_CALLBACK_TTL_MS, bindCurrentTransition = true } = {}, req) {
+                if (!id) throw jsonrpc.MISSING_PARAM('id');
+                if (!Array.isArray(allowedEvents) || allowedEvents.length === 0 || allowedEvents.some((e) => typeof e !== 'string' || !e.trim())) {
+                    throw jsonrpc.INVALID_PARAM('allowedEvents must be a non-empty array of event strings');
+                }
+                const cleanEvents = Array.from(new Set(allowedEvents.map((e) => e.trim())));
+                const safeTtl = Math.max(1000, Math.min(Number(ttlMs) || DEFAULT_CALLBACK_TTL_MS, MAX_CALLBACK_TTL_MS));
+                const key = getInstanceKey(id);
+
+                return withInstanceLock(key, async () => {
+                    const initialInstance = await getInstance(id, req);
+                    const profile = await loadProfile(initialInstance.profileId);
+                    if (profile && profile.reviewState && profile.reviewState !== 'APPROVED') {
+                        throw jsonrpc.FORBIDDEN(`Profile ${initialInstance.profileId} is not activated (reviewState: ${profile.reviewState})`);
+                    }
+                    const declaredEvents = new Set((profile.transitions || []).map((t) => t && t.event).filter(Boolean));
+                    for (const ev of cleanEvents) {
+                        if (!declaredEvents.has(ev)) {
+                            throw jsonrpc.INVALID_PARAM(`Event "${ev}" does not exist in profile ${initialInstance.profileId}`);
+                        }
+                    }
+
+                    const rawToken = `flcb_${crypto.randomBytes(24).toString('hex')}`;
+                    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+                    const tokenId = `cbt_${tokenHash.slice(0, 12)}`;
+                    const now = clock.now();
+                    const expiresAt = now + safeTtl;
+                    const owner = resolveOwner(req);
+                    let expectedTransitionId = null;
+
+                    await optimisticUpdate(redis, key, (current) => {
+                        assertOwner(current, req);
+                        expectedTransitionId = bindCurrentTransition
+                            ? (current.history.at(-1)?.transition_id || null)
+                            : null;
+                        const liveCallbacks = (Array.isArray(current.pending_callbacks) ? current.pending_callbacks : [])
+                            .filter((cb) => cb && (!cb.expiresAt || cb.expiresAt > now));
+                        return {
+                            ...current,
+                            pending_callbacks: [
+                                ...liveCallbacks,
+                                { tokenId, allowedEvents: cleanEvents, expectedTransitionId, createdAt: now, expiresAt },
+                            ],
+                        };
+                    });
+
+                    const tokenRecord = {
+                        tokenId,
+                        instanceId: id,
+                        profileId:  initialInstance.profileId,
+                        allowedEvents: cleanEvents,
+                        expectedTransitionId,
+                        owner:      owner || null,
+                        issuedBy:   req?.user || null,
+                        createdAt:  now,
+                        expiresAt,
+                    };
+                    await redis.set(`${CBTOKEN_PREF}${tokenHash}`, JSON.stringify(tokenRecord), { EX: Math.ceil(safeTtl / 1000) });
+
+                    return {
+                        callbackToken: rawToken,
+                        tokenId,
+                        instanceId: id,
+                        allowedEvents: cleanEvents,
+                        expiresAt,
+                        ...(expectedTransitionId ? { expectedTransitionId } : {}),
+                    };
+                });
+            },
+        },
+
+        /**
+         * fulfillment.instance.callback — PUBLIC endpoint guarded by a single-use capability
+         * token (`Authorization: Bearer flcb_...` header or `params.callbackToken`).
+         */
+        async callback({ event, metaUpdate, meta, callbackToken } = {}, req) {
+            if (!event) throw jsonrpc.MISSING_PARAM('event');
+            const rawToken = (req && req.callbackToken) || callbackToken;
+            if (!rawToken || typeof rawToken !== 'string' || !rawToken.trim()) {
+                throw jsonrpc.UNAUTHORIZED();
+            }
+
+            const tokenHash = crypto.createHash('sha256').update(rawToken.trim()).digest('hex');
+            const tokenKey = `${CBTOKEN_PREF}${tokenHash}`;
+            const peekRaw = await redis.get(tokenKey);
+            if (!peekRaw) throw jsonrpc.UNAUTHORIZED();
+
+            let rec;
+            try {
+                rec = JSON.parse(peekRaw);
+            } catch (_) {
+                await redis.del(tokenKey);
+                throw jsonrpc.UNAUTHORIZED();
+            }
+
+            const now = clock.now();
+            if (rec.expiresAt && now >= rec.expiresAt) {
+                await redis.del(tokenKey);
+                throw jsonrpc.UNAUTHORIZED();
+            }
+            if (!Array.isArray(rec.allowedEvents) || !rec.allowedEvents.includes(event)) {
+                throw jsonrpc.FORBIDDEN(`Event "${event}" is not permitted by this callback token`);
+            }
+
+            // Atomic single-use consumption: native Redis GETDEL in production; SET NX claim + DEL in unit mocks.
+            if (typeof redis.getDel === 'function') {
+                const claimedRaw = await redis.getDel(tokenKey);
+                if (!claimedRaw) throw jsonrpc.UNAUTHORIZED();
+            } else {
+                const claimed = await redis.set(`${tokenKey}:CLAIMED`, '1', { NX: true, EX: 60 });
+                if (!claimed) throw jsonrpc.UNAUTHORIZED();
+                await redis.del(tokenKey);
+            }
+
+            const cbReq = {
+                user:        `callback:${rec.tokenId}`,
+                permit:      'callback',
+                constraints: rec.owner ? { $owner: rec.owner } : null,
+            };
+
+            try {
+                return await advance({
+                    id:                   rec.instanceId,
+                    event,
+                    metaUpdate:           metaUpdate ?? meta ?? {},
+                    expectedTransitionId: rec.expectedTransitionId ?? null,
+                    consumeCallbackId:    rec.tokenId,
+                }, cbReq);
+            } catch (err) {
+                // Token was single-use and is now burned — prune it from pending_callbacks best-effort.
+                try {
+                    const instKey = getInstanceKey(rec.instanceId);
+                    await optimisticUpdate(redis, instKey, (cur) => ({
+                        ...cur,
+                        pending_callbacks: (Array.isArray(cur.pending_callbacks) ? cur.pending_callbacks : [])
+                            .filter((cb) => cb && cb.tokenId !== rec.tokenId),
+                    }));
+                } catch (_) { /* best-effort cleanup */ }
+                throw err;
+            }
         },
 
         /**
@@ -458,10 +913,10 @@ module.exports = (redis, config, relay = null) => {
                     // "a human edited it" was previously indistinguishable. create/advance both take
                     // req and record createdBy / history[].user; update was the odd one out even
                     // though index.js has been passing req in all along.
-                    const next = { ...current, updatedBy: req?.user || null, updatedAt: Date.now() };
+                    const next = { ...current, updatedBy: req?.user || null, updatedAt: clock.now() };
                     // meta is MERGED, not replaced — caching meta_fields.source values must
                     // not drop other keys.
-                    if (meta && typeof meta === 'object' && !Array.isArray(meta)) next.meta = { ...current.meta, ...meta };
+                    if (meta && typeof meta === 'object' && !Array.isArray(meta)) next.meta = { ...current.meta, ...stripSensitiveMeta(meta) };
                     return next;
                 });
 

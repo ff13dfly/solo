@@ -85,19 +85,20 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
     // caller can tell "RPC succeeded" apart from "the event actually landed on
     // the bus" — Router reports blocked/deduped honestly (router/handlers/events.js),
     // but that information is worthless if nobody reads it (see call sites below).
-    async function emit(sourceName, requestId, data) {
+    async function emit(sourceName, requestId, data, meta) {
         return relay.call('event.emit', {
             stream:  source.streamFor(sourceName),
             type:    C.eventType,
             actor:   `webhook:${sourceName}`,
-            payload: { request_id: requestId, data: data ?? {} },
+            payload: { request_id: requestId, data: data ?? {}, ...(meta ? { meta } : {}) },
         });
     }
 
     // Inbound handler. apiKey comes from the forwarded Authorization header;
-    // rawBody is the RPC params { request_id, data }. Returns { status, body }.
+    // rawBody is the RPC params { request_id, data, meta? }. Returns { status, body }.
     async function handle(apiKey, rawBody) {
         const reqId = rawBody && typeof rawBody === 'object' ? rawBody.request_id : null;
+        const maxHops = (typeof C.maxFederationHops === 'number' && C.maxFederationHops > 0) ? C.maxFederationHops : 3;
 
         const src = await source.resolveByKey(apiKey);
         if (!src) {
@@ -117,6 +118,17 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
         if (!rawBody || typeof rawBody !== 'object' || Array.isArray(rawBody)) return invalid('body must be a JSON object');
         if (!reqId || typeof reqId !== 'string' || reqId.length > C.maxRequestIdLen) return invalid('request_id required (non-empty string)');
         if (rawBody.data !== undefined && (typeof rawBody.data !== 'object' || rawBody.data === null || Array.isArray(rawBody.data))) return invalid('data must be an object');
+        if (rawBody.meta !== undefined && (typeof rawBody.meta !== 'object' || rawBody.meta === null || Array.isArray(rawBody.meta))) return invalid('meta must be an object');
+        const meta = rawBody.meta;
+        if (meta && meta.hop !== undefined) {
+            if (!Number.isInteger(meta.hop) || meta.hop < 0) {
+                return invalid('meta.hop must be a non-negative integer');
+            }
+            if (meta.hop > maxHops) {
+                logLine({ source: src.name, request_id: reqId, outcome: 'loop_detected', status: 400, body: rawBody });
+                return { status: 400, body: { ok: false, error: `federation hop limit exceeded (hop=${meta.hop}, max=${maxHops})` } };
+            }
+        }
 
         const ttl = (typeof src.dedupTtlSec === 'number' && src.dedupTtlSec > 0) ? src.dedupTtlSec : C.defaultDedupTtlSec;
 
@@ -128,14 +140,18 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
         }
 
         let data = rawBody.data || {};
+        const metaViolations = meta
+            ? scanValue(meta, 'meta').map((h) => `'${h.path}' matched suspected prompt-injection pattern(s): ${h.hits.join(', ')}`)
+            : [];
         if (Array.isArray(src.dataSchema) && src.dataSchema.length > 0) {
             const violations = [
                 ...checkParams(src.dataSchema, data),
                 ...undeclaredKeys(src.dataSchema, data).map((k) => `'${k}' is not declared in this source's dataSchema`),
                 ...scanDeclaredStrings(src.dataSchema, data),
+                ...metaViolations,
             ];
             if (violations.length > 0) {
-                const reviewId = await review.push({ sourceId: src.id, source: src.name, requestId: reqId, data, violations });
+                const reviewId = await review.push({ sourceId: src.id, source: src.name, requestId: reqId, data, ...(meta ? { meta } : {}), violations });
                 await source.recordFire(src.id, { outcome: 'rejected' });
                 logLine({ source: src.name, request_id: reqId, outcome: 'schema_rejected', status: 422, body: rawBody });
                 await notifyOps({ reviewId, source: src.name, requestId: reqId, violations, rejectedAt: clock.now() });
@@ -144,9 +160,12 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
             data = extractDeclared(src.dataSchema, data);
         } else {
             const hits = scanValue(data);
-            if (hits.length > 0) {
-                const violations = hits.map((h) => `'${h.path}' matched suspected prompt-injection pattern(s): ${h.hits.join(', ')}`);
-                const reviewId = await review.push({ sourceId: src.id, source: src.name, requestId: reqId, data, violations });
+            const violations = [
+                ...hits.map((h) => `'${h.path}' matched suspected prompt-injection pattern(s): ${h.hits.join(', ')}`),
+                ...metaViolations,
+            ];
+            if (violations.length > 0) {
+                const reviewId = await review.push({ sourceId: src.id, source: src.name, requestId: reqId, data, ...(meta ? { meta } : {}), violations });
                 await source.recordFire(src.id, { outcome: 'rejected' });
                 logLine({ source: src.name, request_id: reqId, outcome: 'schema_rejected', status: 422, body: rawBody });
                 await notifyOps({ reviewId, source: src.name, requestId: reqId, violations, rejectedAt: clock.now() });
@@ -154,7 +173,7 @@ module.exports = (redis, { config, relay, source, dedup, audit, review }) => {
             }
         }
 
-        const stats = await emit(src.name, reqId, data);
+        const stats = await emit(src.name, reqId, data, meta);
         // Real Router (router/handlers/events.js) always returns a numeric `written`
         // (initialized to 0, never omitted) — require the same here rather than
         // trusting a bare truthy check, so a malformed/incomplete RPC result can't

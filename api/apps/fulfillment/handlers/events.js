@@ -3,7 +3,7 @@ module.exports = {
         {
             stream:      'EVENT:FULFILLMENT:TRANSITIONED',
             type:        'instance.transitioned',
-            trigger:     'fulfillment.instance.transition / cancel / hold / resume / override',
+            trigger:     'fulfillment.instance.transition / cancel / hold / suspend / resume / reap / callback / override',
             description: '每次实例状态成功转换后发出（fire-and-forget，不阻塞 transition 响应）',
             mechanism:   'relay → event.emit',
             payload: {

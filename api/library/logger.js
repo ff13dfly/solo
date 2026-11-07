@@ -45,7 +45,7 @@ let _currentIndexDir = null;
 // ERROR:QUEUE for triage — mask the secret-looking keys so a credential never lands in the
 // error log (the protocol's "params 等同明文密码" concern). Over-masking the error queue is
 // harmless. Exported so any other param-logging site can reuse the same denylist.
-const SENSITIVE_KEY_RE = /^(devicetoken|password|passwd|pwd|pass|secret|token|accesstoken|refreshtoken|apikey|api_key|privatekey|private_key|encpriv|signkey|signingkey|otp|challenge|response|signature|authorization|cookie|salt|hash|proof)$/i;
+const SENSITIVE_KEY_RE = /^(devicetoken|password|passwd|pwd|pass|secret|token|accesstoken|refreshtoken|callbacktoken|callback_token|apikey|api_key|privatekey|private_key|encpriv|signkey|signingkey|otp|challenge|response|signature|authorization|cookie|salt|hash|proof)$/i;
 
 function redactSensitive(value, depth = 0) {
     if (value === null || typeof value !== 'object' || depth > 4) return value;

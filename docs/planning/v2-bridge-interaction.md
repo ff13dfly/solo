@@ -15,8 +15,8 @@
 > 两箱直连（第一例：steward → finance，剧本结果投回 finance 的 ingress）**不经主箱**，本文的通道划分与
 > 失败语义同样适用。传输层已定为 frame 既有器官：**发方 `gateway.webhook.send`（solo 目标模式）→ 收方
 > `ingress.ingest`**，不新建 bridge 服务；决定与依据见 `VERSION.v2.md` §3.0、
-> [`../feedback/gateway-ingress-dialect-mismatch.md`](../feedback/gateway-ingress-dialect-mismatch.md)。
-> 文中「bridge 代码未动工」仍属实——待动工的是 gateway 的那个模式。
+> [`../feedback/done/gateway-ingress-dialect-mismatch.md`](../feedback/done/gateway-ingress-dialect-mismatch.md)。
+> **2026-11-07 更新**：`gateway.webhook.send` `target: 'solo'`、`ingress.ingest` `meta.hop` 环路刹车与 `/health` `bundle` 版本自报均已在 frame 落地（`solo-bridge.test.js`），同运营者跨箱通道一与通道二底座齐备。
 
 ---
 
@@ -143,8 +143,8 @@
   §3.3–§3.6（签名 / principal / aud / 预检，**跨运营方档基线**）。本文不重复。
 - **安全缺口（2026-09-03 更新）**：消息档下 §3.6 A 组 #2 / #4 **按构造不存在**（actor 由 key 反推、
   peer 只能往自己那条流投递），#8 由 ingress 去重 + gateway 账本消解，#1 在 per-pair 秘密下隐式成立；
-  **唯一要做的是 #5 环路刹车 = 信封 `meta.hop`**，随 solo 模式一起落。逐条对照见
-  [`../feedback/gateway-ingress-dialect-mismatch.md`](../feedback/gateway-ingress-dialect-mismatch.md) §四。
+  **唯一要做的是 #5 环路刹车 = 信封 `meta.hop`**，已随 solo 模式一起落（2026-11-07）。逐条对照见
+  [`../feedback/done/gateway-ingress-dialect-mismatch.md`](../feedback/done/gateway-ingress-dialect-mismatch.md) §四。
 - **角色与 UI 红线**：overview 仓 `mind/strategy/solo-v2-testbed.md`（跨仓库不设链接）。
 - **治理**（协调层归属人、bridge 配置变更接 approval）：
   [`../feedback/done/org-container-per-person-mesh.md`](../feedback/done/org-container-per-person-mesh.md) §2，公司侧生效；个人 mesh 里归属人即本人。

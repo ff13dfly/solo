@@ -40,7 +40,15 @@ function mountHealth(app, { serviceName, version, getRedis, getMetrics } = {}) {
         // how long it has lived, without shelling into the box — the "version
         // triple" check (bundle file vs package.json vs live process) needs a
         // live-process answer that is more than a bare ok.
-        res.json({ status: 'ok', service: serviceName, version, pid: process.pid, uptime: Math.round(process.uptime()), ts: Date.now() });
+        res.json({
+            status: 'ok',
+            service: serviceName,
+            version,
+            bundle: global.__SOLO_BUNDLE_VERSION__ || null,
+            pid: process.pid,
+            uptime: Math.round(process.uptime()),
+            ts: Date.now(),
+        });
     });
 
     app.get('/readyz', async (req, res) => {

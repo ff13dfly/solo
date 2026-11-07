@@ -196,8 +196,11 @@ fulfillment 的转移事件是 fire-and-forget（`relay.call` 不阻塞 transiti
   变量」发 **warning**，与建议只差级别。不升级为 error：`metaUpdate` 在转移时补值是文档承认的合法模式
   （GUIDE 配方一第 3 步），静态无法证明它没被喂。fail-closed 之后这条的风险从「静默放行」降为
   「转移被拦并报 Condition not met」，warning 级够用。
-- ⏸ **§二 `meta_fields[].source` 无取数器、§三 无时间驱动设施**：属实，都是功能缺口而非 bug，
-  另行排期（与 BACKLOG 「cron-to-service」条相关）。
+- ✅ **§三 状态驻留超时与定时收割设施**（2026-11-07 落地，见 [`rpa-fulfillment-convergence-and-evidence-gate.md`](./rpa-fulfillment-convergence-and-evidence-gate.md)）：
+  `profile` 新增声明式 `stateTtls: { STATE: { ttlMs, event, reason? } }`（纳入 `lint.js` 规则 8 与 `execDigest` 版本摘要），
+  `instance` 新增 `fulfillment.instance.reap`（支持 `dryRun` / `profileId` / `limit`，通过 `expectedTransitionId` ABA 护栏触发超时转移并产出 `_tasks`）
+  与 `instance.list` `stateChangedBefore` 过滤，且 `apps/fulfillment/index.js` 支持 `FULFILLMENT_REAP_INTERVAL_MS` 进程内可选定时扫描。
+- ⏸ **§二 `meta_fields[].source` 服务端自动取数器**：仍待做，本篇继续留顶层跟踪该项。
 
 `下游 action`（随下一 tag 的 CHANGELOG 一起发）：用 JsonLogic 数值比较做闸门、且依赖「字段没喂就放行」
 的 profile（应该没有——那正是本文报的事故）现在会被拦；要缺省值就写 `{var: [path, default]}`。

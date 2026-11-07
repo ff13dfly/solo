@@ -115,7 +115,7 @@ server-attested 执行）。2026-07-03 拆分把能「只加不破」的项全�
 
 > 来源：solo 会话 2026-09-03，起因是 steward ↔ finance 两箱**直连**的真实需求（finance 派 steward 跑剧本、
 > steward 把结果投回 finance 的 ingress，不经总控箱）。反馈与源码对照：
-> [`../feedback/gateway-ingress-dialect-mismatch.md`](../feedback/gateway-ingress-dialect-mismatch.md)。
+> [`../feedback/done/gateway-ingress-dialect-mismatch.md`](../feedback/done/gateway-ingress-dialect-mismatch.md)（2026-11-07 已落地 `target: 'solo'` + `meta.hop` + `/health.bundle`）。
 > 判据由用户定：**SOLO 作为支持层的必要条件是简洁**——方案以「箱子 owner 为了联邦要学的新名词数量」计，目标为零。
 
 **定义**：箱子之间**互为对方 Router 的客户端**。凭证只有 frame 里已有的两种：
