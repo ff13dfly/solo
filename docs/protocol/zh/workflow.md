@@ -1,9 +1,14 @@
 # AI 工作流协议 (AI Workflow Protocol)
 
+> [!NOTE]
+> **实现状态：🟢 v1 核心、C1 审批治理、H6 足迹预审、Saga 补偿与异步运行队列已落地（`v1.3.3`）。**
+> - **已实现**：声明式 `steps`（RPC 调用、JsonLogic `condition`、`result_schema`、`retry`、Saga `compensate`）、C1 审批与冷却期（`PENDING_REVIEW` → `DEFERRED_COOLING` / `ACTIVE`，HIGH 风险对接 `approval.gate.*` 多签）、H6 足迹权限预审（`coversAll`）、`require_actor_permit` 事件触发者预审、异步运行队列与故障恢复（`orchestrator.run.{retry,revive,trace}`）。
+> - **🟡 草案·未实现**：§5 多 Agent 共识步骤（`agent_consensus` / `orchestrator.consensus.*` / `$consensus`）。
+
 ---
 
-> **协议版本**: 1.1.0  
-> **状态**: 稳定 (Stable)  
+> **协议版本**: 1.2.0  
+> **状态**: 已实现 (v1.3.3)；§5 `agent_consensus` 仍为草案  
 > **作者**: Fuu  
 > **许可证**: Apache 2.0
 
@@ -53,15 +58,18 @@
 
 ### 2.1 数据结构
 
-**Redis Key**: `orchestrator:workflow:{id}`
+**Redis Key**: `ORCHESTRATOR:WORKFLOW:{id}`
 
 ```json
 {
   "id": "meeting_setup_v1",
-  "category": "协作类",
+  "category": { "TYPE": "COLLAB" },
   "priority": 80,
   "name": "安排项目会议",
   "desc": "创建日历事件，预订会议室，并通知团队。",
+  "status": "ACTIVE",
+  "risk_level": "LOW",
+  "allowed_triggers": ["sync", "event", "cron"],
   "tags": ["会议", "日历", "通知"],
   "examples": ["帮我订个会", "约一下明天的同步会"],
   "negative": ["取消会议", "删除日程"],
@@ -75,7 +83,12 @@
       "id": "book_room",
       "service": "asset",
       "method": "asset.unit.reserve",
-      "params": { "unitId": "$input.roomId" }
+      "params": { "unitId": "$input.roomId" },
+      "compensate": {
+        "service": "asset",
+        "method": "asset.unit.release",
+        "params": { "reservationId": "$step.book_room.result.id" }
+      }
     }
   ]
 }
@@ -86,9 +99,15 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `id` | string | ✅ | 唯一标识符 |
-| `category` | string | ✅ | 分类，用于两段式匹配 |
+| `category` | object | ❌ | 联邦分类标签对象（如 `{ "TYPE": "HR" }`） |
 | `name` | string | ✅ | 人类可读名称 |
 | `desc` | string | ✅ | 详细描述，用于语义搜索 |
+| `status` | string | — | 审批生命周期状态：`PENDING_REVIEW`（新建/编辑可执行字段后默认）→ `DEFERRED_COOLING`（冷却期）→ `ACTIVE` \| `REJECTED` \| `DEPRECATED` |
+| `risk_level` | string | ❌ | `LOW`（C1 单签审批）\| `HIGH`（对接 `approval.gate.*` 多签闸门） |
+| `allowed_triggers` | string[] | ❌ | 允许触发源白名单（`sync` / `event` / `cron`） |
+| `event_subscriptions` | array | ❌ | 订阅的 Redis Stream 事件流与过滤条件 |
+| `require_actor_permit` | boolean | ❌ | 为 `true` 时，事件触发执行前强制校验事件信封 `actor` 的 permit 覆盖全部步骤足迹（fail-closed） |
+| `input_schema` | array | ❌ | 入参类型契约校验规则 |
 | `examples` | string[] | ❌ | 触发短语示例 |
 | `negative` | string[] | ❌ | 反向约束，降低误匹配 |
 | `required_inputs` | string[] | ❌ | 必填参数列表 |
@@ -102,45 +121,47 @@ Step 有两种类型，由 `type` 字段区分：
 
 | `type` 值 | 说明 |
 |-----------|------|
-| 省略（默认）| **RPC Step**：调用单个 Solo 微服务方法 |
-| `"agent_consensus"` | **共识 Step**：并行调用多个 Agent，根据结论一致性路由（见 §7） |
+| 省略（默认）| **RPC Step**：调用单个 Solo 微服务方法（🟢 已实现） |
+| `"agent_consensus"` | **共识 Step**：并行调用多个 Agent，根据结论一致性路由（🟡 草案·未实现，见 §5） |
 
 **RPC Step 字段**（`type` 省略时）：
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `id` | string | ✅ | 步骤标识，用于 `$step.{id}.result` |
-| `type` | string | ❌ | 省略即为 RPC Step |
 | `service` | string | ✅ | 目标微服务 |
 | `method` | string | ✅ | 调用方法 |
-| `params` | object | ✅ | 参数，支持 `$` 变量 |
-| `condition` | string | ❌ | 条件表达式 |
+| `params` | object | ✅ | 参数，支持 `$` 路径引用或 JsonLogic `{"var":...}` / `{"cat":[...]}` / `{"+":[...]}` |
+| `condition` | object | ❌ | **JsonLogic 条件对象**（如 `{ "===": [{ "var": "input.type" }, "vip"] }`；传入字符串条件将 fail-closed 报错拦截），为 false 时跳过此步骤 |
+| `result_schema` | array | ❌ | 步骤返回值契约校验规则（配 `strict_result: true` 时不满足即判定步骤失败） |
+| `retry` | object | ❌ | 步骤级重试配置 `{ max_attempts, backoff_ms }` |
+| `compensate` | object | ❌ | Saga 补偿动作 `{ service, method, params }`，后续步骤失败时按逆序回滚已成功步骤 |
+| `idempotency_key` | any | ❌ | 步骤级幂等键模板 |
 | `ignore_error` | boolean | ❌ | 失败时继续 |
-
-`agent_consensus` Step 字段见 §7.2。
 
 ### 2.4 变量解析
 
-| 前缀 | 来源 | 示例 |
+| 语法 | 来源 | 示例 |
 |------|------|------|
-| `$input` | 用户输入 | `$input.startTime` |
-| `$config` | defaults + input | `$config.duration` |
-| `$step` | 前序 RPC Step 结果 | `$step.book_room.result.id` |
-| `$resolved` | Resolver 解析结果 | `$resolved.companyId` |
-| `$consensus` | 前序 agent_consensus Step 结果 | `$consensus.multi_audit.decision` |
+| `$input.<path>` | 工作流调用入参 | `$input.startTime` |
+| `$config.<path>` | `defaults` + `input` 合并配置 | `$config.duration` |
+| `$step.<id>.result.<path>` | 前序 RPC Step 执行结果 | `$step.book_room.result.id` |
+| `$context.<key>` | 触发上下文（`trigger_source` / `trigger_id` / `actor`） | `$context.trigger_source` |
+| `$now` / `{"var": "now"}` | 当前时间戳（epoch ms） | `{"+": [{"var": "now"}, 3600000]}` |
+| `{"cat": [...]}` | 字符串拼接算子（`library/jsonlogic.js` `RESOLVE_OPS`） | `{"cat": ["wf-", {"var": "input.id"}]}` |
 
-### 2.5 Resolver (名称解析)
+### 2.5 Resolver (前置名称解析)
 
-将用户友好的名称转换为系统 ID：
+在步骤执行前将名称解析写回目标路径（`runner.js#runResolvers`）：
 
 ```json
 "resolvers": {
   "companyId": {
-    "source": "companyName",
+    "source": "$input.companyId",
     "service": "company",
     "method": "company.info",
-    "params": { "name": "$val" },
-    "resultPath": "id"
+    "params": { "name": "$input.companyName" },
+    "extract": "id"
   }
 }
 ```
@@ -257,7 +278,10 @@ Client → Service A → Router → [分离 _tasks] → Client
 3. 返回"干净"结果给客户端
 4. 异步执行任务调用
 
-## 5. 多 Agent 共识步骤 (agent_consensus)
+## 5. 多 Agent 共识步骤 (agent_consensus)（🟡 草案·未实现）
+
+> [!WARNING]
+> **实现状态：🟡 草案·未实现。** 本节定义的 `type: "agent_consensus"` 步骤、`orchestrator.consensus.*` 方法与 `$consensus` 变量命名空间为 Phase-2 设计草案，当前 `api/core/orchestrator/` 代码中尚未实装。
 
 ### 5.1 Step 字段
 

@@ -1,20 +1,18 @@
 # 事件与触发总线协议 (Event & Trigger Bus Protocol)
 
 > [!NOTE]
-> **本文状态（2026-06-02）：核心机制已落地，少数细节与实现存在差异。** 文中每节用状态标注 ✅ 已实现 / ⚠️ 部分实现 / ❌ 设计未实现。
+> **本文状态（`v1.3.3`）：🟢 全面落地并扩展了 `ingress` 入站控制面与 `gateway` ↔ `ingress` 跨箱直连（Solo Bridge）。**
 >
-> **已实现**：Router `_event` + `event.emit`（§4）、Orchestrator run-queue + worker（§5）、事件匹配器（§6.1）、Nexus 时钟驱动器 + Schedule CRUD（§6.2）、`allowed_triggers` 守门（§7）、人在环状态机（§9）、Portal Event Bus 管理页（§11.2）。
+> **已实现**：Router `_event` + `event.emit`（含 `MAXLEN ~ 10000` 近似裁剪、`event_id` 幂等去重、因果跳数 `depth <= 16` 防死循环，§4）、Orchestrator run-queue + worker + `run.{retry,revive,trace}` + `event.replay`（§5）、事件匹配器（§6.1）、Nexus 时钟驱动器 + Schedule CRUD + Sentinel 动态流发现（§6.2）、`allowed_triggers` 守门（§7）、人在环状态机（§9）、**`core/ingress`（8070）入站 Webhook 控制面与 `core/gateway` ↔ `core/ingress` 跨箱 Solo Bridge 直连及 `gateway.delivery.*` 出站投递台账（§6.4）**、Portal Event Bus 管理页（§11.2）。
 >
-> **已修正**：Orchestrator runner 曾直接 `redis.xAdd`（绕过 Router），已改为标准信封路径（2026-06-02）。
+> **已修正**：Orchestrator runner 曾直接 `redis.xAdd`（绕过 Router），已改为标准信封路径。
 >
-> **诚实前提**：SOLO 是纯框架，**没有业务层 → 没有真实领域事件**。当前流上只有 orchestrator 自己发的 `EVENT:WORKFLOW:*`。即使本设计全部落地，能闭的环也主要是 orchestrator→事件→orchestrator 的自循环；端到端的真实业务事件要等有业务服务接入后才跑得起来。
->
-> **⚠️ 协议与实现差异**：§4.3 信封格式、§6.2 日程 schema 与当前代码存在若干字段差异，已在对应节内注明。以代码为准，协议待对齐。
+> **框架内生事件流**：除 `EVENT:WORKFLOW:*` 外，当前框架内置服务还产出 `EVENT:WEBHOOK:{SOURCE}`（`ingress` 入站）、`EVENT:GATEWAY:DELIVERY`（`gateway` 出站投递结果）、`EVENT:FULFILLMENT:*`（`fulfillment` 状态迁移）及 `nexus.sentinel` 声明式 `context.emit` 自定义流。
 
 ---
 
-> **协议版本**: 0.5.0
-> **状态**: 草案 (Draft) — 设计阶段，未实现
+> **协议版本**: 1.1.0
+> **状态**: 已实现 (v1.3.3)
 > **作者**: Fuu & Claude
 
 ---
@@ -31,8 +29,8 @@
 | D6 | nexus 调度器 = **同进程** `setInterval` tasker，与现有 agent-投递 consumer 并存 | §6.2 |
 | D7 | **runner 只信号、worker 才决策**：runner 检测 permit 不足时抛类型化 `NeedsGrantError(missingMethods)`，不自己挂起。同步 handler 接住→403；异步 worker 接住→挂起+发 NEEDS_GRANT。runner 保持纯函数 | §9.3 |
 | D8 | run 实体 `ORCHESTRATOR:RUN:{id}` **仅为异步源建**（同步跑完即弃，D5）；存状态机/trigger/actor_bot/grant + trace 指针 | §5.4 |
-| D9 | run 留存（建议默认，**待定**）：完成态保留 7 天 TTL，`PAUSED_AWAITING_HUMAN` 态不过期（等人） | §5.4 |
-| D10 | 事件流 trim（建议默认，**待定**）：`xAdd` 带 `MAXLEN ~ 10000`（近似裁剪），防 Redis 无限增长 | §4.2 |
+| D9 | run 留存：完成态保留 7 天 TTL，`PAUSED_AWAITING_HUMAN` 态不过期（等人） | §5.4 |
+| D10 | 事件流 trim（✅ 已落地）：`xAdd` 统一带 `{ TRIM: { strategy: 'MAXLEN', strategyModifier: '~', threshold: 10000 } }`（近似裁剪），防 Redis 无限增长 | §4.2 |
 
 > **依赖顺序提醒**：人在环（§9）**建立在 run-queue + worker 之上**，无法独立落地。推进必须按 §13 拓扑链：地基（allowed_triggers + trigger_source 入 context）→ **run-queue + worker** → 人在环 → 事件匹配器 → nexus 调度器 → `_event` 对称化。
 
@@ -81,7 +79,7 @@
 
 所以系统里**必须有一个常驻部件，持有时钟，到点主动发起**——它不可能纯被动等别人调。这个硬核无法被 `_event` 吸收，只能被**收进一个明确的部件**里。本设计把它收进 **nexus**（见 §6.2）。一旦它存在，cron 就被"翻译"成和被动源一样的东西（发 `_event` 或入 run-queue），其余全部统一。
 
-**webhook 不是独立接收器**：它就是"某服务的一个入站方法 + `_event`"。它的鉴权是**那个服务自己的入站鉴权问题**（外部来源走 `passport` 外部身份，或该方法配 HMAC 验签），与事件写入机制无关。
+**webhook 入站处理**：本质是"某服务的一个入站方法 + `_event`"。在当前实现中，为了避免各业务服务重复编写外部平台（GitHub / Telegram / Stripe / Generic）验签逻辑，提供了专门的入站验证适配器 `core/ingress`（`ingress.webhook.receive` + `ingress.source.*`）：验签、防重放与幂等通过后，通过在响应中返回 `_event` 统一交由 Router 写入事件流。
 
 ---
 
@@ -164,13 +162,15 @@ Router 收到下游响应
 ```jsonc
 // 实际落入 Redis Stream 的字段（全部为字符串）
 {
-  "type":       "order.paid",
-  "source":     "fulfillment",          // Router 认证，不可伪造
-  "actor":      "uid-abc123",           // 触发者（见下方 actor 约定）
-  "trace_id":   "a3f9c1d2b4e50f61",    // 8字节 hex，贯穿调用链
-  "event_id":   "b7e20f11d3c49a82",    // 8字节 hex，消费侧幂等 key
-  "emitted_at": "1748823600000",        // String(Date.now())，⚠️ 字符串非数字
-  "payload":    "{\"orderId\":\"ORD-1\",\"amount\":100}"  // JSON.stringify 后的字符串
+  "type":            "order.paid",
+  "source":          "fulfillment",          // Router 认证，不可伪造
+  "actor":           "uid-abc123",           // 触发者（见下方 actor 约定）
+  "trace_id":        "a3f9c1d2b4e50f61",    // 8字节 hex，贯穿调用链
+  "event_id":        "b7e20f11d3c49a82",    // 8字节 hex，消费侧幂等 key（支持上游显式传入幂等键）
+  "parent_event_id": "",                     // 因果链父事件 ID（顶层为空字符串）
+  "depth":           "0",                    // 事件链递归深度字符串（防无限级联环路，matcher/stream 设上限）
+  "emitted_at":      "1748823600000",        // String(Date.now())，⚠️ 字符串非数字
+  "payload":         "{\"orderId\":\"ORD-1\",\"amount\":100}"  // JSON.stringify 后的字符串
 }
 ```
 
@@ -326,10 +326,10 @@ worker blPop ORCHESTRATOR:RUNQ:PENDING
 - webhook 走的就是这条：外部 POST → 某服务方法处理 → 响应挂 `_event` → Router 写流 → 此匹配器接住。**没有"webhook 接收器"这个独立部件。**
 
 > **双 consumer 分工（重要，避免实现时困惑）**：同一批 `EVENT:*` 流上会有**两个独立 consumer**，用不同 consumer group 隔离、各干各的：
-> - **nexus 现有 consumer**（`stream.js`）：事件 → 查订阅的 **agent** → `relay.call('notification.send')` 投递。这是 agent 协同，**已实现**。
-> - **orchestrator 新 consumer**（本节）：事件 → 匹配订阅的 **workflow** → 翻译成 run-command。这是 workflow 触发，**待实现**。
+> - **nexus 现有 consumer**（`stream.js`）：事件 → 查订阅的 **Sentinel / Agent**（`nexus.sentinel.*` / `nexus.agent.*`）→ 渲染 `{{event.*}}` / `{{sentinel.*}}` + 按需调 `agent.decide` → `gateway.webhook.send`（外部 Bridge）或 `notification.send` 投递。**已实现**。
+> - **orchestrator consumer**（本节）：事件 → 匹配订阅的 **workflow** → 翻译成 run-command。这是 workflow 触发，**已实现**。
 >
-> 两者主体不同（agent vs workflow），字段名也近似但分属：nexus agent 有 `eventSubscriptions`（agent 订阅），workflow 新增 `event_subscriptions`（workflow 订阅）——实现时勿混。被动源消费在 orchestrator，主动源（cron）调度在 nexus，两个服务各持一摊。
+> 两者主体不同（sentinel/agent vs workflow），字段名也近似但分属：nexus sentinel/agent 有 `eventSubscriptions`，workflow 有 `event_subscriptions`——实现时勿混。被动源消费在 orchestrator，主动源（cron）调度在 nexus，两个服务各持一摊。
 >
 > **这两个 consumer 不只是"实现隔离"，更是两条语义路径**：① workflow 匹配 = 确定性执行（无 AI），② agent 通知 = AI 判断（增强）。完整的引用场景与"为什么必须用流"见 **§6.3**。
 
@@ -675,7 +675,15 @@ SOLO = 管理多 AI 与人协同工作的微服务框架。本协议须服务于
 |------|------|------|
 | 时钟驱动器（due-zset + ZPOPMIN + 续期） | ✅ | `logic/scheduler.js` |
 | Schedule CRUD（create/get/list/update/delete） | ✅ | `logic/schedule.js` + introspection |
-| 双 consumer 隔离（agent投递 vs workflow触发，不同 consumer group） | ✅ | `logic/stream.js`（nexus）+ `logic/matcher.js`（orchestrator） |
+| 双 consumer 隔离（sentinel/agent 投递 vs workflow 触发，不同 consumer group） | ✅ | `logic/stream.js`（nexus）+ `logic/matcher.js`（orchestrator） |
+| Sentinel 反应式触发器（`nexus.sentinel.*` + `agent.decide` + `context.emit`） | ✅ | `logic/sentinel.js` + `logic/stream.js` + `logic/emit.js` |
+
+#### ingress & gateway ✅
+
+| 功能 | 状态 | 位置 |
+|------|------|------|
+| 外部 Webhook 入站验签与防重放（GitHub/Telegram/Stripe/Generic → `_event`） | ✅ | `core/ingress/logic/{webhook,source,verifiers}.js` |
+| 出站 Solo Bridge v1（`X-Solo-*` HMAC-SHA256 + 退避死信队列 `gateway.delivery.*`） | ✅ | `core/gateway/logic/{webhook,worker,delivery}.js` |
 
 #### portal/system ✅
 
@@ -692,7 +700,7 @@ SOLO = 管理多 AI 与人协同工作的微服务框架。本协议须服务于
 |------|------|------|
 | `recurrence_ms`（ms间隔）vs 原设计 cron 表达式 | 无法表达"每天 02:00"精度，只能固定步长 | 如需 cron 精度，改用 cron 表达式 + `clock.js` 解析 |
 | runner 直写 xAdd（不走 `_event` 搭响应） | 绕过 Router，虽格式已标准化，但仍不经认证/白名单 | 长期应改为搭响应 `_event`；当前直写+标准格式为可接受的折衷 |
-| D10 流 trim（MAXLEN~10000） | 长期不 trim Redis 流会无限增长 | xAdd 加 `MAXLEN ~ 10000` 参数 |
+| D10 流 trim（`MAXLEN ~ 10000`） | ✅ 已解决 | `router/handlers/events.js` 与 `orchestrator/logic/runner.js` 均已启用 `MAXLEN ~ 10000` 近似裁剪 |
 
 > **已解决（2026-06-02，actor 正本清源）**：早期 scheduler 把 `trigger_source`/`trigger_id` 塞进事件 payload（因 `event.emit` 把 `actor` 写死成 bot），导致"判断是否定时触发"要解析 payload——范畴混乱。现修复为：`event.emit` 采信调用方声明的 `actor`（`trustEventActor`），scheduler 直接传 `actor: cron:{id}`，runner 写结果事件时 `actor` 优先取 `triggerSource`。provenance 回归信封 `actor`，payload 纯净。（`$context.trigger_source`/`trigger_id` 一直就写入了 `runner.js:124`，供 step 引用。）
 

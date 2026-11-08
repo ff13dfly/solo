@@ -2,10 +2,10 @@
 
 ---
 
-> **协议版本**: 1.2.0
-> **状态**: 草案 (Draft)
+> **协议版本**: 1.3.0
+> **状态**: 已实现 (v1.3.3)
 > **作者**: Antigravity/Fuu
-> **核心机制**: 加盐令牌安全 (Salted Token Security) + 自助注册 / 登录（OTP）
+> **核心机制**: 加盐令牌安全 (Salted Token Security) + 自助 OTP 注册 / 设备 TOFU (`device.issue`) / 身份升级 (`upgrade`) / Bot 权限路由
 
 ---
 
@@ -74,18 +74,20 @@ OTP 验证成功后（**锁定应打在 Anchor 上，不是设备上**）：
 > **为什么 deviceToken 用报头而非 params？**
 > params 字段会被 WAL 日志、请求日志原样记录。`deviceToken` 等同于明文密码，记录在日志中会造成凭证泄露。报头通常不进入业务日志。
 
-> **实现位置（与代码对齐）**：passport 不是独立微服务，已收拢进 `user` 服务（authority.md §4.1），方法前缀 `user.passport.*`，外部实体是一等可管理实体（与 `bot` 镜像）。底层令牌算法 + `verify`/`register` 已实现（`library/passport.js` + `user/logic/passport.js`）；§3.4–3.6 的自助注册 / OTP 投递为**待实现规格**（issuance 流程此前标记 deferred）。
+> **实现位置（与代码对齐）**：passport 不是独立微服务，已收拢进 `user` 服务（authority.md §4.1），方法前缀 `user.passport.*`，外部实体是一等可管理实体（与 `bot` 镜像）。底层令牌算法 + `verify` / `register` / `otp.request` / `otp.verify` / `device.issue` / `upgrade` 及保留锚点防撞守卫（`user/logic/anchors.js`）均已实现（`library/passport.js` + `user/logic/passport.js`）；仅 §3.8 TOTP、§4.1 Salt 轮转与 §4.2 单设备撤销仍为待实现规划。
 >
-> ⚠️ **现状与本规格的一处偏差**：§3.3 / §4.5 / §5 描述的"`deviceToken` 走 `X-Solo-Device-Token` 报头、禁入 params"是**目标硬化项，尚未实现**。当前 `user.passport.verify` / `register` 实际把 `deviceToken` 当 **JSON-RPC param** 收。**泄日志已止血**：`library/logger.js` 的 `redactSensitive` 在 `ERROR:QUEUE` 入队前对 deviceToken / 登录凭证打码（2026-06-06）；报头传输仍为后续硬化（BACKLOG §1.4），落地后可免入 params。
+> ⚠️ **现状与本规格的一处偏差**：§3.3 / §4.5 / §5 描述的"`deviceToken` 走 `X-Solo-Device-Token` 报头、禁入 params"是**目标硬化项，尚未实现**。当前 `user.passport.verify` / `register` 实际把 `deviceToken` 当 **JSON-RPC param** 收。**泄日志已止血**：`library/logger.js` 的 `redactSensitive` 在 `ERROR:QUEUE` 入队及控制台错误输出前对 `deviceToken` / `device_token` / 登录凭证递归打码；报头传输仍为后续硬化（BACKLOG §1.4），落地后可免入 params。
 
 ### 3.4 注册 / 登录 模型（对外用户自助接入）
 
-§3.1–3.3 是底层令牌机制。从对外用户视角，它映射为两个常规动作 + 一个运维动作：
+§3.1–3.3 是底层令牌机制。从对外用户视角，它映射为四个常规动作 + 一个运维动作：
 
 | 动作 | 协议含义 | 方法 |
 |---|---|---|
-| **注册**（首次接入 / 新设备） | 证明 Anchor 归属（OTP）→ 颁发设备令牌（§3.2）+ 建立 passport 实体 + 绑默认角色 | `user.passport.otp.request` → `user.passport.otp.verify` |
-| **登录**（日常访问） | 凭已持有的设备令牌换取一个受限会话（§3.6） | `user.passport.verify` |
+| **自助 OTP 注册**（首次接入 / 新设备） | 证明 Anchor 归属（邮件/短信 OTP）→ 颁发设备令牌（§3.2）+ 建立 passport 实体 + 绑默认角色或默认 Bot（`app` 级可配） | `user.passport.otp.request` → `user.passport.otp.verify` |
+| **匿名设备首发（TOFU）** | 在 `issuanceMode === 'device'` 的应用下，允许新 Anchor 首次免 OTP 领取一枚绑定设备令牌（已有凭证的 Anchor 严禁重复调 `device.issue` 接管） | `user.passport.device.issue` |
+| **设备转正升级** | 将匿名设备会话通过 OTP 验证原地迁移至真实邮箱/手机 Anchor，自动退役旧设备实体并吊销旧会话 | `user.passport.upgrade` |
+| **登录**（日常访问） | 凭已持有的设备令牌换取一个受限会话（§3.6，支持从角色或绑定的 `entity.bot` 解析权限并强制注入 `$owner`） | `user.passport.verify` |
 | **运维供给**（管理员代开） | 管理员直接建实体 + 指定角色 + 录入设备 | `user.passport.register`（permit-gated，已实现） |
 
 要点：
@@ -294,10 +296,11 @@ PASSPORT:PROOFS:{anchor}        →  Redis Hash          field=deviceId, value={
 session:{token}                 →  Redis String(JSON)  kind:external 会话，TTL 24h（前缀小写）
 USER:SESSIONS:{anchor}          →  Redis Set           该 anchor 的在线会话 token（供撤销）
 
-# 自助注册 / OTP（待实现，§3.5）
-USER:PASSPORT:OTP:{anchor}      →  Redis String        验证码哈希 + TTL（建议 5 分钟）
-USER:PASSPORT:OTP_LOCK:{anchor} →  Redis String        { attempts, lockedUntil }（TTL 24h，§4.4）
-USER:PASSPORT:TOTP:{anchor}     →  Redis String        验证器共享密钥（服务端机密）
+# 自助注册 / OTP（§3.5）
+USER:PASSPORT:OTP:{anchor}      →  Redis String(JSON)  { hash, role, app, channel, attempts, createdAt }（TTL 300s）
+USER:PASSPORT:OTPREQ:{anchor}   →  Redis String        发码频率计数（TTL 3600s，上限 5 次/小时）
+USER:PASSPORT:LOCK:{anchor}     →  Redis String        连续 5 次验码失败后的锁定截止时间戳（TTL 86400s，§4.4）
+USER:PASSPORT:TOTP:{anchor}     →  Redis String        验证器共享密钥（待实现，服务端机密）
 ```
 
 ---
@@ -311,3 +314,4 @@ USER:PASSPORT:TOTP:{anchor}     →  Redis String        验证器共享密钥�
 | 1.2.0 | 2026-06-06 | 补充注册 / 登录模型（§3.4）、自助 OTP 投递与通道抽象（§3.5：email/sms→gateway，TOTP 本地不经 gateway）、外部会话（§3.6）、**实现约束与安全清单（§3.7）**；对齐实现位置（user 服务 `user.passport.*`）+ 数据结构补全。经对照审查校正现状偏差：deviceToken 当前走 params 非报头（§3.3/§4.5 标注待硬化）、session 键小写、Salt 轮转（§4.1）与单设备撤销（§4.2）标注未实现、$owner 行隔离改为有条件（依赖角色 ownerField，§3.6） |
 | 1.2.1 | 2026-08-16 | **`$owner` 从"强制声明"补齐为"自动执行"**（§3.6/§3.7）：此前三道发证关卡只保证声明存在，数据层无任何执行环节（colony 实测外部会话读到全表，docs/feedback/done/passport-owner-isolation-declared-not-enforced.md）；v1.1.16 起 Entity Factory 经 `requestContext(req)` 自动执行（create 盖章 / 越权 NOT_FOUND / list 过滤），自定义数据路径仍须服务自行过滤，文档同步言明执行位置与旧版本边界 |
 | 1.2.2 | 2026-08-19 | §3.6 补三条此前只存在于代码里的契约（colony 在 v1.1.15 上手工实现一遍后反馈）：**下发形态含 `value` 且判定归属的是它而非 `req.user`**（代理调用下会分叉）、**无请求上下文 = 不过滤**（后台循环依赖，反之会让调度器静默停摆）、**单租户下验收必须制造他人数据反证**（否则"接上了"与"没接线"返回相同结果）。均为文档补齐，实现无改动（两条语义已由 `library/tests/entity-owner-scope.test.js` 的回归用例锁定） |
+| 1.3.0 | 2026-11-08 | 对齐 `user.passport.otp.{request,verify}`、`user.passport.device.issue` 与 `user.passport.upgrade` 实现（§3.3~§3.5、§6 Redis 键名对齐 `USER:PASSPORT:OTP/OTPREQ/LOCK`） |

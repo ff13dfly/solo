@@ -15,17 +15,17 @@
 | [事件与触发总线](./event) | `_event` 信封、run-queue、四种触发源(sync/event/cron/webhook)统一执行（nexus 时钟 + orchestrator matcher + router `event.emit`/`_event`） |
 | [安全协议](./security) | 零知识认证与细粒度权限控制 |
 | [短期记忆协议](./memory) | 客户端上下文记忆管理 |
-| [审批协议](./approval) | 审批工作流数据结构与处理 |
+| [审批协议](./approval) | 🟢 v1 已实现 — 三段式 `approval.record.*`（三方职责分离 + Ed25519 签名验真 + 过期 `EXPIRED`）、`approval.gate.*`（m-of-n 多签闸）与 `approval.policy.*`（subject 模式策略）；系统代理执行（§8）与数值阈值/AI 规则（§9.1）仍为草案 |
 | [联邦分类协议](./category) | 微服务分类注册与全局发现 |
 | [AI 测试协议](./ai-test) | 🟡 草案·未实现(已砍成 stub)— 评估 AI NL 准确率;真实载体 = `workflow-auditor` + `agent.case.generate`,非 tester 微服务 |
 | [报表协议](./report) | 🟡 草案·未实现 — 通用报表 DSL 定义（跨行聚合，与显示协议互补） |
-| [显示协议](./display) | 🟡 草案 — operator 自治的实体呈现配置（字段显隐/顺序/格式/单行派生）；呈现不进服务 introspection；③个人覆盖层已落地，②operator 配置层（静态基线 + administrator 覆盖）未实现 |
+| [显示协议](./display) | 🟢 部分实现 — operator 自治的实体呈现配置（字段显隐/顺序/格式/单行派生）；③个人覆盖层与 ②-B 管理端覆盖层（`setting.display.*`）已落地，②-A 静态基线文件尚未内置 |
 | [QR 路由协议](./qr) | 物理标签 URL 规范、前缀分配与业务关联流程 |
 | [视觉搜索协议](./vision) | 🟡 草案·未实现 — 以图识图：Embedding 生成、向量索引、KNN 查询与置信度分级 |
 | [流程协议](./process) | 实体状态机 UI 映射与动态操作按钮 |
-| [履约生命周期协议](./fulfillment) | 声明式状态机驱动的业务履约引擎 |
+| [履约生命周期协议](./fulfillment) | 🟢 v1.6 已实现 — 声明式状态机、Profile 投稿审批与完整性锁、五项 RPA 协同原语（`stateTtls`/`reap`、`suspend`/`resume`、`evidence`、`token.issue`/`callback`、`idempotent`） |
 | [信息提取协议](./extraction) | AI 辅助产品信息提取与多语言翻译 |
-| [Passport 协议](./passport) | 设备授权与 OTP 验证机制 |
-| [Authority 协议](./authority) | 🟢 v1 已实现 — **统一角色 RBAC** `user.role.*`(assign 物化到主体)+ 外部主体可管理实体 `user.passport.*`(含 `app` 维度)+ 铸受限 session + Router 方法墙(零改)+ `collection` 按 `$owner` 行隔离 + `portal/operator` 管理页;通用版 `entity.js` 行隔离待抽 |
-| [配置协议](./config) | 微服务配置规范与环境变量管理 |
-| [Agent 上下文组装协议](./context) | 🟢 v1 已实现 — 声明式 `guard`(JsonLogic)+ `data_fetchers` + `system_prompt_template`;事件到达后装配 Context Payload,`autorun` 再闭合到 LLM(`agent.chat`)产出回投;人机协同(§10)仍为草案 |
+| [Passport 协议](./passport) | 🟢 v1 已实现 — 外部主体身份（管理员发证、自助 OTP、设备 TOFU `device.issue`、身份升级 `upgrade`、Bot 权限路由） |
+| [Authority 协议](./authority) | 🟢 v1 已实现 — **统一角色 RBAC** `user.role.*` + 外部主体可管理实体 `user.passport.*` + 铸受限 session + Router 方法墙 + **`library/entity.js` 通用 `$owner` 行级隔离** + `portal/operator` 管理页 |
+| [配置协议](./config) | 🟢 v1 已实现 — `library/config.js` + `setting.config.*` / `setting.index.schema` / `setting.automation.*` |
+| [Agent 上下文组装协议](./context) | 🟢 v1 已实现 — `nexus.sentinel.*` 声明式 `guard`(JsonLogic)+ `data_fetchers` + `prompt`;事件到达后装配 Context Payload,`autorun` 闭合到 `agent.decide` 并支持 `context.emit` 声明式事件回投;人机协同(§10)仍为草案 |

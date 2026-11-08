@@ -1,7 +1,7 @@
 # 配置管理协议
 
-**状态**：草案（部分已实现，部分待落地）  
-**适用范围**：Router 全局配置、微服务运行时配置、服务结构可观测性
+**状态**：已实现（`v1.3.3`）  
+**适用范围**：Router 全局配置、微服务运行时配置、服务索引结构可观测性、全局自动化总闸
 
 ---
 
@@ -11,9 +11,9 @@ Solo 的配置分三层：
 
 | 层级 | 作用域 | 已实现 |
 |------|--------|--------|
-| **Router 配置** | 限流、任务白名单、权限黑名单等全局策略 | ✅ |
-| **微服务配置** | 各服务的运行时参数覆盖（如缩略图开关） | 🔲 待落地 |
-| **服务结构元信息** | RediSearch 索引等启动时初始化的结构信息 | 🔲 待落地 |
+| **Router 配置** | 限流、任务白名单、权限黑名单、自动化总闸等全局策略 | ✅ |
+| **微服务配置** | 各服务的运行时参数覆盖（`api/library/config.js` + `setting.config.*`） | ✅ |
+| **服务结构元信息** | RediSearch 索引结构元信息（`api/library/indexer.js` + `setting.index.schema`） | ✅ |
 
 各层使用不同的 Redis 数据结构，原因见下方说明。
 
@@ -130,7 +130,7 @@ Redis 只存字符串，读取时按 `config.js` 默认值的类型自动 cast�
 
 ### 标准读取方式
 
-各微服务通过以下方式读取配置（待封装为 `core/lib/config.js`）：
+各微服务通过 `api/library/config.js` 的 `createDynamicConfig(redisClient, serviceName, defaults)` 读取配置：
 
 ```js
 // 每次请求时读 Redis，无缓存层
@@ -272,12 +272,21 @@ SYSTEM:META:{serviceName}  →  String（JSON）
 }
 ```
 
-### RPC 接口（待实现）
+### 数据结构
+
+由 [`api/library/indexer.js`](../../../api/library/indexer.js) 的 `saveSchemas` 在服务启动初始化 RediSearch 索引时自动写入：
+
+```
+SYSTEM:INDEX_SCHEMA:{serviceName}  →  String（JSON）
+```
+
+### RPC 接口（已实现）
 
 | 方法 | 参数 | 说明 |
 |------|------|------|
-| `setting.service.meta.get` | `{ service: string }` | 获取某服务的结构元信息 |
-| `setting.service.meta.list` | 无 | 列出所有已登记服务的元信息 |
+| `setting.index.schema` | `{ service?: string }` | 获取指定服务（或全部已登记服务）的 RediSearch 索引结构元信息 |
+| `setting.automation.status` | 无 | 查询 `orchestrator` 与 `nexus` 自动化引擎暂停/运行状态 |
+| `setting.automation.pause / resume` | `{ reason?: string }` | 一键暂停或恢复全栈自动化引擎 |
 
 ---
 
@@ -290,18 +299,16 @@ SYSTEM:META:{serviceName}  →  String（JSON）
 | 典型用途 | 复杂嵌套策略 | 标量参数开关 | 索引结构可观测 |
 | 写入时机 | 管理员操作 | 管理员操作 | 服务启动自动写入 |
 | 生效方式 | 即时 | 重启（当前阶段） | 只读，不影响运行 |
-| 管理入口 | `setting.*` RPC | `setting.config.*` RPC | `setting.service.meta.*` RPC |
+| 管理入口 | `setting.{limit,task,blacklist,automation}.*` | `setting.config.*` RPC | `setting.index.schema` RPC |
 
 微服务配置附带 schema 可观测性：`SYSTEM:CONFIG:SCHEMA:{service}` 记录该服务声明支持的 key 列表，由 `cfg.publish()` 在 bootstrap 写入，供 portal 渲染结构化编辑界面。
 
 ---
 
-## 五、待落地事项
+## 五、落地状态
 
-1. ✅ `core/lib/config.js` — 标准读取工具函数（含 `publish`）
-2. ✅ `setting.config.*` RPC — administrator 服务实现
-3. `setting.config.schema` RPC — administrator 服务实现
-4. `setting.service.meta.*` RPC — administrator 服务实现
-5. 各微服务 bootstrap 写入 `SYSTEM:META:{service}`（渐进式，优先有 RediSearch 的服务）
-6. portal/system 配置管理 UI — 读取 schema 渲染结构化表单，支持编辑
-7. 各微服务按需接入动态读取 + `cfg.publish()`（渐进式，优先 storage）
+1. ✅ `api/library/config.js` — 标准读取工具函数（含 `publish`）
+2. ✅ `setting.config.{get,set,del,list,schema}` RPC — `administrator` 服务已实现
+3. ✅ `setting.index.schema` RPC + `api/library/indexer.js` 自动写入 `SYSTEM:INDEX_SCHEMA:{service}` — 已实现
+4. ✅ `setting.display.{list,get,set,delete}` 与 `setting.automation.{status,pause,resume}` — `administrator` 服务已实现
+5. ✅ `portal/system` 配置管理 UI — 读取 schema 渲染结构化表单，支持在线编辑

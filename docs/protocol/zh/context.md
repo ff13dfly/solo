@@ -244,9 +244,7 @@ nexus.agent.create 的 context 校验：
 
 **② 运行时（事件到达，装配阶段）**
 
-data_fetchers 的 RPC 调用由 **Nexus 服务账号**（`library/relay.js` 的 `system.nexus` token）经 Router 发起。Router 的 `checkAccess` 用该 bot 的 permit **动态兜底**：fetcher 方法若超出 nexus 服务账号的 permit，直接 `FORBIDDEN`。即"配置时挡只读越界，运行时挡权限越界"。
-
-> **未尽（§11.2）**：理想是按 **Agent 各自的 bot token** 执行 fetch（每-Agent 最小权限 + 数据级 `constraints` 随之生效）。v1 统一走 nexus 服务账号；要做到每-Agent 身份，需 nexus 侧持有/解析各 Agent 的 bot token（后续硬化）。
+data_fetchers 与 `autorun`（`agent.decide`）的 RPC 调用优先使用 **Sentinel 绑定的专属 `system.*` Bot 令牌**（通过 `nexus.sentinel.token.set` 加密托管，运行时经 `relay.callAs(botToken, ...)` 发起；未绑定专属令牌时回退至 `system.nexus` 服务账号）。Router 的 `checkAccess` 用该 Bot 的 permit **动态兜底**：fetcher 方法若超出该 Sentinel 自身 permit，直接 `FORBIDDEN`，数据级 `constraints` 亦随之生效。
 
 校验失败则拒绝创建，返回具体原因：
 
@@ -599,36 +597,31 @@ Agent + 协同人（workflow_manager）可用：
 
 ## 11. 实现映射与未尽事项
 
-### 11.1 已实现（v1，代码映射）
+### 11.1 已实现（`v1.3.3` 代码映射）
 
 | 协议要素 | 代码位置 |
 |----------|----------|
-| `validateContext`（配置时只读后缀 + DAG 无环静态闸，§5.1①） | `api/core/nexus/logic/context.js#validateContext` |
+| `validateContext`（配置时只读后缀 + DAG 无环静态闸 + `emit` 校验，§5.1①） | `api/core/nexus/logic/context.js#validateContext` |
 | 装配执行器（guard → DAG 拉取 → 渲染 → Context Payload，§5/§6） | `api/core/nexus/logic/context.js#createAssembler` |
-| `{{namespace.path}}` 插值（§3） | 同上 `interpolate()` |
-| JsonLogic 判断引擎（guard，§2.1） | `api/library/jsonlogic.js`（与 fulfillment `apps/fulfillment/logic/rules.js` 共享同一原语） |
-| 事件到达 → 装配 → 投递接入点 | `api/core/nexus/logic/stream.js#deliverEvent`（Agent 有 `context` 则装配，否则透传原始事件） |
-| **autorun 闭环（装配 → 调 LLM → 产出回投）** | `stream.js#deliverEvent` 内：`context.autorun=true` 时，nexus 作为 built-in agent runtime，经 Router（system.nexus bot）调 `agent.chat`，把产出挂到 `context.output` 一并投递。LLM 在 `agent` 服务（模型选择见 `agent/logic/model_config.js`）。离线测试用 mock provider：`agent/providers/mock.js`（`AI_PROVIDER=mock`） |
-| `context` 字段声明 | `api/core/nexus/handlers/entities.js`、`nexus.agent.create` 的 `context` 参数（含 `autorun`） |
-| **投递可靠性（成功才 ack + 退避重试 + DLQ + 幂等，§7.3）** | `nexus/logic/stream.js`（settle / recoverPending / moveToDLQ）+ `nexus/logic/dlq.js`（`nexus.dlq.list/retry`）+ `notification/logic/message.js`（`(targetId, ref)` 去重） |
-| 端到端 + 单元测试 | e2e `65-nexus-context`（装配）+ `66-nexus-autorun`（装配→mock LLM→产出）+ `67-nexus-dlq`（重试→死信→重投 + 幂等），full profile；单元 `nexus/tests/context.test.js` + `nexus/tests/dlq.test.js` + `agent/tests/mock-provider.test.js`（hermetic，CI 白名单） |
+| `{{namespace.path}}` 插值（支持 `event` / `fetch` / `sentinel` / `output`） | 同上 `interpolate()` |
+| JsonLogic 判断引擎（`guard` / `emit_when`，§2.1） | `api/library/jsonlogic.js`（与 `fulfillment`、`orchestrator` 共享同一原语） |
+| 动态流发现与事件投递接入点 | `api/core/nexus/logic/stream.js#discoverStreams` + `deliverEvent` |
+| **每-Sentinel 专属 Bot Token 最小权限执行** | `api/core/nexus/logic/identity.js`（`nexus.sentinel.token.set/status/clear`）+ `relay.callAs` |
+| **`autorun` 结构化决策闭环（装配 → `agent.decide` → `context.output`）** | `stream.js#deliverEvent`：将 `prompt` 作为 `instruction`、装配数据作为 `context` 调用 `agent.decide`（指令与数据物理隔离），结果写入 `context.output` |
+| **`context.emit` 声明式动作回投** | `stream.js#deliverEvent` + `context.js#buildEmittedEvent`：满足 `emit_when` 时自动经 `event.emit` 发射下游事件（带 `parent_event_id` 与幂等 `event_id`） |
+| `context` 字段声明与在线更新 | `api/core/nexus/handlers/introspection.js`（`nexus.sentinel.create` / `nexus.sentinel.update`） |
+| **投递可靠性（成功才 ack + 退避重试 + DLQ + 幂等，§7.3）** | `nexus/logic/stream.js` + `nexus/logic/dlq.js`（`nexus.dlq.list/retry`）+ `notification/logic/message.js` |
 
-执行流程与草案 §5 一致：guard 不满足 → 跳过不投递；fetcher 按 `depends_on` 分层、层内并行；`on_error` 支持 `abort`（默认，装配失败不投递半成品）/ `skip` / `fallback`。
+### 11.2 未尽事项
 
-**autorun（nexus-hosted built-in agent）**：`context.autorun=true` 时，装配出的 `system_prompt` 由 nexus 直接交给 `agent.chat`，LLM 产出回填到 Context Payload 的 `context.output`（+ `context.model`）。LLM 调用失败不挡装配投递（`output=null` + `autorun_error`）。这是 §11.2"下游消费出口"的**内建路径**；外部/自管 Agent runtime 仍可走 polling/webhook 自行消费 Context Payload 再调模型。
-
-### 11.2 未尽事项（按优先级）
-
-> **完整的 nexus 待办（含本协议外的运维/生命周期/订阅路由等）汇总在 `docs/planning/BACKLOG.md`。** 本表只列上下文装配协议自身的未尽。
-
-| 项 | 说明 | 关联 |
+| 项 | 说明 | 状态 |
 |----|------|------|
-| **消费流硬编码（订阅路由）** | 消费者只读固定的 `EVENT:WORKFLOW:STATUS/RESULT`；agent 订阅其它流会静默失效。见 `BACKLOG.md §2.1` | `nexus/config.js` consumer.streams |
-| **每-Agent bot token 执行 fetch / autorun** | 运行时现统一走 nexus 服务账号（fetch + agent.chat 都用 system.nexus）；理想按各 Agent 自身 bot 身份发起，使数据级 `constraints` 随之生效 | §5.1② |
-| **webhook / sse 投递出口** | autorun 闭环已通（产出回投 inbox）；但 webhook/sse 这两种**外部** Agent runtime 的投递仍断（`gateway.webhook.send` 缺失、SSE 未建） | README / `toFix.md` #2 |
-| **autorun 仅 `agent.chat`** | v1 autorun 固定调 `agent.chat(system_prompt)`；多能力（如 `agent.text.parse` 结构化产出）/ 自定义入参映射未做 | §11.1 |
-| **`nexus.agent.update` 改 context** | 现 context 只能在 create 时设；改 context 需重建 Agent | — |
-| **人机协同（§10）** | 协同会话 Token / 权限叠加 / 双归因审计 | §10 |
+| **动态消费流发现** | `discoverStreams()` 自动扫描全部 ACTIVE Sentinel 的 `eventSubscriptions` 并初始化消费组 | ✅ 已实现 |
+| **每-Sentinel bot token 执行 `fetch` / `autorun`** | `nexus.sentinel.token.set` + `relay.callAs(botToken, ...)` | ✅ 已实现 |
+| **Webhook 投递出口** | `gateway.webhook.send` 已实现并接入 `notification` Webhook 规则 | ✅ 已实现 |
+| **`autorun` 结构化决策 + `context.emit` 回投** | 已升级为调用 `agent.decide`（支持 `choices`/`schema`/`confidence_threshold`）并支持 `context.emit` | ✅ 已实现 |
+| **`nexus.sentinel.update` 修改 `context`** | 支持在线更新 `context` 并重新跑 `validateContext` | ✅ 已实现 |
+| **人机协同（§10）** | 协同会话 Token / 权限叠加 / 双归因审计 | 🟡 草案·未实现 |
 
 ---
 

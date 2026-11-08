@@ -18,7 +18,7 @@
 | **③ 审批闸门** | orchestrator 内建(C1,LOW 风险)+ `approval` 服务(HIGH 风险 workflow 的 `approval.gate.*` 多签、collection 退款等非工作流场景的 `approval.record.*`) | "这个**变更/工作流**要不要人**核准**才能生效" | 变更/工作流 | ✅ 已实现(C1 单签 approve/deny + 禁自审 + 按 `risk_level` 路由 HIGH→approval 多签,CI 绿;`approval` 服务**已有消费者**,见 §3) |
 | **④ actor-claim** | 最小档在 orchestrator（matcher→run 实体→runner §2.6）；签名档 `library/actor-claim.js`(待) | "执行时**以谁的名义**、下游如何验证与归属" | 执行凭证 | ⚠️ **最小可行档 ✅（2026-07-02）**：事件 actor 透传 + run 实体审计 + opt-in `require_actor_permit` 足迹预审（fail-closed）；签名/服务凭证档仍 ❌（AUDIT C4） |
 
-**关键认知**:① 已经牢固,框架今天就能跑;②③④ 全是洞,而且**洞与洞之间还没说清边界**——这正是本文要缝合的。
+**关键认知**:①②③ 均已落地闭环，④ 最小可行档（actor 透传 + `require_actor_permit` 预审 + run 审计）已就绪；本文明确四道关卡的正交边界与分工。
 
 ---
 
@@ -49,20 +49,18 @@
 
 ---
 
-## 2. 信任根:这是体系最脆的地方
+## 2. 信任根:密码学身份与现状
 
-治理的所有"不可否认 / 防抵赖"承诺,最终都要落到**某个密码学身份**上。当前现实:
+治理的所有"不可否认 / 防抵赖"承诺,最终都要落到**某个密码学身份**上。当前（`v1.3.3`）现实:
 
 | 主体 | 是否有密钥对 | 能签名吗 |
 |------|------------|---------|
 | **Router** | ✅ Ed25519(`ROUTER_PUBLIC_KEY` 静态注入各服务) | ✅ 签 X-Router-Token,服务间信任根 |
 | **微服务(含 orchestrator)** | ⚠️ 设计上应各持服务凭证,**目前 orchestrator 无自有 keypair**(AUDIT C4) | ❌ 还做不到 actor-claim 签名 |
-| **终端用户** | ❌ **无**。`core/user` 是密码登录(Z-Handshake/PBKDF2),用户不持私钥 | ❌ 做不到"用户级"客户端签名 |
+| **终端用户** | ✅ **已实现**（`core/user` 提供 `user.key.{generate,sign,public,status,revoke}`，托管加密存储于 `USER:SIGNKEY:{uid}`） | ✅ 支持对 `approval.record.*` 与 `approval.gate.sign` 出具 Ed25519 签名（仅当前 ACTIVE 密钥有效，轮换/吊销历史密钥拒绝验签） |
 
-> [!WARNING]
-> **这是一个目的与能力的缺口,不只是"还没写"。** `approval` §6.4、`security` 都承诺"用户级 Ed25519 不可抵赖签名",但**用户身份模型里根本没有用户私钥**。因此 `approval` 的证据当前只能是 **server-attested**(服务器盖章,`publicKey/signature=null`)——它能证明"系统记录了谁在何时操作了哪个 payload 哈希",**但防不住管理员抵赖**,而后者恰恰是审批协议存在的理由。
->
-> **结论**:在引入"用户密钥"或"把信任根明确下沉到服务凭证 + Router 签名链"之前,治理协议里所有"密码学不可抵赖(用户级)"的措辞都应理解为**目标,而非当前保证**。推进治理线时,第一个要拍板的就是:不可否认的信任根放在**用户**(需要给用户发密钥)还是**服务凭证 + actor-claim**(orchestrator 代签,溯源到 approved_by)。本框架的内部受控定位下,后者更现实。
+> [!NOTE]
+> **终端用户签名与多签已闭环**：`core/user` 已支持每用户 Ed25519 签名密钥对（删号自动吊销），`apps/approval` 的 `record.{request,verify,confirm}` 与 `gate.sign` 已支持真实 Ed25519 验签（同时兼容未传签名时的 `server-attested` 审计模式）。当前仅剩 **微服务自有 keypair 的 `X-Actor-Claim` 传输层代签（AUDIT C4 签名档）** 尚未实装。
 
 ---
 
@@ -144,13 +142,13 @@ orchestrator 收到核准  →  workflow 冻结为不可变 v{n},status=ACTIVE
 | `library/permit.js`(`coversAll` 等) | AUDIT A2 / todo permit.js | ✅ 已实现(`runner.js` 引用) |
 | footprint 预审 | AUDIT H6 | ✅ 已实现(CI 绿;不足→NeedsGrant 暂停) |
 | workflow.create 改 PENDING_REVIEW + approve/deny | AUDIT C1 | ✅ 已实现 |
-| 禁止自审 + 双签 | AUDIT C1/§4 | ⚠️ 禁自审 ✅;双签 ❌ |
+| 禁止自审 + 双签 | AUDIT C1/§4 | ✅ 禁自审已实现；HIGH 风险 workflow 双签/多签经 `approval.gate.*` 已实现 |
 | actor-claim **最小可行档**(透传+预审+审计,无签名) | AUDIT C4 最小档 | ✅ 已实现(2026-07-02)：matcher 透传信封 actor/source → run 实体审计;workflow `require_actor_permit` opt-in → runner §2.6 actor 足迹预审(fail-closed);hermetic `actor-precheck` 11 用例 |
 | `docs/protocol/zh/actor-claim.md`(签名档协议) | AUDIT A6 | ❌ 文档不存在(最小档语义记录在 orchestrator AUDIT C4 + README) |
 | `library/actor-claim.js`(签/验/审计) | AUDIT A1 / C4 | ❌ |
 | orchestrator 自有 keypair | AUDIT C4 | ❌ |
 | approval ↔ orchestrator 打通 | 本文 §3 | ✅ 已拍板(方向2,2026-07-03)+ 核实为混合实现:HIGH 风险 workflow 已走 `approval.gate.*`,非工作流场景(collection 退款)走 `approval.record.*`;LOW 风险 workflow 保持 C1 自包含 |
-| approval 多签/到期/规则引擎 | approval §7.2/§8/§9 | ❌ MVP |
+| approval 多签/到期/规则引擎 | approval §7.2/§8/§9 | ✅ 多签（`approval.gate.*`）、到期（`expiresInSec` / `EXPIRED`）与 subject 策略（`approval.policy.*`）已实现；仅 §8 系统代理执行与 §9.1 数值阈值/AI 规则仍为草案 |
 
 **推进顺序建议**(拓扑序,与 AUDIT §二一致):
 `permit.js(A2)` → `footprint 预审(H6)` → `审批闸门(C1) + 定方向1` → `actor-claim(A1/A6/C4)` → `approval 多签等增强`。

@@ -1,7 +1,9 @@
-# Solo Approval Protocol (SAP) - 核心规范草案
+# Solo Approval Protocol (SAP) - 核心规范
 
-> [!WARNING]
-> **实现状态:部分实现(MVP)。** 已实现:`approval.record.{request,verify,confirm,reject,get,list}` 状态机(字段为 `state`)+ server-attested 证据链 + 禁止自审。**未实现**:多签(§7.2)、系统代理执行(§8)、规则引擎(§9)、真实 Ed25519 客户端签名。判断以 `CLAUDE.md` §2 / 代码为准。
+> [!NOTE]
+> **实现状态：🟢 v1 核心、Ed25519 签名、多签与策略路由已实现（`v1.3.3`）。**
+> - **已实现**：① 三段式 `approval.record.{request,verify,confirm,reject,get,list}`（三方职责分离：申请人 ≠ 核验人 ≠ 确认人，支持 `expiresInSec` 与 `EXPIRED` 状态）；② 基于 `user.key.*` 的 Ed25519 签名验真（同时兼容 `server-attested` 模式）；③ `approval.gate.{open,sign,reject,get,list}`（m-of-n 多签闸门，已对接 `orchestrator` 高风险工作流）；④ `approval.policy.{set,delete,list,resolve}`（基于 `subjectPattern` 的多签人数与过期策略）。
+> - **🟡 草案·未实现**：§8 系统代理执行（`SYSTEM_EXECUTOR`）与 §9.1 字段级数值阈值 / 强制 AI 审计规则。
 
 ## 1. 协议目标 (Purpose)
 Solo Approval Protocol (SAP) 定义了一套标准化的异步审批与核实协议。旨在为分布式微服务提供一种**高度松耦合**、**操作透明**且具有**密码学不可否认性**的数据变更控制标准。
@@ -28,8 +30,9 @@ Solo Approval Protocol (SAP) 定义了一套标准化的异步审批与核实协
 | `id` | `uuid` | 协议实例唯一标识 |
 | `target` | `string` | 目标实体表达式 (格式: `service:entity:id`) |
 | `payload` | `Operation[]` | 具体的变更操作数组 |
-| `state` | `enum` | 状态机标识: `INIT` / `DISPATCHED` / `PENDING` / `DONE` / `REJECTED`(`status` 被实体工厂保留给软删生命周期,故状态机用 `state`) |
-| `evidence` | `object` | 包含时间戳、签名数据及公钥信息的存证对象 |
+| `state` | `enum` | 状态机标识: `INIT` / `DISPATCHED` / `PENDING` / `DONE` / `REJECTED` / `EXPIRED`（`status` 被实体工厂保留给软删生命周期,故状态机用 `state`） |
+| `expiresAt` | `number?` | 可选过期时间戳（epoch ms，由 `expiresInSec` 派生；读取或操作时若已超时自动惰性转为 `EXPIRED`） |
+| `evidence` | `object` | 包含 `request` / `verify` / `confirm` / `reject` 各阶段时间戳、操作人、摘要及 Ed25519 签名信息的存证对象 |
 
 ### 3.2 操作原子 (Operation)
 `payload` 中的每一个元素描述一个具体的属性变更：
@@ -50,22 +53,33 @@ Solo Approval Protocol (SAP) 定义了一套标准化的异步审批与核实协
 ```mermaid
 stateDiagram-v2
     [*] --> INIT: 提交申请 (request)
-    INIT --> DISPATCHED: 审核通过 (verify)
-    DISPATCHED --> PENDING: 分发业务 Task
-    PENDING --> DONE: 物理执行确认 (confirm)
+    INIT --> DISPATCHED: 审核通过 (verify, 核验人 ≠ 申请人)
+    DISPATCHED --> DONE: 物理执行确认 (confirm, 确认人 ≠ 申请人 且 ≠ 核验人)
     INIT --> REJECTED: 驳回 (reject)
-    PENDING --> FAILED: 回滚/异常处理
+    DISPATCHED --> REJECTED: 驳回 (reject)
+    INIT --> EXPIRED: 超时失效 (expiresAt)
+    DISPATCHED --> EXPIRED: 超时失效 (expiresAt)
 ```
 
 ---
 
 ## 5. 协议方法 (Standard API Methods)
 
-- `approval.record.request`: 用户发起变更申请，生成 `INIT` 记录。
-- `approval.record.verify`: 具备审核权限的用户核准内容，并触发 Task 分发，状态转为 `DISPATCHED`。
-- `approval.record.confirm`: **核心核实方法**。在确认物理执行成功后调用，附带执行存证，状态转为 `DONE`。
+### 5.1 三段式审批记录（`approval.record.*`）
+- `approval.record.request`: 用户发起变更申请，生成 `INIT` 记录（支持可选 `expiresInSec` 与 `signature`）。
+- `approval.record.verify`: 具备审核权限的第二人（`verifier !== applicant`）核准内容，状态转为 `DISPATCHED`。
+- `approval.record.confirm`: **核心核实方法**。第三独立主体（`confirmer !== applicant && confirmer !== verifier`）在确认物理执行成功后调用，状态转为 `DONE`。
 - `approval.record.reject`: 驳回申请（`INIT` / `DISPATCHED` → `REJECTED`），可附带 `reason`。
-- `approval.record.get/list`: 标准的查询接口，支持按 `target` 定向筛选。
+- `approval.record.get/list`: 标准的查询接口，支持按 `target`、`state` 定向筛选。
+
+### 5.2 多重签名闸门（`approval.gate.*`）
+- `approval.gate.open`: 针对任意 `{ subject, digest, requiredSigners?, expiresInSec? }` 开启 m-of-n 多签闸（若配置了匹配 `subject` 的 `policy`，自动以策略的 `requiredSigners` 为下限）。
+- `approval.gate.sign`: 审批人签名（禁止发起人自签、禁止同一人重复签；支持校验 `user.key.public` Ed25519 签名），凑齐 `requiredSigners` 后状态由 `PENDING` 转为 `APPROVED`。
+- `approval.gate.reject`: 任一有权限审批人驳回闸门（`PENDING` → `REJECTED`）。
+- `approval.gate.get/list`: 查询多签闸门状态与已收集的签名列表。
+
+### 5.3 审批策略配置（`approval.policy.*`）
+- `approval.policy.set / delete / list / resolve`: 按 `subjectPattern`（支持精确匹配或 `*` 通配，如 `workflow:HIGH:*`）声明 `{ requiredSigners, expiresInSec }` 策略。
 
 ---
 
@@ -90,22 +104,28 @@ SAP 默认深度集成 Solo 系统的中心化身份体系：
 - **预审机器人**：AI 根据 `payload` 的对比值进行风险测评（如：价格跌幅预警）。
 - **语义理解**：结合 `meta.desc` 与历史数据，为总经理提供“推荐通过”或“重点关注”的建议。
 
-### 6.4 密码学不可否认性 (Solana Wallet Signature)
+### 6.4 密码学不可否认性 (Ed25519 Signature)
 
-> ⚠️ **Phase-2 设计，当前不可构建。** 本节描述的“用户级”Ed25519 客户端签名当前**无法落地**：`core/user` 采用 SHA-256 挑战-响应登录，**用户身份模型里没有用户密钥对**（参见 `governance.md` §2、`CLAUDE.md` §2）。系统中现有的 `tweetnacl`/`bs58`/`@solana/web3.js` 只服务于 **Router→微服务的传输层签名**（验证 `ROUTER_PUBLIC_KEY`），与终端用户无关。因此 approval 证据目前只能是 **server-attested**（`publicKey/signature = null`）。本节要先由 `core/user` 增加用户密钥对支持后才能实现，属 Phase-2 设计。
+> [!NOTE]
+> **🟢 已实现（`v1.3.1+`）**：`core/user` 提供每用户 Ed25519 密钥对管理（`user.key.{generate,sign,public,status,revoke}`），`approval.record.{request,verify,confirm}` 与 `approval.gate.sign` 已支持完整 Ed25519 验签（同时兼容未传签名时的 `server-attested` 模式）。
 
-- **底层签名算法**：采用 **Ed25519** 算法（Solana 标准）。利用系统中已有的 `tweetnacl` 和 `bs58` 库实现，与现有的微服务握手协议保持一致，无需额外引入库。
-- **签名内容 (Data to Sign)**：审核员对消息 `[id + hash(payload) + timestamp]`（UTF-8 编码字节流）进行签名。
+- **底层签名算法**：采用 **Ed25519** 算法。利用系统中已有的 `tweetnacl` 和 `bs58` 库实现，且仅接受调用方当前处于 `ACTIVE` 状态的公钥（拒绝 `history` 中已轮换或已吊销的历史密钥）。
+- **签名内容 (Data to Sign)**：
+  - `approval.record.*`：对阶段规范化摘要 `stageDigest = sha256("${target}\n${stage}\n${payloadHash}")`（hex 字符串 UTF-8 字节流）进行签名（可通过 `user.key.sign` 或客户端私钥生成）。
+  - `approval.gate.sign`：对闸门绑定的 `gate.digest`（UTF-8 字节流）进行签名。
 - **存证结构 (Evidence Structure)**：
   ```json
   {
-    "publicKey": "Base58 编码的公钥",
-    "signature": "Base58 编码的 Ed25519 签名",
-    "timestamp": 1700000000000,
-    "method": "solana:ed25519"
+    "by": "uid-verifier",
+    "at": 1700000000000,
+    "payloadHash": "sha256-hex-of-canonical-payload",
+    "digest": "sha256-hex-of-target-stage-payloadHash",
+    "publicKey": "Base58 编码的公钥（server-attested 模式为 null）",
+    "signature": "Base58 编码的 Ed25519 签名（server-attested 模式为 null）",
+    "attestedBy": "ed25519 | server"
   }
   ```
-- **验证逻辑**：`Approval` 服务通过 `nacl.sign.detached.verify` 校验签名合法性，确立不可否认性。
+- **验证逻辑**：`Approval` 服务经 `relay` 调 `user.key.public({ uid })` 获取当前激活公钥，通过 `nacl.sign.detached.verify` 校验签名合法性，确立不可否认性。
 
 ---
 
@@ -116,16 +136,16 @@ SAP 默认深度集成 Solo 系统的中心化身份体系：
 - 只要新服务满足 `service:entity:id` 的寻址规范，SAP 即可立即为其提供审批背书。
 
 ### 7.2 多重签名与过期 (Multi-sig & Expiry)
-> ⚠️ **未实现(设计草案)**:本节描述的机制当前代码中尚无实现,approval 服务目前为 MVP。
+> 🟢 **已实现**：由 `approval.gate.{open,sign,reject,get,list}` 与 `record.request({ expiresInSec })` 提供。
 
-- **多签支持**：支持 m-of-n 逻辑（如 3 人中有 2 人签名才生效）。
-- **生存期管理**：支持 `expiresAt`，过期未核实的申请将自动失效，确保系统状态不产生悬挂。
+- **多签支持**：`approval.gate` 支持 m-of-n 逻辑（`requiredSigners`，如 3 人中有 2 人独立签名才转为 `APPROVED`），且强制校验签名人互异且不等于发起人 `openedBy`。
+- **生存期管理**：`record` 与 `gate` 均支持 `expiresInSec`（派生 `expiresAt`），超时后自动转入 `EXPIRED` 终态，拒绝后续 `verify` / `confirm` / `sign`。
 
 ---
 
 ## 8. 系统代理执行机制 (System Proxy Execution)
 
-> ⚠️ **未实现(设计草案)**:本节描述的机制当前代码中尚无实现,approval 服务目前为 MVP。
+> ⚠️ **🟡 草案·未实现**:本节描述的 `SYSTEM_EXECUTOR` 特权代执行机制当前代码中尚无实现。
 
 为了解决分布式权限阻断问题（如：用户 A 无权直接修改微服务 B，但审批流需要修改 B），SAP 引入了“系统特权代理”模式。
 
@@ -144,7 +164,8 @@ SAP 默认深度集成 Solo 系统的中心化身份体系：
 
 ## 9. 规则引擎与策略强制 (Rule Engine & Policy Enforcement)
 
-> ⚠️ **未实现(设计草案)**:本节描述的机制当前代码中尚无实现,approval 服务目前为 MVP。
+> [!NOTE]
+> **部分实现**：基于 `subjectPattern` 的策略匹配（`approval.policy.{set,delete,list,resolve}`，自动约束 `requiredSigners` 与 `expiresInSec`）**已实现**；下方 §9.1 的字段级数值阈值规则、强制 AI 审计与自动驳回仍为 **🟡 草案·未实现**。
 
 为了增强审批的业务安全性，SAP 支持在微服务层面配置灵活的“强制规则”，对审批流进行二次约束。
 

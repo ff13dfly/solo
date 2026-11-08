@@ -402,10 +402,10 @@ constraints: {
 
 #### 实现方式
 
-字段拦截由 `core/lib/fieldmask.js` 提供工具函数，在微服务 **logic 层**按需调用：
+字段拦截由 `api/library/fieldmask.js` 提供工具函数，在微服务 **logic 层**按需调用：
 
 ```javascript
-const fieldmask = require('../../core/lib/fieldmask');
+const fieldmask = require('../../../library/fieldmask');
 
 // 模式 A：动态配置（从 constraints 读规则，支持 show/hide）
 async function list(params, user) {
@@ -467,8 +467,8 @@ for (const step of workflow.steps) {
 **规范**：`Data Scope`（如 `params.creatorId = ctx.user.uid`）不仅是查询的隔离域，更是**写操作必须的前置校验条件**。所有更新/删除操作必须带上用户身份约束（例如：`db.update({ id: 999, creatorId: ctx.user.uid })`）。
 
 #### 红线三：防范开发者遗忘 (全局数据暴露)
-**隐患**：行级隔离（Data Scope）强依赖于微服务开发者在每次 DB 查询前“自觉”拼接 `if (scope === 'OWN')`，一旦遗忘将引发全局数据泄露灾难。
-**规范（远期目标）**：在系统重构时，应考虑将 `user.constraints` 直接透传给 `Entity Factory` 或数据库驱动层，由底层统一强制拦截，降低业务逻辑层的安全犯错概率。
+**隐患**：行级隔离（Data Scope）若强依赖于微服务开发者在每次 DB 查询前“自觉”拼接 `if (scope === 'OWN')`，一旦遗忘将引发全局数据泄露灾难。
+**规范（已在 `api/library/entity.js` 落地）**：Router 网关将外部身份的 `$owner` 约束经 `X-User-Constraints` 下发，`api/library/entity.js`（Entity Factory）通过 `requestContext(req)`（`AsyncLocalStorage`）在数据层自动强制执行行级隔离（`create` 自动盖章归属字段、`get`/`update`/`delete` 越权一律返回 `NOT_FOUND`、`list` 自动过滤他人的行，并在 `update` 中剥离归属字段防篡改过户）。
 
 ## 4. 错误码
 
@@ -489,7 +489,7 @@ Solo·AI 使用 Redis 作为唯一数据库。Redis 的持久化依赖 RDB 快�
 ```
 ┌─────────────┐     ┌──────────────┐     ┌───────────────┐
 │  微服务 Logic │────▶│ Entity Factory│────▶│  Redis (主存)  │
-│              │     │  (core/lib)  │     └───────────────┘
+│              │     │ (api/library)│     └───────────────┘
 │              │     │              │            │
 │              │     │  写入成功后    │            │
 │              │     │  ↓            │            │
@@ -604,13 +604,13 @@ const userEntity = createEntity('USER', {
 
 WAL 机制实施后，所有通过 Entity Factory 的写操作将自动获得磁盘级审计能力，无需各服务单独实现。
 
-### 5.9 实施路径
+### 5.9 实施路径（已落地）
 
 | 阶段 | 内容 | 改动范围 |
 |------|------|---------|
-| **Phase 1** | Entity Factory 加 `MULTI/EXEC` 事务包装 | `core/lib/entity.js` |
-| **Phase 2** | 写操作后调用 `logger.insert()`，支持 `sensitiveFields` 脱敏 | `core/lib/entity.js` + `core/lib/logger.js` |
-| **Phase 3** | 编写恢复脚本，支持从 RDB + logs 重放 | `deploy/` 新增脚本 |
+| **Phase 1** | Entity Factory 加 `MULTI/EXEC` 事务包装 | `api/library/entity.js` |
+| **Phase 2** | 写操作后调用 `logger.insert()`，支持 `sensitiveFields` 脱敏 | `api/library/entity.js` + `api/library/logger.js` |
+| **Phase 3** | 编写恢复脚本，支持从 RDB + logs 重放 | `deploy/` 脚本 |
 
 ## 6. 安全建议
 

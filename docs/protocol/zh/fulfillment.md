@@ -1,12 +1,12 @@
 # 履约生命周期协议 (Fulfillment Lifecycle Protocol)
 
-> [!WARNING]
-> **实现状态：核心已实现，但有已知不一致。** 声明式状态机/Profile/JsonLogic 条件/`_tasks` 发射均可用。注意：(1) 转移方法参数实际为 `event`，而 `handlers/introspection.js` 误声明为 `toState`；(2) 状态转移的 `history` 记录暂未写 `reason` 字段。示例中的 erp/sale/commodity 等为业务举例，SOLO 本身不含这些服务。
+> [!NOTE]
+> **实现状态：🟢 v1 核心与 RPA 五项协同原语已落地（`v1.3.3`）。** 声明式状态机、Profile 投稿审批与完整性锁（`approvedDigest`）、JsonLogic 条件与证据完整性门禁（`evidence`）、`_tasks` 异步发射、乐观并发锁（`expectedTransitionId`）、状态停留超时自愈（`stateTtls` + `reap`）、任意态人工协办断点栈（`suspend` + `resume`）、一次性安全回调令牌（`token.issue` + `callback`）及来源幂等创建（`idempotent`）均已生产可用。§6.2 `ai_hooks` 与 `type: "workflow"` 编排器直调目前仍为 **🟡 草案·未实现**（跨服务动作统一走 `type: "task"` / `_tasks` 或事件总线触发）。示例中的 erp/sale/commodity 等为业务举例，SOLO 本身不含这些服务。
 
 ---
 
-> **协议版本**: 1.5.0
-> **状态**: 草案 (Draft)
+> **协议版本**: 1.6.0
+> **状态**: 已实现 (v1.3.3)
 > **作者**: Antigravity & Fuu & Claude
 
 ---
@@ -29,7 +29,7 @@
 ## 2. 核心数据结构
 
 ### 2.1 履约实例 (Fulfillment Instance)
-存储在微服务中的状态快照。
+存储在微服务中的状态快照（由 `library/entity.js` 持久化于 `FULFILLMENT:INSTANCE:{id}`，支持 `$owner` 行级租户隔离）。
 
 ```json
 {
@@ -39,67 +39,105 @@
   "state": "DEPOSIT_PENDING",
   "prevState": "DRAFT",
   "stateChangedAt": 1741660462000,
+  "createdAt": 1741660412000,
+  "createdBy": "uid-admin",
   "meta": {
     "payment_status": "PENDING"
   },
+  "suspension": null,
   "pending_callbacks": [
     {
-      "executionId": "exec-abc123",
-      "workflowId": "erp-sync-on-deposit",
-      "on_complete": {
-        "event": "erp_synced",
-        "meta_patch": { "erpOrderId": "ERP-789" }
-      },
-      "retry_count": 0,
-      "last_error": null
+      "tokenId": "fltk_9f8a7b6c5d4e",
+      "allowedEvents": ["payment_received", "payment_failed"],
+      "expectedTransitionId": "FL-20260311-001-T1",
+      "issuedAt": 1741660462000,
+      "issuedBy": "uid-admin",
+      "expiresAt": 1741664062000
     }
   ],
   "history": [
     {
+      "transition_id": "FL-20260311-001-T0",
       "state": "DRAFT",
-      "event": "order_submitted",
-      "reason": "MANUAL",
+      "event": "created",
+      "reason": "INITIAL",
       "user": "uid-admin",
       "stamp": 1741660412000
+    },
+    {
+      "transition_id": "FL-20260311-001-T1",
+      "state": "DEPOSIT_PENDING",
+      "event": "order_submitted",
+      "meta_update": { "payment_status": "PENDING" },
+      "user": "uid-admin",
+      "stamp": 1741660462000
     }
   ]
 }
 ```
 
-**pending_callbacks 字段说明：**
+**`pending_callbacks` 字段说明（由 `fulfillment.instance.token.issue` 签发维护，单实例上限 16 条）：**
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `executionId` | string | 编排器执行实例 ID，用于幂等锁 |
-| `workflowId` | string | 对应的 workflow ID |
-| `on_complete.event` | string | 处理成功后触发的事件名 |
-| `on_complete.meta_patch` | object | 合并写入 `instance.meta` 的字段 |
-| `retry_count` | number | 处理失败的重试次数 |
-| `last_error` | string\|null | 最近一次失败的错误信息 |
+| `tokenId` | string | 回调令牌公开标识（`fltk_...`），明文 `flcb_...` 仅在签发时返回一次，Redis 仅存 SHA-256 |
+| `allowedEvents` | string[] | 允许该令牌触发的 `transition.event` 白名单 |
+| `expectedTransitionId` | string\|null | 绑定的乐观锁轮次 ID（实例若已离开该轮次则回调自动失效） |
+| `issuedAt` | number | 签发时间戳（epoch ms） |
+| `issuedBy` | string | 签发者 uid |
+| `expiresAt` | number | 过期时间戳（epoch ms） |
 
-**history 字段说明：**
+**`suspension` 字段说明（仅在 `fulfillment.instance.suspend` 挂起于 `ASSIST_REQUIRED` 期间非空，`resume` 后清空为 `null`）：**
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `state` | string | 进入该记录时的状态 |
-| `event` | string | 触发本次状态变更的事件名 |
-| `reason` | string | 结构化原因码（见附录 C） |
+| `blockedState` | string | 挂起前所处的业务状态（`resume` 时原路恢复至此状态） |
+| `prevStateBeforeSuspend` | string\|null | 挂起前的 `prevState` |
+| `suspendedTransitionId` | string | 挂起时刻的 `transition_id` |
+| `reason` | string | 人工可读挂起原因（如验证码、扫码登录、DOM 漂移） |
+| `reasonCode` | string | 结构化原因码（如 `CAPTCHA`、`OTP_REQUIRED`、`DOM_DRIFT`、`MANUAL_INTERVENTION`） |
+| `checkpoint` | object\|null | RPA 断点上下文（如 `{ step, cursor, pageUrl }`） |
+| `aiSuggestion` | string\|null | 给人工协办员的排障建议 |
+| `suspendedAt` | number | 挂起时间戳（epoch ms） |
+| `suspendedBy` | string\|null | 触发挂起的主体 uid |
+
+**`history` 字段说明：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `transition_id` | string | 实例内单调递增的跃迁序号（如 `FL-xxx-T0`、`FL-xxx-T1`），用于 `_tasks` 幂等键派生与 `expectedTransitionId` 乐观并发锁 |
+| `state` | string | 进入该记录时的目标状态 |
+| `event` | string | 触发本次状态变更的事件名（初始创建为 `created`，协办挂起为 `assist_requested`，恢复为 `resume`） |
+| `reason` | string? | 初始创建（`INITIAL`）、超时收割（`TIMEOUT` 或自定义）、强推（`override`）、挂起（`suspend`）的原因说明 |
+| `resolution` | string? | `resume` 恢复时记录的人工排障结论 |
+| `forced` | boolean? | `fulfillment.instance.override` 管理员强制跳过条件推进时标记为 `true` |
+| `reaped` | boolean? | `fulfillment.instance.reap` 超时自动收割推进时标记为 `true` |
+| `viaCallbackToken` | string? | 经 `fulfillment.instance.callback` 令牌推进时记录消费的 `tokenId` |
+| `meta_update` | object? | 本次跃迁随 `metaUpdate` 传入的增量快照（已递归剔除 `callbackToken` 等敏感键），供事后审计回放当跳守卫输入 |
 | `user` | string | 操作者 uid |
 | `stamp` | number | Unix 时间戳（毫秒） |
 
-> ⚠️ 实现现状：仅初始创建记录含 `reason`，状态转移记录暂未写 `reason`（待补）。
-
 ### 2.2 履约配置模板 (Fulfillment Profile)
-定义合法的状态切换、触发事件和关联动作。Profile 是声明式配置，不含任何业务逻辑代码。
+定义合法的状态切换、触发事件、证据完整性门禁、状态停留超时与关联动作。Profile 是声明式配置，不含任何业务逻辑代码。
 
 ```json
 {
   "id": "standard_trade",
   "name": "标准业务履约",
-  "version": "1.0.0",
-  "states": ["DRAFT", "DEPOSIT_PENDING", "DEPOSIT_CONFIRMED", "SOURCING",
-             "PACKING", "READY_TO_SHIP", "DISPATCHED", "DELIVERED",
-             "SETTLED", "CLOSED", "ON_HOLD", "CANCELLED", "DISPUTE"],
+  "status": "ACTIVE",
+  "meta_fields": [
+    { "key": "payment_status", "label": "支付状态", "type": "string" },
+    { "key": "amount_received", "label": "已收金额", "type": "number" },
+    { "key": "deposit_required", "label": "应付订金", "type": "number" },
+    { "key": "receipt_url", "label": "水单凭证链接", "type": "string" }
+  ],
+  "stateTtls": {
+    "DEPOSIT_PENDING": {
+      "ttlMs": 86400000,
+      "event": "deposit_timeout",
+      "reason": "TIMEOUT"
+    }
+  },
   "transitions": [
     {
       "event": "payment_received",
@@ -111,115 +149,114 @@
           { ">=": [{ "var": "instance.meta.amount_received" }, { "var": "instance.meta.deposit_required" }] }
         ]
       },
+      "evidence": {
+        "requiredFields": ["receipt_url", "amount_received"],
+        "rejectMasked": true,
+        "rejectLoopbackUrls": true,
+        "minBytes": { "receipt_url": 12 }
+      },
       "actions": [
         {
-          "type": "workflow",
-          "workflowId": "erp-sync-on-deposit",
-          "input": {
+          "type": "task",
+          "service": "notification",
+          "method": "inbox.send",
+          "params": {
+            "title": "订金已确认",
             "instanceId": { "var": "instance.id" },
             "sourceId": { "var": "instance.sourceId" }
-          },
-          "on_complete": {
-            "event": "erp_synced",
-            "meta_patch": {
-              "erpOrderId": "$step.sync.result.id"
-            }
           }
         }
       ]
-    }
-  ],
-  "ai_hooks": [
+    },
     {
-      "trigger": {
-        "event": "payment_received",
-        "condition": { ">": [{ "var": "instance.meta.amount_received" }, 50000] }
-      },
-      "invoke": "risk.creditAssessment",
-      "input": ["instance", "user"],
-      "disposition": "human_confirm",
-      "confidence_threshold": 0.85,
-      "outcome_map": {
-        "approve": { "event": "credit_approved" },
-        "hold":    { "event": "hold_requested",   "reason": "AI_RECOMMENDED" },
-        "reject":  { "event": "cancel_requested", "reason": "AI_RECOMMENDED" }
-      }
+      "event": "deposit_timeout",
+      "from": "DEPOSIT_PENDING",
+      "to": "CANCELLED"
     }
   ]
 }
 ```
 
-**transition 字段说明：**
+**`transition` 字段说明：**
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `event` | 是 | 触发本次切换的事件名，同一 `(from, to)` 可有多个 event |
+| `event` | 是 | 触发本次切换的事件名，同一 `(from, to)` 可有多个 event；同一 `(event, from)` 可有多条带不同 `condition` 的分支（按顺序取第一条满足条件的规则） |
 | `from` | 是 | 来源状态 |
-| `to` | 是 | 目标状态 |
-| `condition` | 否 | JsonLogic 条件，缺省则无条件允许 |
+| `to` | 是 | 目标状态（由引擎根据命中规则派生，调用方从不传目标状态） |
+| `condition` | 否 | JsonLogic 条件，缺省则无条件允许；数值比较（`<`/`<=`/`>`/`>=`）遇缺失字段（`undefined`/`null`/`""`）一律 fail-closed 判假 |
+| `evidence` | 否 | **反静默假成功证据门禁**（`v1.3.3`）：在状态落定前校验 `instance.meta` 证据完整性（见下方 `evidence` 字段表） |
 | `actions` | 否 | 切换成功后发射的动作列表（见下方 Action 类型） |
+
+**`transition.evidence` 证据门禁字段说明（`v1.3.3` 已实现，静态由 Lint 规则 9a 校验）：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `requiredFields` | `string[]` | 必填的 `instance.meta` 点分路径列表；值不得为 `undefined`/`null`/空白串/空数组 `[]`/空对象 `{}`/`NaN`/函数，且严禁命中 `__proto__`/`constructor`/`prototype` |
+| `rejectMasked` | `boolean` | 为 `true` 时递归扫描证据字符串，拦截 `****`、`••••`、`[REDACTED]`、`138****1234` 等脱敏掩码乱码 |
+| `rejectLoopbackUrls` | `boolean` | 为 `true` 时拦截指向 `localhost`、`127.0.0.0/8`、`0.0.0.0/8`、`::1`、`::`、`[::ffff:127.x.x.x]`（含十六进制 `[::ffff:7f00:1]`）及 `.local`/`.localhost` 的死链 URL |
+| `minRows` | `Record<path, number>` | 指定数组字段的最小行数（如 `{ "items": 1 }` 防空表回执伪装成功） |
+| `minBytes` | `Record<path, number>` | 指定字符串/对象字段的最小 UTF-8 字节数 |
+
+**`profile.stateTtls` 状态停留超时配置说明（`v1.3.3` 已实现，静态由 Lint 规则 8 校验）：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `stateTtls[STATE].ttlMs` | `number` | 允许在该状态停留的最大毫秒数（正数） |
+| `stateTtls[STATE].event` | `string` | 超时后自动触发的 `transition.event`（必须在该状态出发的 `transitions` 中真实存在） |
+| `stateTtls[STATE].reason` | `string?` | 写入 `history[].reason` 与 `meta.timeout_reason` 的原因码（默认 `'TIMEOUT'`） |
 
 **Action 类型说明：**
 
-| `type` | 说明 | 适用场景 |
+| `type` | 说明 | 实现状态 |
 |--------|------|----------|
-| `task`（默认） | 通过 `_tasks` fire-and-forget 执行单个 RPC | 通知、日志、非关键副作用 |
-| `workflow` | 调用编排器执行多步 workflow，支持 `on_complete` 回调 | 需要步骤编排、有结果回流的业务操作 |
-
-**`type: "workflow"` 专属字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `workflowId` | 编排器中已定义的 workflow ID |
-| `input` | 传入 workflow 的初始参数，支持 JsonLogic 变量注入 |
-| `on_complete.event` | workflow 完成后回调给 fulfillment 的事件名 |
-| `on_complete.meta_patch` | 用 workflow 执行结果更新 `instance.meta` 的字段映射（`$step.` 路径引用编排器的步骤结果） |
+| `task`（默认） | 通过 `_tasks` 交 Router 异步派发单个 RPC（自动注入 `idempotency_key: "{transition_id}:A{idx}"`） | 🟢 已实现 |
+| `workflow` | 调用编排器执行多步 workflow，支持 `on_complete` 回调 | 🟡 草案·未实现（当前统一通过 `type: "task"` 或 `EVENT:FULFILLMENT:TRANSITIONED` 事件触发编排器） |
 
 **`type: "task"` 专属字段：**
 
 | 字段 | 说明 |
 |------|------|
-| `service` | 目标服务名 |
-| `method` | RPC 方法名 |
-| `params` | 调用参数，支持 JsonLogic 变量注入 |
+| `service` | 目标服务名（须在 Router `setting.task` 白名单中授权 `allowFrom: ['fulfillment']`） |
+| `method` | RPC 方法名（可写短名 `inbox.send` 或全名 `notification.inbox.send`） |
+| `params` | 调用参数，支持 JsonLogic 变量注入（`var`、`cat`、`+`） |
 
-### 2.3 Profile 存储规范
-Profile 是运行时热加载的核心数据，存储在 Redis 中：
+### 2.3 Profile 存储与双轴治理规范
+Profile 由 `library/entity.js` 存储在 Redis 中（支持软删除与投稿审批双轴）：
 
 ```
 KEY:   FULFILLMENT:PROFILE:{profileId}
 TYPE:  String (JSON)
 TTL:   无（持久化）
-
-示例:
-  FULFILLMENT:PROFILE:standard_trade  → { ...Profile JSON... }
 ```
 
-**版本管理：**
-- Profile 变更时，旧版本归档至 `FULFILLMENT:PROFILE:{profileId}:v{version}`
-- 已存在的履约实例继续使用创建时的 Profile 版本
-- 新实例使用最新版本
+**两条独立生命周期轴：**
+- **实体软删轴（`status`）**：`ACTIVE` / `DELETED`。`fulfillment.profile.delete` 执行软删（`loadProfile` 自动拦截 `status === 'DELETED'` 的模板），`restore` 恢复为 `ACTIVE`，`destroy` 物理删除。
+- **内容投稿审批轴（`reviewState`）**：
+  - 管理员直建（`profile.create`）：无 `reviewState` 字段，创建后立即可用。
+  - 投稿或追溯纳入审核（`profile.submit` / `enroll: true`）：通过静态 Lint 后置为 `PENDING_REVIEW`，此时任何 `instance.create` 与 `instance.transition` 均被激活闸拦截（`FORBIDDEN`）。
+  - 审批激活（`profile.approve`）：校验职责分离（审批人不得在累积 `contributors` 贡献者列表中），置为 `APPROVED` 并记录可执行定义的 SHA-256 摘要 `approvedDigest`。
+  - 编辑回审锁（`profile.update`）：一旦修改已审批模板的可执行字段（`transitions` / `meta_fields` / `stateTtls`），引擎强制重跑 Lint 并将 `reviewState` 重置为 `PENDING_REVIEW`、清空 `approvedDigest`，冻结在途实例直至重新审批。
 
 ---
 
 ## 3. 运行机制
 
-### 3.1 状态切换逻辑 (Transition)
-当调用 `fulfillment.transition` 方法时，引擎按以下步骤操作：
+### 3.1 状态切换与并发安全逻辑 (`fulfillment.instance.transition`)
+当调用 `fulfillment.instance.transition`（或语义包装方法 `cancel` / `hold` / `override` / `callback` / `reap`）时，引擎在进程内实例锁 `withInstanceLock(id)` 与 Redis `WATCH/MULTI/EXEC` 乐观事务保护下按以下步骤操作：
 
-> ⚠️ 已知不一致：`handlers/introspection.js` 当前把参数误声明为 `toState`，实现实际读 `event`；以 `event` 为准（待修）。
-
-1. **加载 Profile**：从 Redis 读取 `instance.profileId` 对应的 Profile。
-2. **匹配规则**：在 `transitions` 中寻找 `event` 和 `from`（= 实例当前状态）均匹配的候选定义；目标状态不由调用方传入，而是从命中的 transition 的 `to` 字段派生。
-3. **条件校验**：将上下文注入变量作用域，运行 JsonLogic（见 3.2）。
-4. **状态持久化**：更新 `state`、`prevState`、`stateChangedAt`，向 `history` 追加记录。
-5. **动作发射 (Action Emission)**：按 Action 类型分别处理：
-   - `type: "task"` → 解析 `params`，放入响应的 `_tasks` 字段，由 Router fire-and-forget 执行。
-   - `type: "workflow"` → 解析 `input`，调用编排器 `orchestrator.workflow.run`，注册 `on_complete` 回调（见 3.3）。
-6. **AI 钩子触发**：检查 `ai_hooks`，满足触发条件的钩子按 `disposition` 处理（见 6.2）。
+1. **挂起锁与乐观锁核验**：
+   - 若实例当前处于 `suspension` 协办挂起态（如 `ASSIST_REQUIRED`），拒绝常规 `transition`（仅允许 `resume`、`cancel_requested`、`override` 或 `reap` 超时迁出）。
+   - 若调用方传入了 `expectedTransitionId`，强制核验其与 `instance.history.at(-1).transition_id` 完全一致，否则立即拒绝（`-32602`），阻断自愈环路中的 ABA 迟到回调覆盖。
+2. **加载并核验 Profile**：从 Redis 读取 `instance.profileId`；若不存在或 `status === 'DELETED'` 报 `NOT_FOUND`（`-32004`）；若存在 `reviewState` 且不为 `'APPROVED'` 报 `FORBIDDEN`（`-32003`）。
+3. **合并 `metaUpdate`**：若传入 `metaUpdate`（或别名 `meta`），先递归剔除 `callbackToken` / `callback_token` 及原型污染键，再浅合并入 `instance.meta`（使其对第 4、5 步的守卫立即可见）。
+4. **匹配规则与 JsonLogic 条件校验**：在 `transitions` 中寻找 `event` 和 `from === instance.state` 匹配的候选规则，注入上下文运行 JsonLogic（见 3.2），取第一条条件成立的规则（`override` 管理员强推跳过条件）。
+5. **证据完整性门禁（`rule.evidence`）**：若命中的规则声明了 `evidence`，调用 `evaluateEvidenceGate(rule.evidence, mergedMeta)` 校验必填字段、最小行数/字节数、反掩码与反回环 URL（`override` 跳过）。
+6. **状态原子持久化与事件广播**：更新 `state`、`prevState`、`stateChangedAt`，生成单调递增 `transition_id`（`{id}-T{n}`）追加至 `history`，清理已过期的 `pending_callbacks`，经 `entity.optimisticUpdate` 原子落盘，并向事件总线广播 `EVENT:FULFILLMENT:TRANSITIONED`。
+7. **动作发射 (`_tasks`)**：将命中规则的 `actions` 解析为带 `idempotency_key: "{transition_id}:A{idx}"` 的 `_tasks` 数组随响应返回，由 Router 异步投递（后台 `reaperTimer` 则经 `relay.call` 直接投递）。
 
 ### 3.2 变量解析作用域
-在 `condition`、`actions.params`、`ai_hooks.trigger.condition` 中，JsonLogic 的数据上下文为：
+在 `condition` 与 `actions.params` 中，JsonLogic 的数据上下文为：
 
 ```json
 {
@@ -232,8 +269,6 @@ TTL:   无（持久化）
 ```
 
 `now` = 求值时刻的 epoch ms（与 Factory 时间字段同形态，经 `library/clock.js`，测试可冻结）。
-没有它就**无法表达任何时间判定**：停留超时（§3.4 的 `max_stay_duration`）、`now > expireAt` 跃迁到
-催办状态，以及 action 里的**相对**死期——只能把死期烤成绝对时刻，而状态机要跑几周。
 
 引用方式均使用 JsonLogic 标准 `{ "var": "path.to.field" }` 语法：
 
@@ -243,192 +278,74 @@ TTL:   无（持久化）
 { "var": "constraints.maxAmount" }
 ```
 
-> **注意**：文档中描述变量路径时使用点路径表示法（如 `instance.meta.payment_status`），不加任何前缀符号。
-
-**`actions.params` 的求值面比 `condition` 窄**：只有整字段写成 `{"var": …}`、`$` 前缀键、
-或**唯一键是 `cat`** 的对象才求值。**字符串不做插值**——`"fx-{instance.id}"` 会原样发给下游。
-要拼字符串（典型是下游自带名字的幂等键）用 `cat`：
+**`actions.params` 的求值面比 `condition` 窄**：只有整字段写成 `{"var": …}`、`$` 前缀键、或**唯一键是 `cat` / `+`** 的对象才求值（`library/jsonlogic.js` 的 `RESOLVE_OPS`，与 `orchestrator` 共享单一真源）。**字符串不做插值**——要拼字符串用 `cat`，要算相对死期用 `+`：
 
 ```json
-{ "requestId": { "cat": ["fx-", { "var": "instance.id" }, "-publish"] } }
+{
+  "requestId": { "cat": ["fx-", { "var": "instance.id" }, "-publish"] },
+  "expireAt": { "+": [{ "var": "now" }, 7200000] }
+}
 ```
 
-**相对时刻用 `+`**（`RESOLVE_OPS` 的另一个成员）：`{"expireAt": {"+": [{"var":"now"}, 7200000]}}`
-= 此刻 +2h。没有它只能把死期烤成绝对时刻，而状态机要跑几周。
+### 3.3 长周期协同与五项 RPA 原语 (`v1.3.3`)
 
-其余标准算子（`if` / `map` …）在 params 里**不**求值，刻意如此：放开会让参数模板里
-任何以算子命名的**字面量字段**突然被当算子执行。要放开就改 `library/jsonlogic.js` 的 `RESOLVE_OPS`
-——那是**两个声明面共用的单一真源**（orchestrator 的 workflow step params 认同一套算子）。
+**核心原则：跨小时/跨天的等待发生在持久化状态节点上，不发生在单次 HTTP 请求内部。**
 
-### 3.3 长周期协同模型
+围绕长周期业务与外部 RPA 执行手（如 `steward` 千手插件/桌面手）的闭环协同，协议提供五项原生原语：
 
-**核心原则：等待发生在状态节点上，不发生在 Workflow 内部。**
-
-Workflow 天然不适合挂起等待数天——它运行在单次 HTTP 请求内，必须在秒级完成。跨天/跨周的业务等待由履约实例持久化在 Redis 承担，外部事件到达后再触发下一次切换。
-
-```
-时间轴示例（业务履约）
-
-Day 0   ── payment_received 事件
-            → transition: DEPOSIT_PENDING → DEPOSIT_CONFIRMED
-            → 触发 workflow "erp-sync-on-deposit"（秒级完成）
-            → on_complete 回调：meta_patch { erpOrderId } + 触发 erp_synced 事件
-            → transition: DEPOSIT_CONFIRMED → SOURCING
-
-            履约实例持久化停在 SOURCING
-            （等待供应商/工厂确认，可能 3～7 天）
-
-Day 4   ── supplier_confirmed 事件（外部系统或人工触发）
-            → transition: SOURCING → PACKING
-            → 触发 workflow "warehouse-packing-init"（秒级完成）
-            → on_complete 回调：meta_patch { packingOrderId }
-
-            履约实例持久化停在 PACKING
-            （等待包装完成确认）
-
-Day 5   ── packing_completed 事件
-            → transition: PACKING → READY_TO_SHIP
-            ...
-```
-
-**等待期间系统的状态：**
-- 履约实例保持在当前状态，随时可查询
-- 没有任何进程挂起或占用资源
-- 超时检测由独立的定时任务扫描 Redis 中的实例完成（不在此协议范围内）
-
-**`on_complete` 回调机制：懒求值（Lazy Evaluation）策略**
-
-`on_complete` 采用**懒求值**而非主动 Push：Workflow 完成时，编排器将结果写入 `instance.pending_callbacks`，不立即触发事件。处理时机由 `fulfillment.instance.get`（view）在每次被调用时触发：
-
-```
-用户/系统 view instance
-    → 检查 instance.pending_callbacks 是否非空
-    → 遍历处理：meta_patch 合并 + 触发 on_complete.event
-    → 清除已处理的 callback 条目
-    → 返回最新 instance
-```
-
-**选择懒求值的理由：**
-- 业务履约以天为单位推进，无需毫秒级响应
-- 人在回路：人查看订单的时机即为最自然的处理时机
-- 不需要激活 `engine.tick()` 或额外的消息队列基础设施
-
-**关键实现要点：**
-
-1. **并发幂等**：多个并发 view 同时检测到 pending callback 时，使用 Redis `SET NX` 对 `executionId` 加锁，防止重复处理。
-
-2. **失败容错**：callback 处理失败时不向调用方抛出错误，保留该条目在 `pending_callbacks` 中，更新 `retry_count` 和 `last_error`，下次 view 时重试。
-
-3. **全局 Review（懒触发，非阻塞）**：不依赖定时任务，改用**全局水位线（Watermark）**机制。任意 view 操作时，检查水位线是否落后于当前日期，若落后则 fire-and-forget 推送一个全局扫描任务。
-
-**编排器所需的最小改动：**
-在现有 `runner.js` 的 `run()` 方法末尾，将执行结果写入 `instance.pending_callbacks`（约 20 行），无需改动编排器的核心结构。
-
----
-
-### 3.4 全局 Review 触发机制（Watermark）
-
-**设计目标**：让 AI 具备主动感知全局状态的能力，同时不引入定时任务（容易挂起、难以追踪）。
-
-**核心模式：全局水位线 + view 懒触发**
-
-Redis 中维护一个全局水位线：
-
-```
-KEY: FULFILLMENT:GLOBAL:LAST_REVIEW_DATE
-VAL: "2026-03-11"
-```
-
-在每次 `fulfillment.instance.get`（view）时，附加以下非阻塞逻辑：
-
-```
-view instance
-  → 处理 pending_callbacks（见 3.3）
-  → 读取 LAST_REVIEW_DATE，对比今日日期
-  → 若落后：Redis SET NX 抢占更新（确保同一天只触发一次）
-      → 抢到：_tasks fire-and-forget 推送 fulfillment.internal.globalReview
-      → 未抢到：跳过（已有其他请求触发）
-  → 返回 instance（不等待 globalReview 完成）
-```
-
-**`globalReview` 任务做什么：**
-- 扫描所有未终态实例，检查各状态停留时长是否超过 Profile 定义的 `max_stay_duration`
-- 对超时实例写入 `pending_callbacks`（触发 ai_hook 类型：`stale_check`）
-- 更新水位线（由任务本身写入，确保时序正确）
-
-**为什么这个设计可靠：**
-
-| 特性 | 说明 |
-|------|------|
-| 零 cron | 触发源是真实用户访问，无人使用时不做无效扫描 |
-| 天然幂等 | `SET NX` 确保同一水位线周期内只触发一次 |
-| 不阻塞 | `_tasks` fire-and-forget，view 响应延迟不变 |
-| 自愈 | 若某天无访问，次日第一个 view 自动补扫 |
-
-**水位线粒度可配置：**
-
-| 水位线键 | 触发频率 | 适用场景 |
-|----------|----------|----------|
-| `LAST_REVIEW_DATE` | 每天最多一次 | stale 检测、日度风险汇总 |
-| `LAST_REVIEW_HOUR` | 每小时最多一次 | 时效性更高的异常预警 |
-| `LAST_REVIEW_COUNT:{N}` | 每 N 次 view 一次 | 流量驱动，适合高频访问场景 |
-
-默认使用 `LAST_REVIEW_DATE`，Phase 1/2 足够。
+1. **来源幂等创建（`fulfillment.instance.create { sourceId, profileId, meta?, idempotent: true }`）**：
+   - 按 `($owner, profileId, sourceId)` 生成无碰撞 SHA-256 索引键并以 Redis `SET NX` 抢占。
+   - 定时巡检或上游重试重复建单时，直接返回已绑定的存量实例并标记 `deduplicated: true`。
+2. **最小权限一次性回调凭证（`fulfillment.instance.token.issue` + `fulfillment.instance.callback`）**：
+   - 派单方调用 `token.issue({ id, allowedEvents, ttlMs?, bindCurrentTransition? })` 签发高熵一次性令牌 `flcb_...`（Redis 仅存 SHA-256，上限 16 个待决令牌，终态实例禁止签发）。
+   - 外部 RPA 执行手无需持有全局推进权限，直接向公开端点 `fulfillment.instance.callback` 提交 `Authorization: Bearer flcb_...`（或 `X-Callback-Token` 头）与 `{ event, metaUpdate }`。
+   - 引擎以 `GETDEL` 原子消费令牌；若因 `evidence` 或 `condition` 门禁未通过而拒收且实例仍停在原轮次，引擎自动按剩余 TTL 恢复该令牌，允许执行手补齐证据后重试。
+3. **任意态人工协办断点栈（`fulfillment.instance.suspend` + `fulfillment.instance.resume`）**：
+   - 当 RPA 遇到验证码、扫码或 DOM 漂移时，无需在 Profile 中为每个业务状态穷举 `N × M` 条暂停边，直接调 `suspend({ id, reason, reasonCode?, checkpoint?, aiSuggestion?, metaUpdate?, expectedTransitionId? })`。
+   - 引擎验证当前状态非终态、非 `ON_HOLD`，且目标挂起态（默认 `ASSIST_REQUIRED`）不与 `profile.transitions` 中的任何业务状态重名后，保存 `suspension` 断点栈并切入挂起态。
+   - 人工排障后调用 `resume({ id, resolution?, metaUpdate?, expectedTransitionId? })`，原路恢复至 `suspension.blockedState` 并广播 `EVENT:FULFILLMENT:TRANSITIONED`。
+4. **状态停留超时自愈（`profile.stateTtls` + `fulfillment.instance.reap`）**：
+   - Profile 在 `stateTtls` 中声明某状态的最大停留毫秒数 `ttlMs` 与超时迁出事件 `event`。
+   - 由外部定时任务调用 `fulfillment.instance.reap({ profileId?, dryRun?, limit? })` 或配置环境变量 `FULFILLMENT_REAP_INTERVAL_MS` 启动服务内置周期扫描器，自动将超时实例推进至超时分支并派发下游补偿 `_tasks`。
+5. **反静默假成功证据门禁（`transition.evidence`）**：
+   - 在状态迁移落盘前拦截空表（`minRows`）、过短内容（`minBytes`）、`****` 脱敏乱码（`rejectMasked`）与 `127.0.0.1`/`localhost` 本地死链（`rejectLoopbackUrls`），防止外部脚本把报错页或残缺采集团体伪装成履约成功。
 
 ---
 
 ## 4. 安全与约束
 
-### 4.1 权限过滤
-- 只有拥有关联业务实体访问权的用户，才能查询或操作其履约实例。
-- 敏感状态切换（如 `FINANCE_CLOSED`）应通过 `action` 触发专门的 `approval` 服务流程。
+### 4.1 租户隔离与权限过滤
+- **行级租户隔离（`$owner`）**：当调用方携带受限 Passport 约束（`constraints.$owner`）时，`instance` 的创建、读取、列表、推进、挂起、恢复与幂等索引均严格限制在该 `$owner` 作用域内。
+- **管理面权限门禁**：`fulfillment.profile.{create,update,delete,restore,destroy,approve,reject}`、`fulfillment.instance.{override,reap}` 在 RPC 入口强制校验 `isAdmin`。
 
-### 4.2 软删除一致性
-当 `sourceId` 对应的实体被删除时，履约引擎应根据 Profile 配置自动将实例状态置为 `CANCELLED`，并在 history 中记录 `reason: SOURCE_DELETED`。
+### 4.2 软删除一致性（🟡 草案·未实现）
+当 `sourceId` 对应的外部业务实体被删除时，未来规划支持根据配置自动将关联履约实例置为 `CANCELLED` 并记录 `reason: SOURCE_DELETED`（当前版本需由上游业务主动调用 `fulfillment.instance.cancel`）。
 
 ---
 
 ## 5. 错误处理
 
-| 错误场景 | 错误码 | 说明 |
-|----------|--------|------|
-| 条件校验不满足 | `TRANSITION_DENIED` (-32010) | 业务规则拒绝，非参数错误 |
-| 未找到匹配的 transition | `TRANSITION_NOT_FOUND` (-32011) | 当前状态不支持该事件 |
-| Profile 不存在 | `PROFILE_NOT_FOUND` (-32012) | Redis 中无对应 Profile |
-| Action 失败 | 仅记录，不报错 | 进入 `ERROR:QUEUE`，不回滚实例状态 |
+履约服务统一采用 [`library/jsonrpc.js`](../../../api/library/jsonrpc.js) 标准错误码：
 
-> Action 属于异步任务，失败不应导致履约实例状态回滚。Router 会将失败任务记录在 `ERROR:QUEUE` 中供运维处理。
+| 错误场景 | 错误助手 / 错误码 | 说明 |
+|----------|-------------------|------|
+| 条件不满足 / 证据门禁拒收 / 未找到匹配 transition / 乐观锁 `expectedTransitionId` 失配 | `invalidParams` (`-32602`) | 参数或状态机前置守卫拒绝，状态不发生跃迁 |
+| 实例或 Profile 不存在（含 Profile 已软删 `status === 'DELETED'`） | `notFound` (`-32004`) | Redis 中无对应记录或跨 `$owner` 不可见 |
+| 非管理员调用管理方法 / Profile `reviewState !== 'APPROVED'` / 审批人自审 / 回调令牌无效或过期 | `forbidden` (`-32003`) | 权限或治理门禁拦截 |
+| Profile ID 已存在 / 实例高并发写冲突 | `conflict` (`-32009`) | 唯一键冲突或乐观锁 CAS 重试耗尽 |
+| `_tasks` 下游异步 Action 失败 | 仅记录，不回滚状态 | 由 Router 记录至 `ERROR:QUEUE`，不影响已落盘的状态跃迁 |
 
 ---
 
 ## 6. AI 治理与安全边界 (AI Governance & Safety)
 
-### 6.1 决策与执行分层
-在 SOLO·AI 架构中，采用"双 Agent"协同模式，与长周期协同模型（见 3.3）对齐：
+### 6.1 决策与执行分层（`ai: true` vs `ai: false`）
+在 SOLO·AI 架构中，履约引擎严格区分只读感知与状态推进：
+- **只读与候选生成方法（`ai: true`）**：`instance.{create,get,list}`、`profile.{get,list}` 允许 AI Agent 自主调用以感知状态与上下文。
+- **状态写操作与治理方法（`ai: false`）**：`instance.{transition,cancel,hold,suspend,resume,reap,override,update,token.issue,callback}` 及 `profile.{create,update,delete,restore,destroy,generate,submit,approve,reject}` 均设为 `ai: false`，禁止 LLM 在自由对话中擅自推进状态机；外部自动化哨兵须通过明确授权的 RBAC 方法白名单或单次 `callbackToken` 触发。
 
-- **Fulfillment Agent（战略层）**：感知履约实例的全局状态，判断当前阶段是否需要推进、选择哪条路径、触发哪个 workflow。它不执行具体操作，只做决策。
-
-- **Task / Workflow Agent（执行层）**：在编排器内完成具体的短促任务序列（秒级），不感知履约全局状态，只负责把当前被分配的工作做好，通过 `on_complete` 将结果回流给 Fulfillment 层。
-
-```
-Fulfillment Agent（战略层）
-    │  感知：instance.state / instance.meta / history
-    │  决策：选择 workflow，或触发 ai_hook
-    ↓
-编排器 workflow（执行层，秒级）
-    │  执行：多步 RPC 调用
-    │  结果：通过 on_complete 回调回流
-    ↓
-fulfillment.callback
-    │  更新：instance.meta
-    │  触发：下一个 event（可选）
-    ↓
-Fulfillment Agent 重新感知，进入下一轮决策
-```
-
-**关键约束**：执行层（Task / Workflow Agent）不应直接调用 `fulfillment.transition`，状态推进只能由 Fulfillment Agent 或明确授权的人工操作发起，确保决策链路可审计。
-
-### 6.2 AI 介入合约 (AI Hook Contract)
+### 6.2 AI 介入合约 (AI Hook Contract)（🟡 草案·未实现）
+> **状态说明**：以下 `ai_hooks` 结构为协议预留设计，当前版本（`v1.3.3`）尚未在 `instance.js` 内置执行器，AI 协同目前通过 `EVENT:FULFILLMENT:TRANSITIONED` 事件总线触发 `nexus`（Agent 上下文组装协议）或外部哨兵实现。
 `ai_hooks` 定义了 AI 介入的触发时机、调用方式和结果处置方式。
 
 **触发（trigger）：**
@@ -566,6 +483,10 @@ Profile（§2.2）既可人工编写，也可由 AI 从自然语言生成。为�
 5. **状态图良构**：实例创建即处于初始态 `DRAFT`，故必须有转移**离开 DRAFT**；从「DRAFT 不可达态」出发的转移是**死分支**（warning）。
 6. **动作策略（可选，`options.allowedActions`）**：给定允许集时，每个 `task` action ∈ 允许集——镜像 workflow 的 **H6 footprint 预审**，让投稿面在激活前拒掉越权 Profile。
 7. **出口可达（可选，`options.taskWhitelist`）**：每个 `task` action 能通过 Router 的 `_tasks` 白名单（目标服务在表内、`fulfillment` 在其 `allowFrom`、方法在其 `allowMethods`，两处 `*` 通配与运行时同义）。**与规则 4 是两道互不相干的闸**：4 问"这个方法存不存在"，7 问"状态机够不够得着它"。7 之所以必须提前到激活前，是因为它在运行时**结构上不可能被观察到**——白名单是在响应发出**之后**才查的（Router 先 `res.json()`、再异步 `processTasks`），调用方拿到的是 200 + 干净 history，响应里连 `_tasks` 字段都被删了，被挡下只留一行服务器 `console.warn`。服务侧由 `profile.submit` / `profile.update` 自动读取当前白名单供给；读不到则该规则关闭（不阻断创作）。
+8. **AI 挂钩与辅助路由校验（Rule 8 / 9a / 9b）**：
+   - **Rule 8（`ai_hooks` 结构与可达性）**：每个 `ai_hook.invoke` 必须是已注册方法且通过 `allowedActions` 校验；`disposition` 必须为 `human_confirm` / `auto_execute` / `log_only`；非 `log_only` 时 `outcome_map` 映射到的目标 `event` 必须存在于 `transitions` 中。
+   - **Rule 9a（`assist.invoke` 存在性）**：若转移配置了 `assist.invoke`，该方法必须是已注册方法且通过 `allowedActions` 校验。
+   - **Rule 9b（`assist` 双出口对称性）**：若转移配置了 `assist`，必须同时在 `transitions` 中提供从 `assist.waiting_state` 出发的 `assist.resume_event`（继续推进）与 `assist.fallback_event`（降级兜底）两条出口，防止实例困死在等待态。
 
 **机器不保证（必须人审 / 真 LLM eval）：**
 - **业务意图**：lint 证明"接线对、图能通"，**不证明"这条流程符合需求"**。阈值写反（`≤` 写成 `≥`）、状态语义错配、把"放行"接到"冻结"——lint 一律看不出来。
@@ -577,27 +498,24 @@ Profile（§2.2）既可人工编写，也可由 AI 从自然语言生成。为�
 
 `fulfillment.profile.generate({ requirement, profileId?, maxRepairs? })`：
 1. 服务经 relay 调 `agent.chat`，以「能力上下文（可用方法及其返回字段）+ schema + 需求」为提示词，产出候选 JSON（提示词受 `agent.chat` 4000 字上限约束，目录过大时按预算截断 + 标注省略）。
-2. 立即跑 §7.1 lint；有 error 就把 error 回喂 LLM 做**有界修复**（默认 ≤2 轮）。
+2. 立即跑 §7.1 lint；有 error 就把 error 回喂 LLM 做**有界修复**（默认 ≤2 轮，硬上限 `maxRepairs <= 5`）。
 3. 返回 `{ profile, lintReport:{errors,warnings}, attempts, ok }`，**`ok` = 0 errors = 可激活**。
-4. **永不自动创建**——返回候选，由人审后另行 `fulfillment.profile.create`。
+4. **永不自动创建**——返回候选，由人审后另行 `fulfillment.profile.create` 或 `fulfillment.profile.submit`。
 
 operator 门户「✨ 描述生成」即此路径的人审 UI：展示判定 + 错误/警告 + 候选，**「创建」按 lint 干净与否门控**。
 
 ### 7.3 投稿生命周期（外部 AI → ACTIVE）
 
 受信外部 agent（B 档，见 [VERSION.md §3.4](../../planning/VERSION.md) / [governance.md](./governance.md)）以**窄 permit bot** 投稿 Profile，流程对齐 workflow 的 C1 审批：
-1. 外部 AI 产出 Profile JSON（或经 §7.2 generate）→ 提交。
+1. 外部 AI 产出 Profile JSON（或经 §7.2 generate）→ 调用 `fulfillment.profile.submit`（或 `fulfillment.profile.create(..., { enroll: true })`）。
 2. 服务跑 §7.1 lint（带 `allowedActions` = 投稿身份的允许方法集）→ 任一 error 即拒。
-3. 通过则落 `PENDING_REVIEW`，进入审批队列（配额 / 快照同 workflow 投稿面）。
-4. 人工经**签名审批**（governance.md §3.2）激活为 `ACTIVE`；执行发生在审批背书后的身份下，**投稿身份永不执行**；失败随时退回人工。
+3. 通过则落 `PENDING_REVIEW`，进入审批队列，记录 `submittedBy` 与历史贡献者集合 `contributors`（含创建人及历次修改可执行字段的编辑人）。
+4. 人工调用 `fulfillment.profile.approve` 激活（校验 `approver !== submittedBy` 且 `!contributors.includes(approver)`，杜绝串谋自审）；执行发生在审批背书后的身份下，**投稿身份永不执行**；失败随时退回人工。
 
-> ⚠️ **实现状态**：§7.1（lint 六规则）+ §7.2（generate）+ §7.3 投稿面**核心已落地**（`logic/{lint,generate,profile,instance}.js`）：
-> - `profile.submit`（lint 把关 → `PENDING_REVIEW`，broken 直接拒、不入队）/ `profile.approve`（管理员，**审批人 ≠ 投稿人**）/ `profile.reject`；
-> - `reviewState` 审批轴（独立于 Factory 的 `status`）+ **激活闸**：`instance.create` **与** `instance.transition`(advance) 都对非 `APPROVED` 的 profile 拒 `FORBIDDEN`（新建 + in-flight 实例都拦）；直建 profile 无 `reviewState` → 仍即用，向后兼容；
-> - **激活后完整性闸**：`profile.update` 改可执行字段（`transitions`/`meta_fields`）→ **重新 lint + 回落 `PENDING_REVIEW` + 清审批**（其 in-flight 实例随之冻结，待重审）；元数据改（name/desc）不触发。`approve` 落 **`approvedDigest`**（可执行定义的 sha256 规范化摘要，绑定「批了哪一版」，改一字即变、可验不可抵赖）；
-> - hermetic + e2e `102`/`103`/`104` 验证（104 十用例覆盖：lint 闸、不可用、职责分离、审批后可用、驳回、自审禁止、**改可执行字段回审 + 冻结 + 重审恢复 + lint-on-edit + 摘要绑定**）。
->
-> **剩（深档，镜像 workflow 投稿面）**：per-identity 投稿配额、高风险 **Ed25519 签名多签审批**（经 approval 服务，governance.md §3.2）、给外部投稿身份（OpenClaw 等）正式授 `profile.submit` 的窄 bot、以及（可选）完整版本归档 + 实例 pin 已批 digest（让 in-flight 跑"批过的那版"而非冻结）。见 BACKLOG。
+> ✅ **实现状态**：§7.1（lint 九规则：1~7 + 8 + 9a/9b）+ §7.2（generate，含 `maxRepairs <= 5` 上限）+ §7.3 投稿面**核心已落地**（`api/apps/fulfillment/logic/{lint,generate,profile,instance}.js`）：
+> - `profile.submit`（lint 把关 → `PENDING_REVIEW`，broken 直接拒、不入队）/ `profile.create({ enroll: true })` / `profile.approve`（管理员，**审批人 ≠ 投稿人且不在 `contributors` 列表内**）/ `profile.reject`；
+> - `reviewState` 审批轴（独立于 Factory 的 `status`）+ **激活闸**：`instance.create` **与** `instance.transition`(advance) 都对非 `APPROVED` 的 profile 拒 `FORBIDDEN`（新建 + in-flight 实例都拦）；直建 profile（未传 `enroll: true`）无 `reviewState` → 仍即用，向后兼容；
+> - **激活后完整性闸**：`profile.update` 改可执行字段（`transitions`/`meta_fields`/`ai_hooks`）→ **重新 lint + 回落 `PENDING_REVIEW` + 将编辑者追加进 `contributors` + 清审批**（其 in-flight 实例随之冻结，待重审）；元数据改（name/desc）不触发。`approve` 落 **`approvedDigest`**（可执行定义的 sha256 规范化摘要，绑定「批了哪一版」，改一字即变、可验不可抵赖）。
 
 ---
 
@@ -607,7 +525,7 @@ Protocol 不强制规定状态枚举，各 Profile 自定义完整状态集。�
 
 - 全部大写，单词间用下划线连接：`DEPOSIT_CONFIRMED`
 - 终态建议以 `CLOSED` 或 `CANCELLED` 结尾
-- 旁路态建议用 `ON_HOLD`、`DISPUTE` 等语义明确的名称
+- 旁路态建议用 `ON_HOLD`、`DISPUTE`、`ASSIST_REQUIRED` 等语义明确的名称
 
 **贸易履约参考状态集（standard_trade）：**
 
@@ -621,6 +539,7 @@ Protocol 不强制规定状态枚举，各 Profile 自定义完整状态集。�
 | `BALANCE_PENDING` | 待付尾款（可选） | 常规 |
 | `READY_TO_SHIP` | 待发货 | 常规 |
 | `DISPATCHED` | 已发货/运输中 | 常规 |
+| `ASSIST_REQUIRED` | 等待外部节点回执（§4.3 混合过渡态） | 旁路 |
 | `DELIVERED` | 已收货 | 常规 |
 | `SETTLED` | 已结算 | 常规 |
 | `CLOSED` | 已关闭 | 终态 |

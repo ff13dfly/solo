@@ -1,9 +1,11 @@
 # 显示协议 (Display / View-Manifest Protocol)
 
-> [!WARNING]
-> **实现状态：分层落地中。**
-> - ✅ **已实现**（本 session）：第③层「个人偏好」—— operator 的 `localStorage`（视图模式 `solomind:view_modes` + 字段显隐/排序 `solomind:list_fields`）；字段值渲染走 `portal/operator` 的 `rendererRegistry`；字段 schema 来自各服务 introspection；整服务自定义逃生舱 = `ExtensionRegistry`。
-> - 🟡 **草案·未实现**：第②层「operator 配置」（静态基线 + `administrator` 覆盖）、`label/format/computed/locked` 词汇、`display.lint`、治理闸门。
+> [!NOTE]
+> **实现状态：分层落地中（第③层与第②-B层已实现）。**
+> - ✅ **已实现**：
+>   - 第③层「个人偏好」—— operator 的 `localStorage`（视图模式 `solomind:view_modes` + 字段显隐/排序 `solomind:list_fields`）；字段值渲染走 `portal/operator` 的 `rendererRegistry`；字段 schema 来自各服务 introspection；整服务自定义逃生舱 = `ExtensionRegistry`。
+>   - 第②-B层「`administrator` 部署级覆盖存储」—— `api/core/administrator` 已实现 `setting.display.{list,get,set,delete}`（持久化于 Redis）。
+> - 🟡 **草案·未实现**：第②-A层静态基线清单、`label/format/computed/locked` 完整前端合并引擎、`display.lint` 与审批治理闸门。
 >
 > 示例中的 `market` / `commodity` 等为业务举例，SOLO 本身不含这些服务（判断"什么已实现"以 [`CLAUDE.md`](../../../CLAUDE.md) §2 为准）。
 
@@ -176,7 +178,7 @@ type FormatKind =
 | 子层 | 存哪 | owner | 优 | 劣 |
 |------|------|-------|----|----|
 | **A 静态基线** | `portal/operator` 仓库里的 JSON/TS，构建期打包 | operator | 零基建、随版本走、PR 可审、**开箱即用** | 改配置要重新构建+部署 |
-| **B 部署级覆盖** | `administrator`(8680) 的一个实体，`administrator.display.*`（get/set/list），走实体工厂存 Redis | 集成方 | **运行时可改**（免重发）、过 Router 带 auth/permit、白拿 WAL/审计/乐观锁、可 `lint`+审批 | 需种子；启动多一次拉取 |
+| **B 部署级覆盖** | `administrator`(8680) 的配置存储，`setting.display.*`（`list`/`get`/`set`/`delete`，已实现），存 Redis | 集成方 | **运行时可改**（免重发）、过 Router 带 auth/permit、白拿审计、可扩展 `lint`+审批 | 需种子；启动多一次拉取 |
 | **C 个人偏好** | 浏览器 `localStorage`（已实现） | 终端用户 | 即时、个人化 | 仅本人本机 |
 
 **解析顺序**：`A 静态基线  ←  B administrator 覆盖  ←  C 个人`。

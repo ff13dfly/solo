@@ -1,11 +1,11 @@
 # Authority 收口 —— 外部主体接入 + 内外隔离（结论：不建独立服务）
 
 > [!NOTE]
-> **状态：v1 已实现并过 e2e（2026-06-05）。结论：不建 `authority` 微服务。**
-> **① 外部接入 = `user.passport.*`（`user/logic/passport.js`）** —— role.set / register / verify，复用 user 的 session/permit/撤销；
-> **② Router 零改动**（`checkAccess` 即方法墙；`forward.js:39` 已转发 `permit.constraints`，owner 谓词搭车）；
-> **③ 行隔离** v1 在 `collection` 按 `constraints.$owner` 自 scope（盖戳/过滤/校验），通用版后续抽到 `library/entity.js`。
-> 名字"authority"弃用。测试：e2e `68-external-isolation`（边界+行隔离+身份，5 测）、单元 `user/tests/passport.test.js`。决策见 §9。
+> **状态：v1 及通用行级隔离已全面落地（`v1.3.3`）。结论：不建 `authority` 微服务。**
+> **① 外部接入 = `user.passport.*`（`user/logic/passport.js`）** —— `role.set` / `register` / `verify` / `otp.{request,verify}` / `device.issue` / `upgrade`，支持角色或 `system.*` Bot 权限路由，复用 user 的 session/permit/撤销；
+> **② Router 零改动**（`checkAccess` 即方法墙；`forward.js` 已转发 `permit.constraints`，`$owner` 谓词搭车，且异步 `_tasks` 同样透传 `constraints`）；
+> **③ 通用行隔离**已在 [`api/library/entity.js`](../../../api/library/entity.js) 经 `requestContext(req)` + `walContext` 全量落地（create 自动盖戳、list 按 `$owner` 过滤、get/update/delete 越权报 NOT_FOUND、残缺 `$owner` fail-closed）。
+> 名字"authority"弃用。测试：e2e `68-external-isolation`、单元 `user/tests/passport.test.js`、`library/tests/entity-owner-scope.test.js`。决策见 §9。
 
 > **协议版本**: 0.2.0（决策版）
 > **作者**: Fuu
@@ -123,9 +123,9 @@ Router 入口
 - `create` 盖戳 `entity[field]=value`；`list` 只出 `entity[field]===value` 的行；`get/update/delete` 校验 `entity[field]===value`，否则 NOT_FOUND。
 - **无 `$owner`（= 内部/admin）→ 不 scope，行为不变**（保护现有内部流程与全部既有 e2e）。
 
-**落点分两步（先窄后通用）**：
-- **v1（本次实现）**：在**暴露给外部的服务里直接按 `req.constraints.$owner` 自 scope**。本次用 `collection`（payment.record 盖戳 / list 过滤 / get 校验）。零侵入 Entity Factory，现有套件不受影响。
-- **通用版（后续）**：把这套抽进 `library/entity.js`（`BY_OWNER:{value}` 索引 + 盖戳 + 校验 + `ownerScoped` 实体声明），enforce 在唯一数据访问口、各服务无感。**注意成本**：`walContext` 是**每服务**进入的（12 处），通用版要把 `$owner` 经共享中间件喂进 `walContext` 才能让 entity.js 读到 —— 故留作单独一步，不与本次混。
+**落点演进（已完成通用层下沉）**：
+- **v1（初始实现）**：在 `collection` 服务内按 `req.constraints.$owner` 自 scope。
+- **通用版（`v1.1.16+` 已落地）**：已在 [`api/library/entity.js`](../../../api/library/entity.js) 实现通用 `$owner` 行级隔离，各微服务通过 `requestContext(req)` 将 `constraints.$owner` 注入 `walContext`，由 Entity Factory 在唯一数据访问口自动执行盖戳、过滤与越权拦截（对残缺 `$owner` 约束采取 fail-closed 拒绝）。
 
 > 这是 SOLO 版的 Postgres RLS。`fieldmask`（字段遮罩）与本档**正交**——前者管"行里哪些列不给看"，本档管"哪些行不给"。
 
@@ -186,19 +186,19 @@ Router 令牌(constraints.$owner)
 
 ---
 
-## 9. 决策（已定，2026-06-05）/ 未尽
+## 9. 决策（已定，2026-06-05）/ 已补齐
 
 已定（✅ = 采纳）：
 - ✅ **命名**：弃用"authority"为服务名，落成 `user.passport.*`。
 - ✅ **落点**：**不建独立微服务**，放进 `user`（`user/logic/passport.js`）。仅当 OTP/onboarding/外部角色管理 UI 复杂起来再考虑拆服务。
 - ✅ **owner 谓词载体**：`constraints.$owner` 保留键（Router 零改动）。
-- ✅ **粒度**：**按外部角色**（`EXTERNAL:ROLE:{role}`），角色数 = 实际有几个（今天 1 个也走同一路径，不焊死"共享 permit"）。
-- ✅ **顺序**：先边界（user.passport.* + Router 零改）→ 后行隔离（v1 窄到 collection，通用版抽 entity.js）。
+- ✅ **粒度**：**按外部角色**（`USER:ROLE:{role}`）或绑定的 `system.*` Bot 权限模板，角色数 = 实际有几个（今天 1 个也走同一路径，不焊死"共享 permit"）。
+- ✅ **顺序**：先边界（`user.passport.*` + Router 零改）→ 后行隔离（已下沉至 `library/entity.js` 通用层）。
 
-未尽：
-- **OTP / device token 首发流程**：passport.md §3，v1 缓做（测试/接入直接 `user.passport.register`）。
-- **通用行隔离**：抽进 `library/entity.js` + `walContext` 经共享中间件喂 `$owner`（§4.3）。
-- `nexus` 的 per-agent 身份（`BACKLOG.md §1.2 / context.md §11.2`）与本文同属"按主体最小权限"，机制可共享。
+已补齐（`v1.1.16`–`v1.3.3`）：
+- ✅ **OTP / device token 首发与升级流程**：`user.passport.otp.{request,verify}`、`user.passport.device.issue`（TOFU 匿名设备发证）与 `user.passport.upgrade`（设备凭证原地升级为实名 Anchor）已全部落地。
+- ✅ **通用行隔离**：已在 `library/entity.js` + `requestContext(req)` 全量落地（§4.3）。
+- ✅ **`nexus` 的 per-sentinel 身份**：已在 `nexus/logic/identity.js`（`nexus.sentinel.token.set`）落地，通过 `relay.callAs(botToken, ...)` 按 Sentinel 最小权限执行。
 
 ---
 
@@ -215,10 +215,10 @@ Router 令牌(constraints.$owner)
 
 | 协议要素 | 落点 | 状态 |
 |----------|------|------|
-| **角色实体(RBAC)** | `user/logic/role.js`（`USER:ROLE:{role}` + `user.role.set/list/get/assign`，assign 物化到内部用户） | v1 实现 |
-| 外部主体**实体** + 认证 + 铸票 | `user/logic/passport.js`（`USER:PASSPORT:{anchor}` 实体含 `app` + `user.passport.register/list(by app)/get/disable/verify`，role 从统一角色读）+ `library/passport.js` | v1 实现 |
-| 方法墙 + owner 谓词转发 | Router（`checkAccess` + `forward.js:39` 转发 `permit.constraints`） | ✅ 零改动复用 |
-| 行隔离 | v1：`apps/collection`（payment.record/list/get 按 `req.constraints.$owner` 自 scope）；通用版：`library/entity.js` + `entities.js` 声明 | v1 窄实现 / 通用版后续 |
+| **角色实体(RBAC)** | `user/logic/role.js`（`USER:ROLE:{role}` + `user.role.set/list/get/assign`，assign 物化到内部用户） | ✅ 已实现 |
+| 外部主体**实体** + 认证 + 铸票 | `user/logic/passport.js`（`USER:PASSPORT:{anchor}` 实体含 `app`/`bot` + `register/list/get/disable/verify/otp.request/otp.verify/device.issue/upgrade`）+ `user/logic/anchors.js`（保留名防撞）+ `library/passport.js` | ✅ 已实现 |
+| 方法墙 + owner 谓词转发 | Router（`checkAccess` + `forward.js` 转发 `permit.constraints` + `tasks.js` 异步任务透传） | ✅ 零改动复用 |
+| 行隔离 | 通用层：`library/entity.js`（`requestContext(req)` + `walContext` 自动盖戳/过滤/校验）；自定义路径：`apps/collection`、`apps/storage` | ✅ 已全面实现 |
 | 撤销 | `USER:SESSIONS:{anchor}` + `bot.js#revoke` 风格；`disable` 翻 status + 吊销 session | 复用 |
 | **管理 UI** | `portal/operator` → `PassportManagement` 页 + 固定路由 `/passport`（与内部 user/bot 的 portal/system 隔离） | v1 实现 |
 | 测试 | e2e `68-external-isolation` + `69-roles`（assign 物化）+ `70-operator-tier`（tier 门禁契约 + 两轴独立）；单元 `user/tests/role.test.js` + `passport.test.js` | v1 |
