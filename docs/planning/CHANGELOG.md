@@ -13,6 +13,32 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
+## [v1.3.4] — 2026-11-09
+
+### 🟢 下游自建原语回流收敛（`user` / `storage` / `nexus` / `gateway`）、存储按资产可见性签名与 `v1.3.3` 安全反馈闭环（`../feedback/done/steward-remaining-bypasses-convergence.md`、`../feedback/done/storage-visibility-logger-redaction-and-entity-ownable.md`、`../feedback/done/solo-v1.3.3-security-feedback.md`）
+
+- **`core/user` 密码重置、自助登出与受控代理授权（`api/core/user/`）**：
+  - 新增 `user.password.reset`（`{ uid, salt, hash }`）：支持管理员、用户本人或持有 `user.password.reset` 显式授权的非管理员代理调用（禁止非管理员重置管理员或 Bot 账号），原子更新客户端派生 `salt`+`hash`、清空 `devices` 信任指纹并调用 `killSessions(uid)` 吊销全部活跃会话。
+  - 新增 `user.session.logout`（`{ all?, token? }`）：面向任意已登录会话开放，支持单 Token 注销（`logoutSession`）或 `all: true` 全会话吊销（`killSessions`）。
+  - 为 `user.account.list`、`user.account.update`、`user.role.assign` 开放基于 `permit.services.user` 的受控代理调用，并在逻辑层拦截非管理员修改管理员账号、设置 `categories.POWER = 'admin'` 或分配含 `setting.*` / `admin.*` / `user.permit.*` / `user.bot.*` 的高权角色。
+- **`apps/storage` 按资产 `visibility` 动态签名、预签名直传与 TTL 自动清理（`api/apps/storage/`、`deploy/local-oss.js`）**：
+  - **按资产 `visibility` 签名与字节级门禁**：`driver.resolveUrl` 对 `visibility !== 'public'`（`private` / `internal`）的资产与缩略图强制返回带过期时间的签名 URL（即便全局 `STORAGE_ACCESS=public`）；`local-oss-server` 在 `.meta/<key>.json` 持久化 `visibility` 并拒绝非 `public` 对象的无签名 `GET`/`HEAD`；`deploy/local-oss.js` 默认 `publicRead: false` 并在生产环境强制要求 `LOCAL_OSS_SECRET`。
+  - **大文件预签名直传（`storage.asset.presign` + `storage.asset.commit`）**：支持上限 `128MB` 的预签名直传票据（若内容 SHA-256 已在库则直接返回 `alreadyExists: true` 实现 CAS 秒传），客户端直传 OSS 后由 `commit` 在 `withContentLock` 内校验字节大小与 SHA-256 并落盘资产元数据。
+  - **临时资产 TTL 自动清理与代理删除**：`upload` / `presign` 支持 `ttlSec` 与 `delegateDelete`，`get` 执行惰性过期拦截，新增 `storage.asset.reap` 与后台定时清理器；`storage.thumbnail.rebuild` 补齐管理员/资产所有者鉴权门禁。
+- **`core/nexus` `call_method` 轻量定时动作与服务 Bot 命名空间自治（`api/core/nexus/`）**：
+  - `nexus.schedule` 新增 `action.kind = 'call_method'`（`{ kind: 'call_method', method, params }`），到期后由 `scheduler` 直接调用 `relay.call(method, { ...params, idempotency_key: triggerId })`，免去单步定时任务绕道 `orchestrator` 的开销（同步闭环 `../feedback/done/cron-to-service-no-light-path.md`）。
+  - 向无租户约束的 `system.<svc>` 服务 Bot 开放 `nexus.schedule.{create,get,list,update,delete}`，强制限定 `owner === 'system.<svc>'`、`schedule_id` 前缀 `<svc>:` / `<svc>.` / `<svc>-` 且 `call_method` 目标方法在 `<svc>.*` 命名空间内。
+- **`core/gateway` `gateway.imap.*` 加密凭据托管与安全拉信提取、邮件附件归属校验（`api/core/gateway/`）**：
+  - 新增 `gateway.imap.{create,get,list,update,delete,test,poll}`：基于 `EntityFactory`（`sensitiveFields: ['pass']`）实现密码 `AES-256-GCM` 静态加密与 `$owner` 行级隔离，默认强制 `port: 993` 隐式 TLS、SSRF 防护、单账号 Redis 互斥锁、RFC 5322 / MIME / RFC 2047 解析、验证码正则提取及附件自动转存 `storage`。
+  - `gateway.email.send` 拉取附件时透传调用方 `callerCtx`，严格校验 `private` 资产归属与多租户 `internal` 边界，并对外部资产关闭 loopback 豁免。
+- **`apps/fulfillment` 与 `api/library/` 底座增强**：
+  - `fulfillment.instance.create` 改用 `INCR FULFILLMENT:SEQ:${date}` + `SET NX` 重试环防碰撞；`reap` 与后台 `reaperTimer` 完整保留租户 `_ownerScope`；`fulfillment.instance.cancel` 支持在 `ASSIST_REQUIRED` 等正交挂起态下直接取消并清空 `suspension`。
+  - 新增 `library/ssrf.js` 统一拦截 CGNAT（`100.64.0.0/10`，含阿里云元数据 `100.100.100.200` 与 Tailscale 网段）、IPv6 ULA/mapped 及 DNS 重绑定；`library/logger.js` 扩展复合驼峰凭据键脱敏、递归深度上限提升至 `6` 并截断 Base64/Blob 大字段；`library/entity.js` `EntityFactory` 新增 `ownable: false` 公共字典模式；同时完成 `fulfillment.md` v1.6.0 与 11 份核心协议文档对齐。
+
+下游 action：无。全部改动向后兼容；需要将自建会话/密码重置、大文件直传、轻量定时 RPC、IMAP 验证码拉信、公共字典实体或正交挂起态取消收敛回底座的消费方（如 Steward）升级至 `v1.3.4` 即可直接使用。
+
+---
+
 ## [v1.3.3] — 2026-11-07
 
 ### 🟢 `fulfillment` 五项 RPA 协同原语、`gateway` ↔ `ingress` 跨箱直连与 `run-3` 安全审计加固（`../feedback/done/security-audit-run3.md`）
