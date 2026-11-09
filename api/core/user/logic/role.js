@@ -90,12 +90,31 @@ module.exports = (redisClient, config) => {
     // NOTE: this is the RBAC axis — it sets `user.role` (the assigned role) + `user.permit`.
     // It deliberately does NOT touch `categories.POWER` — that is the separate TIER axis
     // (admin/operator/normal) that gates portal access (portal/operator login) + session policy.
-    async function assign({ uid, role } = {}) {
+    const HIGH_PRIV_USER_RE = /^(\*|user\.(?:permit|bot)\..*|user\.role\.set|user\.account\.destroy|user\.token\.revoke)$/;
+
+    function isHighPrivilegeRoleDoc(roleDoc) {
+        const svcMap = (roleDoc && roleDoc.services) || {};
+        if (svcMap['*'] || svcMap.setting || svcMap.administrator || svcMap.admin) return true;
+        if (Array.isArray(svcMap.user) && svcMap.user.some((m) => HIGH_PRIV_USER_RE.test(String(m)))) {
+            return true;
+        }
+        return false;
+    }
+
+    async function assign({ uid, role } = {}, callerCtx = {}) {
         if (!uid || !role) throw jsonrpc.MISSING_PARAM('uid/role');
+        const isDelegatedNonAdmin = callerCtx && callerCtx.isAdmin === false;
+        const roleDoc = await get({ role });
+        if (isDelegatedNonAdmin && isHighPrivilegeRoleDoc(roleDoc)) {
+            throw jsonrpc.FORBIDDEN('Non-admin caller cannot assign a role containing administrative or privilege-escalation permissions');
+        }
         const permit = await resolve(role, uid);   // ownerField (if any) scoped to the user
         const { optimisticUpdate } = require('../../../library/optimistic');
         const updated = await optimisticUpdate(redisClient, userKey(uid), (u) => {
             if (u.status === 'DELETED') throw jsonrpc.FORBIDDEN('Cannot assign role to deleted account');
+            if (isDelegatedNonAdmin && (u.permit === 'admin' || u.permit?.allow_all || u.role === 'admin' || u.categories?.POWER === 'admin')) {
+                throw jsonrpc.FORBIDDEN('Non-admin caller cannot modify an admin account role');
+            }
             u.permit = permit;
             u.role = role;
             return u;

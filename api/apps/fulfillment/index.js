@@ -75,8 +75,9 @@ function extractCallbackToken(req) {
                         if (relay && res && Array.isArray(res._tasks)) {
                             for (const t of res._tasks) {
                                 if (t && t.method) {
-                                    relay.call(t.method, t.params || {})
-                                        .catch((e) => logger.warn(`background reap task ${t.method} failed: ${e.message}`));
+                                    walContext.run({ uid: 'system:reaper', owner: t._owner || null }, () =>
+                                        relay.call(t.method, t.params || {})
+                                    ).catch((e) => logger.warn(`background reap task ${t.method} failed: ${e.message}`));
                                 }
                             }
                         }

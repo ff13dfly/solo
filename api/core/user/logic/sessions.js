@@ -70,5 +70,27 @@ module.exports = (redisClient, config) => {
         return revoked;
     }
 
-    return { sessionKey, userSessionsKey, persistSession, pruneIndex, killSessions };
+    /**
+     * Kill a single live session token belonging to `uid`, removing both the
+     * `session:<token>` key and its entry in `USER:SESSIONS:<uid>`.
+     */
+    async function logoutSession(uid, token) {
+        if (!uid || !token || typeof token !== 'string') return 0;
+        const sKey = sessionKey(token);
+        const raw = await redisClient.get(sKey);
+        if (raw) {
+            try {
+                const parsed = JSON.parse(raw);
+                const ownerUid = parsed.uid || parsed.id || parsed.user || parsed.anchor;
+                if (ownerUid && ownerUid !== uid) {
+                    return 0;
+                }
+            } catch (_) { /* ignore malformed */ }
+        }
+        const removed = await redisClient.del(sKey);
+        await redisClient.sRem(userSessionsKey(uid), token);
+        return Number(removed) > 0 ? 1 : 0;
+    }
+
+    return { sessionKey, userSessionsKey, persistSession, pruneIndex, killSessions, logoutSession };
 };

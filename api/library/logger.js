@@ -45,14 +45,46 @@ let _currentIndexDir = null;
 // ERROR:QUEUE for triage — mask the secret-looking keys so a credential never lands in the
 // error log (the protocol's "params 等同明文密码" concern). Over-masking the error queue is
 // harmless. Exported so any other param-logging site can reuse the same denylist.
-const SENSITIVE_KEY_RE = /^(device_?token|password|passwd|pwd|pass|secret|client_?secret|webhook_?secret|token|access_?token|refresh_?token|callback_?token|api_?key|private_?key|encpriv|sign_?key|signing_?key|otp|challenge|response|signature|authorization|cookie|salt|hash|proof)$/i;
+const SENSITIVE_KEY_EXACT_RE = /^(pwd|pass|otp|pin|cvv|salt|hash|proof|token|challenge|response|signature|encpriv)$/i;
+const SENSITIVE_KEY_SUBSTR_RE = /(password|passwd|passphrase|secret|private_?key|signing_?key|sign_?key|api_?key|access_?token|refresh_?token|callback_?token|device_?token|session_?token|auth_?token|bearer_?token|bot_?token|client_?secret|webhook_?secret|sealed_?inputs?|ciphertext|enc_?key|authorization|cookie|credential)/i;
+const SENSITIVE_KEY_CAMEL_RE = /(?:Pass|Pwd|Token|Secret|Salt|Hash|Otp|Pin|Cvv|Proof|Signature)$/;
+const BLOB_KEY_RE = /(data_?url|base64|file_?bytes|raw_?bytes)$/i;
+const DATA_URL_BASE64_RE = /^data:[^;]{1,128};base64,/i;
+const MAX_STRING_LOG_LENGTH = 4096;
+const MAX_BLOB_FIELD_LENGTH = 256;
+const MAX_REDACT_DEPTH = 6;
 
-function redactSensitive(value, depth = 0) {
-    if (value === null || typeof value !== 'object' || depth > 4) return value;
-    if (Array.isArray(value)) return value.map((v) => redactSensitive(v, depth + 1));
+function isSensitiveKey(k) {
+    const key = String(k || '');
+    return (
+        SENSITIVE_KEY_EXACT_RE.test(key) ||
+        SENSITIVE_KEY_SUBSTR_RE.test(key) ||
+        SENSITIVE_KEY_CAMEL_RE.test(key)
+    );
+}
+
+function truncateStringValue(v, key = '') {
+    if (typeof v !== 'string') return v;
+    if (DATA_URL_BASE64_RE.test(v)) {
+        return `[TRUNCATED len=${v.length}]`;
+    }
+    if (BLOB_KEY_RE.test(String(key || '')) && v.length > MAX_BLOB_FIELD_LENGTH) {
+        return `[TRUNCATED len=${v.length}]`;
+    }
+    if (v.length > MAX_STRING_LOG_LENGTH) {
+        return `[TRUNCATED len=${v.length}]`;
+    }
+    return v;
+}
+
+function redactSensitive(value, depth = 0, parentKey = '') {
+    if (typeof value === 'string') return truncateStringValue(value, parentKey);
+    if (value === null || typeof value !== 'object') return value;
+    if (depth > MAX_REDACT_DEPTH) return '[MAX_DEPTH]';
+    if (Array.isArray(value)) return value.map((v) => redactSensitive(v, depth + 1, parentKey));
     const out = {};
     for (const [k, v] of Object.entries(value)) {
-        out[k] = SENSITIVE_KEY_RE.test(k) ? '***' : redactSensitive(v, depth + 1);
+        out[k] = isSensitiveKey(k) ? '***' : redactSensitive(v, depth + 1, k);
     }
     return out;
 }

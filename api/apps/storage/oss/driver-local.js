@@ -117,10 +117,15 @@ function createLocalDriver(cfg = {}) {
     return {
         async put(key, body, opts = {}) {
             const buf = Buffer.isBuffer(body) ? body : Buffer.from(body);
+            const extraHeaders = {};
+            if (opts.meta && opts.meta.visibility) {
+                extraHeaders['X-Oss-Meta-Visibility'] = String(opts.meta.visibility);
+            }
             const r = await httpRequest(objectUrl(key), {
                 method: 'PUT',
                 headers: {
                     ...authHeaders,
+                    ...extraHeaders,
                     'Content-Type': opts.contentType || 'application/octet-stream',
                     'Content-Length': buf.length,
                 },

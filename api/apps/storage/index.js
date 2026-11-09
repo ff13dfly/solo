@@ -45,6 +45,15 @@ async function bootstrap() {
     // Initialize Logic
     const logic = createLogic(redisClient, { config });
 
+    if (config.storage && config.storage.reapIntervalMs > 0) {
+        const reapTimer = setInterval(() => {
+            logic.asset.reap({}, { user: 'system.storage', permit: 'admin' })
+                .catch((err) => logger.warn(`background asset TTL reap failed: ${err.message}`));
+        }, config.storage.reapIntervalMs);
+        if (typeof reapTimer.unref === 'function') reapTimer.unref();
+        process.once('SIGTERM', () => clearInterval(reapTimer));
+    }
+
     // Middleware
     app.use(cors(corsOptionsFromEnv()));
 
@@ -171,13 +180,16 @@ async function bootstrap() {
                     'ping': () => ({ status: 'ok', uptime: process.uptime(), version: config.version }),
                     'methods': () => ({ methods: introspectionMethods, description: config.description || {} }),
                     'storage.asset.upload': (p) => logic.asset.upload(p, ctx),
+                    'storage.asset.presign': (p) => logic.asset.presign(p, ctx),
+                    'storage.asset.commit': (p) => logic.asset.commit(p, ctx),
                     'storage.asset.external': (p) => logic.asset.external(p, ctx),
                     'storage.asset.list': (p) => logic.asset.list(p, ctx),
                     'storage.asset.get': (p) => logic.asset.get(p, ctx),
                     'storage.asset.resolve': (p) => logic.asset.resolve(p, ctx),
                     'storage.asset.delete': (p) => logic.asset.delete(p, ctx),
+                    'storage.asset.reap': (p) => logic.asset.reap(p, ctx),
                     'storage.asset.multi': (p) => logic.asset.multiResolve(p, ctx),
-                    'storage.thumbnail.rebuild': (p) => logic.asset.thumbnailRebuild(p),
+                    'storage.thumbnail.rebuild': (p) => logic.asset.thumbnailRebuild(p, ctx),
 
                     // --- Standard Entity Management ---
                     'entities': () => require('./handlers/entities'),

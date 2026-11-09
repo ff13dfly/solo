@@ -17,5 +17,6 @@ module.exports = createAuthHandlers(config, {
         'user.register',
         'user.login.request',
         'user.login.verify',
+        'user.session.logout',
     ],
 });

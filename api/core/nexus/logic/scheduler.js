@@ -71,6 +71,14 @@ module.exports = (redis, { config, relay, control = null }) => {
                 payload: action.payload || {},
             });
             logger.info('scheduler.emit_event', { schedule_id, stream: action.stream, triggerId });
+        } else if (action.kind === 'call_method') {
+            const baseParams = (action.params && typeof action.params === 'object') ? action.params : {};
+            const rpcParams = {
+                ...baseParams,
+                idempotency_key: baseParams.idempotency_key || triggerId,
+            };
+            await relay.call(action.method, rpcParams);
+            logger.info('scheduler.call_method', { schedule_id, method: action.method, triggerId });
         } else {
             logger.warn('scheduler.unknown_action_kind', { schedule_id, kind: action.kind });
         }

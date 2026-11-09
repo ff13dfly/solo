@@ -132,11 +132,55 @@ app.post('/jsonrpc', async (req, res) => {
         const isAdmin = req.permit === 'admin';
         const context = { isAdmin, user: req.user };
 
+        function extractBearerToken() {
+            const auth = req.headers && req.headers['authorization'];
+            if (typeof auth === 'string' && /^(?:Bearer|ApiKey)\s+/i.test(auth)) {
+                return auth.replace(/^(?:Bearer|ApiKey)\s+/i, '').trim();
+            }
+            if (req.headers && typeof req.headers['x-admin-token'] === 'string') {
+                return req.headers['x-admin-token'].trim();
+            }
+            return null;
+        }
+
+        async function assertAdminOrDelegated(targetMethod) {
+            if (isAdmin) return;
+            const callerUid = req.user;
+            if (!callerUid || callerUid === 'anonymous' || req.constraints?.$owner) {
+                throw jsonrpc.UNAUTHORIZED();
+            }
+            const isBot = typeof callerUid === 'string' && callerUid.startsWith('system.');
+            const key = isBot
+                ? `${config.redis.bot.prefix}${callerUid}`
+                : `${config.redis.userPrefix}${callerUid}`;
+            const raw = await redisClient.get(key);
+            if (!raw) throw jsonrpc.UNAUTHORIZED();
+            const doc = JSON.parse(raw);
+            if (doc.status === 'DELETED' || doc.status === 'SUSPENDED') throw jsonrpc.UNAUTHORIZED();
+            const svcList = doc.permit && doc.permit.services && doc.permit.services.user;
+            if (doc.permit?.allow_all === true) return;
+            if (Array.isArray(svcList) && (svcList.includes('*') || svcList.includes(targetMethod))) {
+                return;
+            }
+            throw jsonrpc.UNAUTHORIZED();
+        }
+
         try {
             const handlers = {
                 'user.register': (p) => Methods.user.register(p),
                 'user.login.request': (p) => Methods.user.loginRequest(p),
                 'user.login.verify': (p) => Methods.user.loginVerify(p),
+                'user.session.logout': (p) => {
+                    if (!req.user || req.user === 'anonymous') throw jsonrpc.UNAUTHORIZED();
+                    return Methods.user.sessionLogout(p, { user: req.user, token: extractBearerToken() });
+                },
+                'user.password.reset': async (p) => {
+                    const isSelf = Boolean(req.user && req.user !== 'anonymous' && !req.constraints?.$owner && req.user === p?.uid);
+                    if (!isAdmin && !isSelf) {
+                        await assertAdminOrDelegated('user.password.reset');
+                    }
+                    return Methods.user.passwordReset(p, { isAdmin, user: req.user });
+                },
                 'user.profile': async (p) => {
                     const isSystemBot = typeof req.user === 'string' && req.user.startsWith('system.');
                     if (!isAdmin && req.user !== p?.uid && !isSystemBot) throw jsonrpc.UNAUTHORIZED();
@@ -147,8 +191,8 @@ app.post('/jsonrpc', async (req, res) => {
                     }
                     return prof;
                 },
-                'user.account.list': (p) => {
-                    if (!isAdmin) throw jsonrpc.UNAUTHORIZED();
+                'user.account.list': async (p) => {
+                    await assertAdminOrDelegated('user.account.list');
                     return Methods.user.list(p);
                 },
                 'user.permit.update': (p) => {
@@ -167,9 +211,9 @@ app.post('/jsonrpc', async (req, res) => {
                     return Methods.user.batchPermits(p);
                 },
                 'user.account.status': () => Methods.user.stats(),
-                'user.account.update': (p) => {
-                    if (!isAdmin) throw jsonrpc.UNAUTHORIZED();
-                    return Methods.user.update(p);
+                'user.account.update': async (p) => {
+                    await assertAdminOrDelegated('user.account.update');
+                    return Methods.user.update(p, { isAdmin, user: req.user });
                 },
                 'user.account.remove': (p) => {
                     if (!isAdmin) throw jsonrpc.UNAUTHORIZED();
@@ -243,9 +287,9 @@ app.post('/jsonrpc', async (req, res) => {
                 },
                 'user.role.list':   () => Methods.role.list(),
                 'user.role.get':    (p) => Methods.role.get(p),
-                'user.role.assign': (p) => {
-                    if (!isAdmin) throw jsonrpc.UNAUTHORIZED();
-                    return Methods.role.assign(p);
+                'user.role.assign': async (p) => {
+                    await assertAdminOrDelegated('user.role.assign');
+                    return Methods.role.assign(p, { isAdmin, user: req.user });
                 },   // materialize role's permit onto an internal user
 
                 // ── External principals (passport) — manageable entity + bridge (authority.md) ──

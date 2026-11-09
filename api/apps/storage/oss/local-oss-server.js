@@ -233,15 +233,26 @@ function createLocalOssServer(opts = {}) {
             fs.mkdirSync(path.dirname(abs), { recursive: true });
             fs.writeFileSync(abs, buf);
             const etag = `"${crypto.createHash('md5').update(buf).digest('hex')}"`;
-            writeMeta(key, { contentType: ct, size: buf.length, etag });
+            const prevMeta = readMeta(key);
+            const reqVis = req.headers['x-oss-meta-visibility']
+                ? String(req.headers['x-oss-meta-visibility']).trim().toLowerCase()
+                : null;
+            const visibility = (prevMeta && prevMeta.visibility === 'public') || reqVis === 'public'
+                ? 'public'
+                : (reqVis || (prevMeta && prevMeta.visibility) || null);
+            writeMeta(key, { contentType: ct, size: buf.length, etag, ...(visibility ? { visibility } : {}) });
             return res.status(200).json({ key, etag, size: buf.length });
         }
 
         if (req.method === 'HEAD') {
-            if (!authed && !checkSigned('GET', '') && !publicRead) return sendErr(res, 403, 'AccessDenied');
+            const signedOrAuthed = authed || checkSigned('GET', '');
+            if (!signedOrAuthed && !publicRead) return sendErr(res, 403, 'AccessDenied');
             if (!fs.existsSync(abs)) return res.status(404).end();
             const st = fs.statSync(abs);
             const meta = readMeta(key);
+            if (!signedOrAuthed && meta && meta.visibility && meta.visibility !== 'public') {
+                return sendErr(res, 403, 'AccessDenied');
+            }
             const ct = (meta && meta.contentType) || mimeFromExt(key);
             res.setHeader('Content-Length', st.size);
             res.setHeader('Content-Type', ct);
@@ -255,10 +266,14 @@ function createLocalOssServer(opts = {}) {
         }
 
         if (req.method === 'GET') {
-            if (!authed && !checkSigned('GET', '') && !publicRead) return sendErr(res, 403, 'AccessDenied');
+            const signedOrAuthed = authed || checkSigned('GET', '');
+            if (!signedOrAuthed && !publicRead) return sendErr(res, 403, 'AccessDenied');
             if (!fs.existsSync(abs)) return sendErr(res, 404, 'NoSuchKey');
-            let buf = fs.readFileSync(abs);
             const meta = readMeta(key);
+            if (!signedOrAuthed && meta && meta.visibility && meta.visibility !== 'public') {
+                return sendErr(res, 403, 'AccessDenied');
+            }
+            let buf = fs.readFileSync(abs);
             let ct = (meta && meta.contentType) || mimeFromExt(key);
             if (processVal && processVal.startsWith('image/')) {
                 try {

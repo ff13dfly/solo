@@ -11,6 +11,7 @@ const { resolvePaging } = require('../../../library/pagination');
 const { createLogger } = require('../../../library/logger');
 const clock = require('../../../library/clock');
 const { keyFor, thumbKeyFor } = require('../oss/keying');
+const { isInternalOrReservedHost: sharedIsInternalOrReservedHost } = require('../../../library/ssrf');
 
 let sharp;
 try { sharp = require('sharp'); } catch (_) { sharp = null; }
@@ -208,20 +209,7 @@ module.exports = (redisClient, config, store) => {
             const mappedDot = h.match(/^(?:::ffff:|(?:0+:){5}ffff:)(\d+\.\d+\.\d+\.\d+)$/);
             if (mappedDot) h = mappedDot[1];
         }
-        if (h === 'localhost' || h.endsWith('.localhost') || h === 'metadata.google.internal') return true;
-        if (h === '::1' || h === '::' || /^(?:0+:){7}0*[01]$/.test(h) || /^fe[89ab][0-9a-f]:/.test(h) || /^f[cd][0-9a-f]{2}:/.test(h)) return true;
-        if (
-            /^127\./.test(h) ||
-            /^0\./.test(h) ||
-            /^169\.254\./.test(h) ||
-            h === '100.100.100.200' ||
-            /^10\./.test(h) ||
-            /^192\.168\./.test(h) ||
-            /^172\.(1[6-9]|2\d|3[0-1])\./.test(h)
-        ) {
-            return true;
-        }
-        return false;
+        return sharedIsInternalOrReservedHost(h);
     }
 
     function effectiveUser(ctx) {
@@ -234,9 +222,21 @@ module.exports = (redisClient, config, store) => {
         return Boolean(ctx && ctx.owner && ctx.owner.value !== undefined && ctx.owner.value !== null);
     }
 
+    function isSystemBot(ctx) {
+        return Boolean(ctx && typeof ctx.user === 'string' && ctx.user.startsWith('system.') && !isScopedExternal(ctx));
+    }
+
+    function isExpired(meta) {
+        if (!meta || !meta.expiresAt) return false;
+        const expMs = new Date(meta.expiresAt).getTime();
+        return Number.isFinite(expMs) && expMs <= clock.now();
+    }
+
     function canRead(meta, ctx) {
+        if (isExpired(meta)) return false;
         if (ctx === undefined) return true;
         if (ctx && ctx.permit === 'admin' && !isScopedExternal(ctx)) return true;
+        if (isSystemBot(ctx)) return true;
         const vis = meta.visibility || 'internal';
         if (vis === 'public') return true;
         const user = effectiveUser(ctx);
@@ -250,7 +250,9 @@ module.exports = (redisClient, config, store) => {
     function canDelete(meta, ctx) {
         if (ctx === undefined) return true;
         if (ctx && ctx.permit === 'admin' && !isScopedExternal(ctx)) return true;
+        if (isSystemBot(ctx)) return true;
         const user = effectiveUser(ctx);
+        if (user && meta.delegateDelete && user === meta.delegateDelete) return true;
         return !!(user && meta.owner && user === meta.owner);
     }
 
@@ -259,7 +261,7 @@ module.exports = (redisClient, config, store) => {
     }
 
     // --- list() helpers ---------------------------------------------------------
-    const decorate = (meta) => ({ ...meta, url: urlFor(meta), thumbnails: thumbnailsMapFor(meta.sha256, meta.mimeType) });
+    const decorate = (meta) => ({ ...meta, url: urlFor(meta), thumbnails: thumbnailsMapFor(meta.sha256, meta.mimeType, meta.visibility) });
 
     async function mgetMetas(ids) {
         if (!ids.length) return [];
@@ -384,11 +386,12 @@ module.exports = (redisClient, config, store) => {
     const isImage = (mt) => (mt || '').startsWith('image/');
     const thumbLabels = () => Object.keys(thumbSizes);
 
-    function thumbnailsMapFor(sha256, mimeType) {
+    function thumbnailsMapFor(sha256, mimeType, visibility) {
         if (!sha256) return undefined;   // external placeholder — no bytes, no derivatives
         if (thumbMode !== 'pregenerate' || !isImage(mimeType)) return undefined;
+        const visOpts = visibility ? { visibility } : { visibility: 'internal' };
         const map = {};
-        for (const label of thumbLabels()) map[label] = store.resolveUrl(thumbKeyFor(sha256, label));
+        for (const label of thumbLabels()) map[label] = store.resolveUrl(thumbKeyFor(sha256, label), visOpts);
         return map;
     }
 
@@ -399,13 +402,14 @@ module.exports = (redisClient, config, store) => {
         // through the JSON-RPC plane). No thumbnails either; there is nothing to derive
         // them from, so a size hint is ignored rather than answered with a broken URL.
         if (meta.kind === EXTERNAL_KIND) return meta.externalUrl || null;
+        const visOpts = { visibility: meta.visibility || 'internal' };
         if (size && thumbMode === 'pregenerate' && isImage(meta.mimeType) && thumbSizes[size]) {
-            return store.resolveUrl(thumbKeyFor(meta.sha256, size));
+            return store.resolveUrl(thumbKeyFor(meta.sha256, size), visOpts);
         }
-        return store.resolveUrl(objectKeyOf(meta));
+        return store.resolveUrl(objectKeyOf(meta), visOpts);
     }
 
-    async function generateThumbnails(buffer, sha256, mimeType) {
+    async function generateThumbnails(buffer, sha256, mimeType, visibility = 'internal') {
         if (thumbMode !== 'pregenerate' || !sharp || !isImage(mimeType)) return;
         const quality = await cfg.get('thumbnails.quality');
         for (const [label, px] of Object.entries(thumbSizes)) {
@@ -414,18 +418,88 @@ module.exports = (redisClient, config, store) => {
                     .resize(px, px, { fit: 'inside', withoutEnlargement: true })
                     .jpeg({ quality })
                     .toBuffer();
-                await store.put(thumbKeyFor(sha256, label), buf, { contentType: 'image/jpeg' });
+                await store.put(thumbKeyFor(sha256, label), buf, { contentType: 'image/jpeg', meta: { visibility } });
             } catch (e) {
                 logger.warn(`[Storage] thumbnail '${label}' failed for ${sha256}: ${e.message}`);
             }
         }
     }
 
+    const expiresSortedSet = (config.redis && config.redis.assetExpiresSortedSet) || 'STORAGE:ASSETS:EXPIRES';
+    const ticketPrefix = (config.redis && config.redis.uploadTicketPrefix) || 'STORAGE:TICKET:';
+    const maxDirectBytes = (config.storage && config.storage.maxDirectBytes) || 128 * 1024 * 1024;
+
+    function validateTtlSec(ttlSec) {
+        if (ttlSec === undefined || ttlSec === null) return null;
+        const n = Number(ttlSec);
+        if (!Number.isFinite(n) || n <= 0 || n > 31536000) {
+            throw jsonrpc.INVALID_PARAM('ttlSec must be a positive number of seconds (max 31536000)');
+        }
+        return Math.round(n);
+    }
+
+    async function mintAndIndexAsset({ filename, mimeType, sha256, size, key, owner, vis, ttlSecVal, delegateDelete }) {
+        let assetId;
+        let success = false;
+        let attempts = 0;
+        const maxAttempts = 10;
+        const assetPrefix = config.redis.assetPrefix;
+
+        while (!success && attempts < maxAttempts) {
+            assetId = generator.generateId(config.idLengths.asset);
+            const result = await redisClient.set(`${assetPrefix}${assetId}`, JSON.stringify({}), { NX: true });
+            if (result === 'OK' || result === true) success = true;
+            else attempts++;
+        }
+
+        if (!success) throw jsonrpc.INTERNAL_ERROR(`Failed to generate unique assetId after ${maxAttempts} attempts`);
+
+        const nowMs = clock.now();
+        const createdAtIso = new Date(nowMs).toISOString();
+        const expiresAtMs = ttlSecVal ? (nowMs + ttlSecVal * 1000) : null;
+
+        const metadata = {
+            id: assetId,
+            originalName: filename || 'unnamed',
+            mimeType: mimeType || 'application/octet-stream',
+            sha256,
+            size,
+            key,
+            path: key, // kept for back-compat with consumers reading `path`
+            owner,                 // toFix §6.4 — who uploaded (UID string, null = unowned/legacy)
+            visibility: vis,       // 'public' | 'internal' | 'private'
+            ...(delegateDelete ? { delegateDelete: String(delegateDelete) } : {}),
+            ...(expiresAtMs ? { expiresAt: new Date(expiresAtMs).toISOString() } : {}),
+            createdAt: createdAtIso
+        };
+
+        const multi = redisClient.multi();
+        multi.set(`${assetPrefix}${assetId}`, JSON.stringify(metadata));
+        multi.zAdd(config.redis.assetIdSortedSet, { score: nowMs, value: assetId });
+        multi.set(`${config.redis.sha256Prefix}${sha256}`, assetId);
+
+        if (owner) {
+            multi.zAdd(`${config.redis.assetByOwnerPrefix}${owner}`, { score: nowMs, value: assetId });
+        }
+        if (vis === 'public') {
+            multi.zAdd(config.redis.assetPublicSortedSet, { score: nowMs, value: assetId });
+        } else if (vis === 'internal') {
+            multi.zAdd(config.redis.assetInternalSortedSet, { score: nowMs, value: assetId });
+        }
+        if (expiresAtMs) {
+            multi.zAdd(expiresSortedSet, { score: expiresAtMs, value: assetId });
+        }
+        multi.incr(`${config.redis.sha256RefcountPrefix}${sha256}`);
+        await multi.exec();
+
+        return { ...metadata, url: urlFor(metadata), thumbnails: thumbnailsMapFor(sha256, metadata.mimeType, vis) };
+    }
+
     return {
         /**
          * upload — hash, dedup, persist bytes to the provider, generate thumbnails.
          */
-        async upload({ file, filename, mimeType, visibility }, ctx) {
+        async upload({ file, filename, mimeType, visibility, ttlSec, delegateDelete }, ctx) {
             const buffer = Buffer.from(file, 'base64');
 
             // toFix §6.4 — ownership + visibility recorded at birth.
@@ -434,6 +508,7 @@ module.exports = (redisClient, config, store) => {
             if (!VISIBILITIES.includes(vis)) {
                 throw jsonrpc.INVALID_PARAMS(`visibility must be one of: ${VISIBILITIES.join(', ')}`);
             }
+            const ttlSecVal = validateTtlSec(ttlSec);
 
             // 1. Calculate SHA256 in Worker
             const { sha256 } = await runTask('HASH', { buffer });
@@ -445,92 +520,172 @@ module.exports = (redisClient, config, store) => {
             // delete's purge — and each other — without it. See withContentLock's @why.
             return withContentLock(sha256, async () => {
                 // 2. Fast dedup via Redis sha256 index (O(1)).
-                // Owner-aware (toFix §6.4): the byte-level CAS dedup still applies (same
-                // object key), but the metadata record is only reused for the SAME owner —
-                // otherwise user B uploading user A's bytes would inherit A's record and
-                // visibility. Different owner → fall through and mint a fresh record over
-                // the shared bytes (delete's sha256 refcount already handles N records).
                 const existingId = await redisClient.get(`${config.redis.sha256Prefix}${sha256}`);
-                if (existingId) {
+                if (existingId && !ttlSecVal) {
                     const raw = await redisClient.get(`${config.redis.assetPrefix}${existingId}`);
                     if (raw) {
                         const meta = JSON.parse(raw);
-                        if ((meta.owner || null) === owner) {
-                            // Heal thumbnails in the background if they might be missing
+                        if ((meta.owner || null) === owner && !isExpired(meta) && (meta.visibility || 'internal') === vis) {
                             if (thumbMode === 'pregenerate' && isImage(mimeType || meta.mimeType)) {
-                                generateThumbnails(buffer, sha256, mimeType || meta.mimeType).catch(() => {});
+                                generateThumbnails(buffer, sha256, mimeType || meta.mimeType, vis).catch(() => {});
                             }
-                            return { ...meta, url: urlFor(meta), thumbnails: thumbnailsMapFor(meta.sha256, meta.mimeType) };
+                            return { ...meta, url: urlFor(meta), thumbnails: thumbnailsMapFor(meta.sha256, meta.mimeType, meta.visibility) };
                         }
                     }
                 }
 
                 // 3. Persist bytes to the object store (content-addressed key → idempotent)
-                if (!(await store.exists(key))) {
-                    await store.put(key, buffer, { contentType: mimeType || 'application/octet-stream' });
+                if (!(await store.exists(key)) || vis === 'public') {
+                    await store.put(key, buffer, { contentType: mimeType || 'application/octet-stream', meta: { visibility: vis } });
                 }
 
                 // 4. Pre-generate thumbnails (awaited so the returned URLs resolve immediately)
-                await generateThumbnails(buffer, sha256, mimeType);
+                await generateThumbnails(buffer, sha256, mimeType, vis);
 
-                // 5. Generate System Asset ID
-                let assetId;
-                let success = false;
-                let attempts = 0;
-                const maxAttempts = 10;
-                const assetPrefix = config.redis.assetPrefix;
-
-                while (!success && attempts < maxAttempts) {
-                    assetId = generator.generateId(config.idLengths.asset);
-                    const result = await redisClient.set(`${assetPrefix}${assetId}`, JSON.stringify({}), { NX: true });
-                    if (result === 'OK' || result === true) success = true;
-                    else attempts++;
-                }
-
-                if (!success) throw jsonrpc.INTERNAL_ERROR(`Failed to generate unique assetId after ${maxAttempts} attempts`);
-
-                const metadata = {
-                    id: assetId,
-                    originalName: filename || 'unnamed',
-                    mimeType: mimeType || 'application/octet-stream',
+                // 5 & 6. Generate System Asset ID and persist metadata + indexes + refcount
+                return mintAndIndexAsset({
+                    filename,
+                    mimeType,
                     sha256,
                     size: buffer.length,
                     key,
-                    path: key, // kept for back-compat with consumers reading `path`
-                    owner,                 // toFix §6.4 — who uploaded (UID string, null = unowned/legacy)
-                    visibility: vis,       // 'public' | 'internal' | 'private'
-                    createdAt: new Date().toISOString()
-                };
+                    owner,
+                    vis,
+                    ttlSecVal,
+                    delegateDelete,
+                });
+            });
+        },
 
-                // 6. Metadata + every index + the content refcount in ONE transaction.
-                // @why These were sequential awaits before; a crash midway could leave a
-                //      record whose refcount was never counted, and a later delete of a
-                //      sibling record would then purge bytes this record still references.
-                //      With MULTI the record and all its bookkeeping land atomically — a
-                //      crash before EXEC leaves at worst orphan bytes in the object store
-                //      (adopted by the next upload of the same content), the safe direction.
-                const createdAtMs = new Date(metadata.createdAt).getTime();
-                const multi = redisClient.multi();
-                multi.set(`${assetPrefix}${assetId}`, JSON.stringify(metadata));
-                multi.zAdd(config.redis.assetIdSortedSet, { score: createdAtMs, value: assetId });
-                multi.set(`${config.redis.sha256Prefix}${sha256}`, assetId);
+        /**
+         * presign — issue a short-lived direct-upload ticket + presigned PUT URL (or CAS instant dedup).
+         */
+        async presign({ filename, mimeType, size, sha256, visibility, ttlSec, delegateDelete } = {}, ctx) {
+            if (!sha256 || typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(sha256)) {
+                throw jsonrpc.INVALID_PARAM('sha256 must be a 64-character lowercase hex string');
+            }
+            const cleanSha = sha256.toLowerCase();
+            const numSize = Number(size);
+            if (!Number.isInteger(numSize) || numSize <= 0 || numSize > maxDirectBytes) {
+                throw jsonrpc.INVALID_PARAM(`size must be a positive integer <= ${maxDirectBytes}`);
+            }
+            const vis = visibility || (config.storage && config.storage.defaultVisibility) || 'internal';
+            if (!VISIBILITIES.includes(vis)) {
+                throw jsonrpc.INVALID_PARAMS(`visibility must be one of: ${VISIBILITIES.join(', ')}`);
+            }
+            const ttlSecVal = validateTtlSec(ttlSec);
+            const owner = effectiveUser(ctx);
+            const ext = filename ? path.extname(filename) : '';
+            const key = keyFor(cleanSha, ext);
+            const contentType = mimeType || 'application/octet-stream';
 
-                // Visibility-scoped indexes (list()'s fast path below) — maintained
-                // unconditionally for every new upload; legacy assets get these via
-                // deploy/migrate-storage-index.js.
-                if (owner) {
-                    multi.zAdd(`${config.redis.assetByOwnerPrefix}${owner}`, { score: createdAtMs, value: assetId });
+            const alreadyExists = Boolean(await store.exists(key));
+            let uploadUrl = null;
+            if (!alreadyExists) {
+                if (typeof store.presignPut !== 'function') {
+                    throw jsonrpc.INTERNAL_ERROR('Configured storage provider does not support presignPut');
                 }
-                if (vis === 'public') {
-                    multi.zAdd(config.redis.assetPublicSortedSet, { score: createdAtMs, value: assetId });
-                } else if (vis === 'internal') {
-                    multi.zAdd(config.redis.assetInternalSortedSet, { score: createdAtMs, value: assetId });
-                }
-                // Content-hash refcount — delete()'s O(1) "can I purge the bytes" check.
-                multi.incr(`${config.redis.sha256RefcountPrefix}${sha256}`);
-                await multi.exec();
+                const signed = store.presignPut(key, { expires: 1800, contentType });
+                uploadUrl = signed && signed.uploadUrl ? signed.uploadUrl : null;
+            }
 
-                return { ...metadata, url: urlFor(metadata), thumbnails: thumbnailsMapFor(sha256, metadata.mimeType) };
+            const ticket = generator.generateId(24);
+            const nowMs = clock.now();
+            const expiresAtMs = nowMs + 1800 * 1000;
+            const ticketRecord = {
+                ticket,
+                sha256: cleanSha,
+                size: numSize,
+                filename: filename || 'unnamed',
+                mimeType: contentType,
+                visibility: vis,
+                ttlSec: ttlSecVal,
+                delegateDelete: delegateDelete ? String(delegateDelete) : null,
+                key,
+                owner,
+                createdAt: nowMs,
+                expiresAt: expiresAtMs,
+            };
+            await redisClient.set(`${ticketPrefix}${ticket}`, JSON.stringify(ticketRecord), { EX: 1800 });
+
+            return {
+                ticket,
+                alreadyExists,
+                uploadUrl,
+                key,
+                contentType,
+                expiresAt: new Date(expiresAtMs).toISOString(),
+            };
+        },
+
+        /**
+         * commit — verify uploaded bytes against the presigned ticket and create the asset record.
+         */
+        async commit({ ticket } = {}, ctx) {
+            if (!ticket || typeof ticket !== 'string') {
+                throw jsonrpc.INVALID_PARAM('ticket is required');
+            }
+            const tKey = `${ticketPrefix}${ticket}`;
+            const raw = await redisClient.get(tKey);
+            if (!raw) {
+                throw jsonrpc.INVALID_PARAM('Invalid, expired, or already committed upload ticket');
+            }
+            const ticketData = JSON.parse(raw);
+            if (ticketData.expiresAt && ticketData.expiresAt <= clock.now()) {
+                await redisClient.del(tKey);
+                throw jsonrpc.INVALID_PARAM('Upload ticket has expired');
+            }
+
+            const caller = effectiveUser(ctx);
+            const isAdmin = ctx === undefined || (ctx && ctx.permit === 'admin' && !isScopedExternal(ctx));
+            if (!isAdmin && (ticketData.owner || null) !== (caller || null)) {
+                throw jsonrpc.FORBIDDEN('Cannot commit another principal\'s upload ticket');
+            }
+
+            const removed = await redisClient.del(tKey);
+            if (!removed) {
+                throw jsonrpc.INVALID_PARAM('Upload ticket was already committed');
+            }
+
+            const { sha256, size, filename, mimeType, visibility: vis, ttlSec: ttlSecVal, delegateDelete, key, owner } = ticketData;
+
+            return withContentLock(sha256, async () => {
+                let obj;
+                try {
+                    obj = await store.get(key);
+                } catch (_) {
+                    obj = null;
+                }
+                if (!obj || !Buffer.isBuffer(obj.content)) {
+                    throw jsonrpc.INVALID_PARAM('Object bytes not found in store for ticket');
+                }
+                const buffer = obj.content;
+                const { sha256: actualSha } = await runTask('HASH', { buffer });
+                if (buffer.length !== size || actualSha !== sha256) {
+                    const refcountKey = `${config.redis.sha256RefcountPrefix}${sha256}`;
+                    if (!(await redisClient.exists(refcountKey)) && typeof store.delete === 'function') {
+                        await store.delete(key).catch(() => {});
+                    }
+                    throw jsonrpc.INVALID_PARAM('Uploaded object size or sha256 does not match presigned ticket');
+                }
+
+                if (vis === 'public' && typeof store.put === 'function') {
+                    await store.put(key, buffer, { contentType: mimeType, meta: { visibility: 'public' } });
+                }
+
+                await generateThumbnails(buffer, sha256, mimeType, vis);
+
+                return mintAndIndexAsset({
+                    filename,
+                    mimeType,
+                    sha256,
+                    size: buffer.length,
+                    key,
+                    owner,
+                    vis,
+                    ttlSecVal,
+                    delegateDelete,
+                });
             });
         },
 
@@ -567,6 +722,10 @@ module.exports = (redisClient, config, store) => {
             const data = await redisClient.get(`${config.redis.assetPrefix}${id}`);
             if (!data) throw jsonrpc.ASSET_NOT_FOUND();
             const meta = JSON.parse(data);
+            if (isExpired(meta)) {
+                this.delete({ id }).catch(() => {});
+                throw jsonrpc.ASSET_NOT_FOUND();
+            }
             assertRead(meta, ctx);   // toFix §6.4 — visibility/owner gate at the perimeter
             return meta;
         },
@@ -692,6 +851,7 @@ module.exports = (redisClient, config, store) => {
                 const removed = await redisClient.del(`${config.redis.assetPrefix}${id}`);
                 if (!removed) throw jsonrpc.ASSET_NOT_FOUND();
                 await redisClient.zRem(config.redis.assetIdSortedSet, id);
+                await redisClient.zRem(expiresSortedSet, id);
                 if (meta.owner) await redisClient.zRem(`${config.redis.assetByOwnerPrefix}${meta.owner}`, id);
                 if (meta.visibility === 'public') await redisClient.zRem(config.redis.assetPublicSortedSet, id);
                 else if (meta.visibility === 'internal') await redisClient.zRem(config.redis.assetInternalSortedSet, id);
@@ -743,10 +903,56 @@ module.exports = (redisClient, config, store) => {
         },
 
         /**
+         * reap — sweep and purge expired TTL assets (admin or unscoped system.* bot).
+         */
+        async reap({ limit = 100 } = {}, ctx) {
+            if (ctx !== undefined) {
+                const isAdmin = Boolean(ctx && ctx.permit === 'admin' && !isScopedExternal(ctx));
+                if (!isAdmin && !isSystemBot(ctx)) {
+                    throw jsonrpc.UNAUTHORIZED('Only admin or system.* bot can reap expired assets');
+                }
+            }
+            const maxItems = Math.max(1, Math.min(Number(limit) || 100, 1000));
+            const nowMs = clock.now();
+            const expiredIds = await redisClient.zRange(expiresSortedSet, '-inf', String(nowMs), {
+                BY: 'SCORE',
+                LIMIT: { offset: 0, count: maxItems },
+            });
+            const reaped = [];
+            for (const id of expiredIds || []) {
+                try {
+                    await this.delete({ id });
+                    reaped.push(id);
+                } catch (_) {
+                    await redisClient.zRem(expiresSortedSet, id).catch(() => {});
+                }
+            }
+            return { scanned: (expiredIds || []).length, reaped: reaped.length, ids: reaped };
+        },
+
+        /**
          * thumbnailRebuild — regenerate thumbnails for image assets from the stored
          *                    original (read back from the provider).
          */
-        async thumbnailRebuild({ force = false, id } = {}) {
+        async thumbnailRebuild({ force = false, id } = {}, ctx) {
+            if (ctx !== undefined) {
+                const isAdmin = Boolean(ctx && ctx.permit === 'admin' && !isScopedExternal(ctx));
+                if (!id) {
+                    if (!isAdmin) {
+                        throw jsonrpc.UNAUTHORIZED('Full thumbnail rebuild requires admin privilege');
+                    }
+                } else if (!isAdmin) {
+                    const rawTarget = await redisClient.get(`${config.redis.assetPrefix}${id}`);
+                    if (!rawTarget) {
+                        if (!effectiveUser(ctx)) throw jsonrpc.UNAUTHORIZED();
+                    } else {
+                        const targetMeta = JSON.parse(rawTarget);
+                        if (!canDelete(targetMeta, ctx)) {
+                            throw jsonrpc.UNAUTHORIZED('Only the asset owner or an admin can rebuild thumbnails for this asset');
+                        }
+                    }
+                }
+            }
             if (!sharp) throw jsonrpc.INTERNAL_ERROR('sharp is not installed on this server');
             if (thumbMode !== 'pregenerate') throw jsonrpc.INTERNAL_ERROR(`thumbnailRebuild requires storage.thumbnails.mode='pregenerate' (current: '${thumbMode}')`);
 
@@ -783,7 +989,7 @@ module.exports = (redisClient, config, store) => {
                             .resize(px, px, { fit: 'inside', withoutEnlargement: true })
                             .jpeg({ quality })
                             .toBuffer();
-                        await store.put(thumbKey, buf, { contentType: 'image/jpeg' });
+                        await store.put(thumbKey, buf, { contentType: 'image/jpeg', meta: { visibility: meta.visibility || 'internal' } });
                         anyGenerated = true;
                     } catch (err) {
                         failed++;

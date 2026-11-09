@@ -175,5 +175,7 @@ module.exports = {
         '<rootDir>/library/tests/redis-scan-contract.test.js',
         // SOLO Bridge v1 端到端契约测试：gateway.webhook.send(target:'solo') → ingress.ingest（2026-11-07）
         '<rootDir>/core/gateway/tests/solo-bridge.test.js',
+        // v1.3.3 安全反馈与 Steward 越界自建逻辑收敛回归套件（2026-11-09）
+        '<rootDir>/library/tests/feedback-v133-convergence.test.js',
     ],
 };

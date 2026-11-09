@@ -20,7 +20,7 @@ function stripSensitiveMeta(raw, depth = 0) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || depth > 8) return {};
     const copy = {};
     for (const [k, v] of Object.entries(raw)) {
-        if (PROTO_KEYS.has(k) || sensitiveFields.includes(k) || SENSITIVE_META_KEY_RE.test(k)) continue;
+        if (PROTO_KEYS.has(k) || k.startsWith('_') || sensitiveFields.includes(k) || SENSITIVE_META_KEY_RE.test(k)) continue;
         copy[k] = (v && typeof v === 'object' && !Array.isArray(v))
             ? stripSensitiveMeta(v, depth + 1)
             : v;
@@ -190,7 +190,7 @@ module.exports = (redis, config, relay = null) => {
                     const ttlSpec = profile.stateTtls && profile.stateTtls[fromState];
                     if (!ttlSpec || ttlSpec.event !== event) {
                         throw jsonrpc.INVALID_PARAM(
-                            `Instance ${id} is suspended in "${fromState}" and must be resumed before transitioning`
+                            `Instance ${id} is suspended in "${fromState}" and must be resumed before transitioning (call fulfillment.instance.resume to continue or fulfillment.instance.cancel to terminate)`
                         );
                     }
                 }
@@ -199,9 +199,20 @@ module.exports = (redis, config, relay = null) => {
                 logicData = buildLogicData(current, mergedMeta, req);
 
                 // Candidates share (event, from); they may differ by condition (branching).
-                const candidates = (profile.transitions || []).filter(
-                    t => t.event === event && t.from === fromState
+                let candidates = (profile.transitions || []).filter(
+                    t => t.event === event && (t.from === fromState || t.from === '*')
                 );
+                if (candidates.length === 0 && current.suspension && event === 'cancel_requested') {
+                    const blockedState = current.suspension.blockedState;
+                    if (blockedState) {
+                        candidates = (profile.transitions || []).filter(
+                            t => t.event === 'cancel_requested' && t.from === blockedState
+                        );
+                    }
+                    if (candidates.length === 0) {
+                        candidates = [{ from: fromState, to: 'CANCELLED', event: 'cancel_requested', actions: [] }];
+                    }
+                }
                 if (candidates.length === 0) {
                     throw jsonrpc.INVALID_PARAM(
                         `Event "${event}" not defined from state "${fromState}" in profile ${current.profileId}`
@@ -344,12 +355,22 @@ module.exports = (redis, config, relay = null) => {
 
                 const now = clock.now();
                 const date = new Date(now).toISOString().slice(0, 10).replace(/-/g, '');
-                const suffix = Math.floor(Math.random() * 9000 + 1000);
-                const instanceId = `FL-${date}-${suffix}`;
+                const seqKey = `FULFILLMENT:SEQ:${date}`;
+                let baseSuffix;
+                if (typeof redis.incr === 'function') {
+                    const seq = await redis.incr(seqKey);
+                    if (seq === 1 && typeof redis.expire === 'function') {
+                        await redis.expire(seqKey, 172800).catch(() => {});
+                    }
+                    baseSuffix = String(seq).padStart(4, '0');
+                } else {
+                    baseSuffix = String(Math.floor(Math.random() * 9000 + 1000));
+                }
+                let instanceId = `FL-${date}-${baseSuffix}`;
                 const safeMeta = stripSensitiveMeta(meta);
 
-                const instance = {
-                    id:                instanceId,
+                const buildInstance = (idVal) => ({
+                    id:                idVal,
                     sourceId,
                     profileId,
                     state:             'DRAFT',
@@ -357,30 +378,46 @@ module.exports = (redis, config, relay = null) => {
                     stateChangedAt:    now,
                     createdAt:         now,
                     createdBy:         req?.user || null,
-                    ...(owner && owner.field ? { [owner.field]: owner.value } : {}),
+                    ...(owner && owner.field ? { [owner.field]: owner.value, _ownerScope: { field: owner.field, value: owner.value } } : {}),
                     meta:              safeMeta,
                     pending_callbacks: [],
                     history: [{
                         state: 'DRAFT',
                         event: null,
-                        transition_id: `${instanceId}-T0`,
+                        transition_id: `${idVal}-T0`,
                         reason: 'CREATED',
                         user: req?.user || null,
                         stamp: now,
                     }]
-                };
+                });
+
+                let instance = buildInstance(instanceId);
+                let created = false;
+                for (let attempt = 0; attempt < 10; attempt++) {
+                    const ok = await redis.set(getInstanceKey(instanceId), JSON.stringify(instance), { NX: true });
+                    if (ok) {
+                        created = true;
+                        break;
+                    }
+                    const randTail = crypto.randomBytes(2).toString('hex').toUpperCase();
+                    instanceId = `FL-${date}-${baseSuffix}${randTail}`;
+                    instance = buildInstance(instanceId);
+                }
+                if (!created) {
+                    throw jsonrpc.INTERNAL_ERROR('Failed to allocate unique fulfillment instance ID after 10 attempts');
+                }
 
                 if (idempotent) {
                     const claimed = await redis.set(srcKey, instanceId, { NX: true });
                     if (!claimed) {
                         const winnerId = await redis.get(srcKey);
-                        if (winnerId) {
+                        if (winnerId && winnerId !== instanceId) {
+                            await redis.del(getInstanceKey(instanceId));
                             const winnerRaw = await redis.get(getInstanceKey(winnerId));
                             if (winnerRaw) return { ...JSON.parse(winnerRaw), deduplicated: true };
                         }
                     }
                 }
-                await redis.set(getInstanceKey(instanceId), JSON.stringify(instance));
                 await redis.sAdd(INDEX, instanceId);
                 if (!idempotent) {
                     await redis.set(srcKey, instanceId, { NX: true });
@@ -440,14 +477,17 @@ module.exports = (redis, config, relay = null) => {
 
         /**
          * fulfillment.instance.cancel — business-semantic cancel. Writes the reason
-         * to meta and fires the profile's `cancel_requested` event (which must be
-         * defined as a transition from the current state).
+         * to meta and fires the profile's `cancel_requested` event (or terminates directly
+         * to CANCELLED when the instance is parked in an orthogonal suspended state).
          */
-        async cancel({ id, reason, notifyCustomer = false }, req) {
+        async cancel({ id, reason, notifyCustomer = false, metaUpdate, meta, expectedTransitionId = null } = {}, req) {
             if (!reason) throw jsonrpc.MISSING_PARAM('reason');
+            const extraMeta = stripSensitiveMeta(metaUpdate ?? meta ?? {});
             return advance({
-                id, event: 'cancel_requested',
-                metaUpdate: { cancel_reason: reason, notify_customer: !!notifyCustomer }
+                id,
+                event: 'cancel_requested',
+                metaUpdate: { ...extraMeta, cancel_reason: reason, notify_customer: !!notifyCustomer },
+                expectedTransitionId,
             }, req);
         },
 
@@ -745,13 +785,18 @@ module.exports = (redis, config, relay = null) => {
 
                 try {
                     const expectedTid = inst.history.at(-1)?.transition_id ?? null;
+                    const instOwner = owner || (inst._ownerScope && inst._ownerScope.field ? inst._ownerScope : null);
+                    const baseReq = req || { user: 'system:reaper', permit: 'admin' };
+                    const effectiveReq = instOwner
+                        ? { ...baseReq, constraints: { ...(baseReq.constraints || {}), $owner: instOwner } }
+                        : baseReq;
                     const res = await advance({
                         id:                   inst.id,
                         event:                spec.event,
                         reason:               spec.reason || `state TTL exceeded (${spec.ttlMs}ms)`,
                         metaUpdate:           { timed_out_from: inst.state, timed_out_at: now, timed_out_age_ms: ageMs },
                         expectedTransitionId: expectedTid,
-                    }, req || { user: 'system:reaper', permit: 'admin' });
+                    }, effectiveReq);
                     reaped.push({
                         id:           inst.id,
                         profileId:    inst.profileId,
@@ -761,7 +806,9 @@ module.exports = (redis, config, relay = null) => {
                         transitionId: res.history.at(-1)?.transition_id || null,
                     });
                     if (Array.isArray(res._tasks) && res._tasks.length > 0) {
-                        reapedTasks.push(...res._tasks);
+                        for (const t of res._tasks) {
+                            reapedTasks.push(instOwner ? { ...t, _owner: instOwner } : t);
+                        }
                     }
                 } catch (err) {
                     skipped.push({ id: inst.id, reason: err && err.message ? err.message : String(err) });

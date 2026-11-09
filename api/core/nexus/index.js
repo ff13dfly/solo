@@ -151,16 +151,33 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 'nexus.control.resume': async () => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.control.resume(); },
                 'nexus.control.status': async () => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.control.status(); },
 
-                // event.md §6.2 / §11.2 — schedule CRUD (admin-only, nexus management area)
-                'nexus.schedule.create': async (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.schedule.create(p); },
-                'nexus.schedule.get':    async (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.schedule.get(p && p.schedule_id); },
-                'nexus.schedule.list':   async ()  => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.schedule.list(); },
-                'nexus.schedule.update': async (p) => {
-                    if (!isAdmin) throw jsonrpc.UNAUTHORIZED();
-                    const { schedule_id, ...changes } = p || {};
-                    return Methods.schedule.update(schedule_id, changes);
+                // event.md §6.2 / §11.2 — schedule CRUD (admin or namespace-scoped service bot)
+                'nexus.schedule.create': async (p) => {
+                    const isServiceBot = Boolean(typeof req.user === 'string' && req.user.startsWith('system.') && !req.constraints?.$owner);
+                    if (!isAdmin && !isServiceBot) throw jsonrpc.UNAUTHORIZED();
+                    return Methods.schedule.create(p, { isAdmin, user: req.user || null, owner: req.constraints?.$owner || null });
                 },
-                'nexus.schedule.delete': async (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.schedule.delete(p && p.schedule_id); },
+                'nexus.schedule.get': async (p) => {
+                    const isServiceBot = Boolean(typeof req.user === 'string' && req.user.startsWith('system.') && !req.constraints?.$owner);
+                    if (!isAdmin && !isServiceBot) throw jsonrpc.UNAUTHORIZED();
+                    return Methods.schedule.get(p && p.schedule_id, { isAdmin, user: req.user || null, owner: req.constraints?.$owner || null });
+                },
+                'nexus.schedule.list': async () => {
+                    const isServiceBot = Boolean(typeof req.user === 'string' && req.user.startsWith('system.') && !req.constraints?.$owner);
+                    if (!isAdmin && !isServiceBot) throw jsonrpc.UNAUTHORIZED();
+                    return Methods.schedule.list({ isAdmin, user: req.user || null, owner: req.constraints?.$owner || null });
+                },
+                'nexus.schedule.update': async (p) => {
+                    const isServiceBot = Boolean(typeof req.user === 'string' && req.user.startsWith('system.') && !req.constraints?.$owner);
+                    if (!isAdmin && !isServiceBot) throw jsonrpc.UNAUTHORIZED();
+                    const { schedule_id, ...changes } = p || {};
+                    return Methods.schedule.update(schedule_id, changes, { isAdmin, user: req.user || null, owner: req.constraints?.$owner || null });
+                },
+                'nexus.schedule.delete': async (p) => {
+                    const isServiceBot = Boolean(typeof req.user === 'string' && req.user.startsWith('system.') && !req.constraints?.$owner);
+                    if (!isAdmin && !isServiceBot) throw jsonrpc.UNAUTHORIZED();
+                    return Methods.schedule.delete(p && p.schedule_id, { isAdmin, user: req.user || null, owner: req.constraints?.$owner || null });
+                },
 
                 // context.md §7.3 — dead-letter inspection / retry (admin-only).
                 'nexus.dlq.list':  async (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.dlq.list(p); },

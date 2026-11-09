@@ -57,8 +57,8 @@ function createStorageProvider(storageConfig = {}, deps = {}) {
         // security promise, hence the hard stop in private mode.
         if (local.isDevSecret) {
             const msg = 'storage.local.secret is still the shipped dev default — set LOCAL_OSS_SECRET to a per-project random value (openssl rand -hex 24)';
-            if ((storageConfig.access || 'private') === 'private') {
-                throw new Error(`[storage] ${msg}. Refusing to start: STORAGE_ACCESS=private promises unforgeable signed urls, and a public secret makes that promise false.`);
+            if ((storageConfig.access || 'private') === 'private' || process.env.NODE_ENV === 'production') {
+                throw new Error(`[storage] ${msg}. Refusing to start: STORAGE_ACCESS=private or NODE_ENV=production promises unforgeable signed urls, and a public secret makes that promise false.`);
             }
             const warn = (deps.logger && typeof deps.logger.warn === 'function')
                 ? deps.logger.warn.bind(deps.logger) : console.warn;
@@ -104,6 +104,9 @@ function createStorageProvider(storageConfig = {}, deps = {}) {
      *   combination explicit. See docs/feedback/done/storage-visibility-semantics.md.
      */
     driver.resolveUrl = (key, opts = {}) => {
+        if (opts && opts.visibility && opts.visibility !== 'public') {
+            return driver.presignGet(key, opts);
+        }
         if (driver.access === 'public' && driver.capabilities().publicUrl) {
             return driver.publicUrl(key, opts);
         }

@@ -126,6 +126,15 @@ app.post('/jsonrpc', async (req, res) => {
             'gateway.smtp.delete': (p) => Methods.smtp.delete(p),
             'gateway.smtp.test':   (p) => Methods.smtp.test(p),
 
+            // IMAP
+            'gateway.imap.create': (p) => Methods.imap.create(p),
+            'gateway.imap.get':    (p) => Methods.imap.get(p),
+            'gateway.imap.list':   (p) => Methods.imap.list(p),
+            'gateway.imap.update': (p) => Methods.imap.update(p),
+            'gateway.imap.delete': (p) => Methods.imap.delete(p),
+            'gateway.imap.test':   (p) => Methods.imap.test(p),
+            'gateway.imap.poll':   (p) => Methods.imap.poll(p),
+
             // Email Templates
             'gateway.email.template.create': (p) => Methods.email.template.create(p),
             'gateway.email.template.get':    (p) => Methods.email.template.get(p),
@@ -134,7 +143,11 @@ app.post('/jsonrpc', async (req, res) => {
             'gateway.email.template.delete': (p) => Methods.email.template.delete(p),
 
             // Email Send
-            'gateway.email.send': (p) => Methods.email.send(p),
+            'gateway.email.send': (p) => Methods.email.send(p, {
+                user: req.user || null,
+                permit: req.permit || null,
+                owner: req.constraints?.$owner || null,
+            }),
 
             // SMS Templates
             'gateway.sms.template.create': (p) => Methods.sms.template.create(p),

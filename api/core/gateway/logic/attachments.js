@@ -12,10 +12,12 @@
  *       permanent to the notification worker, so no retry storm against a deployment
  *       that simply hasn't provisioned the bot.
  */
+const { isInternalOrReservedHost: sharedIsInternalOrReservedHost, assertPublicHostname } = require('../../../library/ssrf');
+
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;   // total across all attachments
 const DEFAULT_MAX_COUNT = 10;
 
-function isBlockedAttachmentHost(hostname) {
+function isBlockedAttachmentHost(hostname, { allowLoopback = true } = {}) {
     if (!hostname || typeof hostname !== 'string') return true;
     let h = hostname.trim().replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
     if (!h) return true;
@@ -28,12 +30,25 @@ function isBlockedAttachmentHost(hostname) {
         const mappedDot = h.match(/^(?:::ffff:|(?:0+:){5}ffff:)(\d+\.\d+\.\d+\.\d+)$/);
         if (mappedDot) h = mappedDot[1];
     }
-    if (h === 'metadata.google.internal' || h === '100.100.100.200' || /^169\.254\./.test(h)) return true;
-    if (/^fe[89ab][0-9a-f]:/.test(h) || /^f[cd][0-9a-f]{2}:/.test(h)) return true;
-    return false;
+    return sharedIsInternalOrReservedHost(h, { allowLoopback });
 }
 
-async function downloadCapped(url, remainingBytes) {
+function canCallerReadAsset(meta, callerCtx) {
+    if (!callerCtx || !meta) return true;
+    const isScopedExternal = Boolean(callerCtx.owner && callerCtx.owner.value !== undefined && callerCtx.owner.value !== null);
+    if (callerCtx.permit === 'admin' && !isScopedExternal) return true;
+    if (typeof callerCtx.user === 'string' && callerCtx.user.startsWith('system.') && !isScopedExternal) return true;
+    const vis = meta.visibility || 'internal';
+    if (vis === 'public') return true;
+    const effectiveUser = isScopedExternal ? String(callerCtx.owner.value) : (callerCtx.user || null);
+    if (vis === 'internal') {
+        if (isScopedExternal) return Boolean(effectiveUser && meta.owner && effectiveUser === meta.owner);
+        return Boolean(effectiveUser);
+    }
+    return Boolean(effectiveUser && meta.owner && effectiveUser === meta.owner);
+}
+
+async function downloadCapped(url, remainingBytes, { isExternal = false } = {}) {
     let parsed;
     try {
         parsed = new URL(url);
@@ -43,8 +58,17 @@ async function downloadCapped(url, remainingBytes) {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
         throw new Error(`attachment download refused: unsupported protocol "${parsed.protocol}"`);
     }
-    if (isBlockedAttachmentHost(parsed.hostname)) {
+    const allowLoopback = !isExternal || process.env.GATEWAY_ALLOW_LOCAL_ATTACHMENTS === '1';
+    if (isBlockedAttachmentHost(parsed.hostname, { allowLoopback })) {
         throw new Error(`attachment download refused: internal/metadata host "${parsed.hostname}" is not allowed`);
+    }
+    try {
+        await assertPublicHostname(parsed.hostname, { allowLoopback });
+    } catch (e) {
+        if (e && e.code === 'SSRF_BLOCKED') {
+            throw new Error(`attachment download refused: internal/metadata host "${parsed.hostname}" is not allowed (${e.message})`);
+        }
+        throw e;
     }
     const res = await fetch(url, { redirect: 'error' });
     if (!res.ok) throw new Error(`attachment download failed: HTTP ${res.status}`);
@@ -78,7 +102,7 @@ async function downloadCapped(url, remainingBytes) {
  * @param opts    { maxBytes?, maxCount? }
  * @returns [{ filename, contentType, content:Buffer }]
  */
-async function fetchAttachments(relay, items, { maxBytes = DEFAULT_MAX_BYTES, maxCount = DEFAULT_MAX_COUNT } = {}) {
+async function fetchAttachments(relay, items, { maxBytes = DEFAULT_MAX_BYTES, maxCount = DEFAULT_MAX_COUNT, callerCtx = null } = {}) {
     if (items.length > maxCount) {
         throw new Error(`too many attachments (${items.length} > ${maxCount})`);
     }
@@ -91,16 +115,20 @@ async function fetchAttachments(relay, items, { maxBytes = DEFAULT_MAX_BYTES, ma
             throw new Error(`attachments[] items must be { assetId, filename? } (storage references — raw base64 is not accepted)`);
         }
         // Metadata first (filename/mimeType), then the byte URL. Both via the relay bot,
-        // so Router checkAccess + storage's own visibility rules apply to THIS caller's
-        // deployment-granted permit, not to the original uploader.
+        // PLUS callerCtx visibility/ownership enforcement so a caller cannot attach
+        // another user/tenant's private or scoped-internal asset via system.gateway.
         const meta = await relay.call('storage.asset.get', { id: assetId });
+        if (meta && !canCallerReadAsset(meta, callerCtx)) {
+            throw new Error(`No access to attachment asset ${assetId} (visibility: ${meta.visibility || 'internal'})`);
+        }
         const { url } = await relay.call('storage.asset.resolve', { id: assetId });
         if (!url) throw new Error(`storage.asset.resolve(${assetId}) returned no url`);
 
-        const content = await downloadCapped(url, budget);
+        const isExternal = Boolean(meta && meta.kind === 'external');
+        const content = await downloadCapped(url, budget, { isExternal });
         budget -= content.length;
         out.push({
-            filename: filename || (meta && meta.filename) || assetId,
+            filename: filename || (meta && (meta.filename || meta.originalName)) || assetId,
             contentType: (meta && meta.mimeType) || 'application/octet-stream',
             content,
         });

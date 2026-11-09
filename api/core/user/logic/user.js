@@ -17,7 +17,15 @@ module.exports = (redisClient, config) => {
     // Session minting + revocation — shared with bot.js (logic/sessions.js). Human logins
     // MUST go through persistSession(): a bare setEx leaves the session out of the
     // USER:SESSIONS index, and anything that revokes by uid then silently misses it.
-    const { persistSession, killSessions } = createSessions(redisClient, config);
+    const { persistSession, killSessions, logoutSession } = createSessions(redisClient, config);
+
+    function isAdminAccount(u) {
+        if (!u || typeof u !== 'object') return false;
+        if (u.permit === 'admin' || (u.permit && u.permit.allow_all === true)) return true;
+        if (u.role === 'admin') return true;
+        if (u.categories && u.categories.POWER === 'admin') return true;
+        return false;
+    }
 
     // Login handles are case/space-insensitive. ONE normaliser for register / loginRequest /
     // loginVerify — verify used to key on the raw name, so request('Ops') stored the challenge
@@ -608,15 +616,23 @@ module.exports = (redisClient, config) => {
      * update
      * @why Generic profile update (language, categories, etc).
      */
-    async update(params) {
+    async update(params, callerCtx = {}) {
         const { uid, categories, ...others } = params;
         if (!uid) throw jsonrpc.MISSING_PARAM('uid');
         if (!validateId(uid, config.idLengths?.user || 16)) throw jsonrpc.INVALID_PARAMS('Invalid ID format');
+
+        const isDelegatedNonAdmin = callerCtx && callerCtx.isAdmin === false;
+        if (isDelegatedNonAdmin && categories && categories.POWER === 'admin') {
+            throw jsonrpc.FORBIDDEN('Non-admin caller cannot grant POWER=admin');
+        }
 
         try {
             // 原子 read-modify-write(WATCH/MULTI 乐观 CAS):并发 meta/categories patch
             // 真正互不覆盖 —— 之前是普通读改写,并发下会丢更新.
             const result = await optimisticUpdate(redisClient, `${config.redis.userPrefix}${uid}`, (userData) => {
+                if (isDelegatedNonAdmin && isAdminAccount(userData) && callerCtx.user !== uid) {
+                    throw jsonrpc.FORBIDDEN('Non-admin caller cannot modify an admin account');
+                }
                 if (categories) {
                     userData.categories = { ...(userData.categories || {}), ...categories };
                 }
@@ -638,6 +654,73 @@ module.exports = (redisClient, config) => {
             console.error(err);
             throw jsonrpc.INTERNAL_ERROR('Storage error');
         }
+    },
+
+    /**
+     * passwordReset
+     * @why Atomically updates a user's client-computed salt + hash, clears device
+     *      fingerprints, and revokes all live sessions (`killSessions(uid)`).
+     */
+    async passwordReset(params = {}, callerCtx = {}) {
+        const { uid, salt, hash } = params;
+        if (!uid) throw jsonrpc.MISSING_PARAM('uid');
+        if (!salt || !hash) {
+            throw jsonrpc.INVALID_PARAMS('password.reset requires client-computed salt + hash');
+        }
+        if (typeof uid === 'string' && uid.startsWith('system.')) {
+            throw jsonrpc.FORBIDDEN('Cannot reset password on a bot account');
+        }
+        if (!validateId(uid, config.idLengths?.user || 16)) {
+            throw jsonrpc.INVALID_PARAMS('Invalid ID format');
+        }
+
+        const isDelegatedNonAdmin = callerCtx && callerCtx.isAdmin === false;
+
+        try {
+            const result = await optimisticUpdate(redisClient, `${config.redis.userPrefix}${uid}`, (userData) => {
+                if (userData.status === STATUS.DELETED) {
+                    throw jsonrpc.ACCOUNT_DELETED();
+                }
+                if (userData.type === 'bot') {
+                    throw jsonrpc.FORBIDDEN('Cannot reset password on a bot account');
+                }
+                if (isDelegatedNonAdmin && callerCtx.user !== uid && isAdminAccount(userData)) {
+                    throw jsonrpc.FORBIDDEN('Non-admin caller cannot reset an admin account password');
+                }
+                userData.salt = salt;
+                userData.hash = hash;
+                userData.devices = {};
+                userData.updatedAt = new Date().toISOString();
+                return userData;
+            });
+            if (result === null) throw jsonrpc.USER_NOT_FOUND();
+            const revoked = await killSessions(uid);
+            return { success: true, uid, revoked };
+        } catch (err) {
+            if (err.code) throw err;
+            throw jsonrpc.INTERNAL_ERROR('Storage error');
+        }
+    },
+
+    /**
+     * sessionLogout
+     * @why Self-service session teardown (`all: false` kills current bearer token;
+     *      `all: true` kills all sessions of the caller via `killSessions(uid)`).
+     */
+    async sessionLogout(params = {}, callerCtx = {}) {
+        const uid = callerCtx && callerCtx.user;
+        if (!uid || uid === 'anonymous') throw jsonrpc.UNAUTHORIZED();
+        const all = Boolean(params && params.all);
+        if (all) {
+            const revoked = await killSessions(uid);
+            return { success: true, uid, revoked };
+        }
+        const token = (callerCtx && callerCtx.token) || (params && params.token) || null;
+        if (!token) {
+            return { success: true, uid, revoked: 0 };
+        }
+        const revoked = await logoutSession(uid, token);
+        return { success: true, uid, revoked };
     },
 
     /**

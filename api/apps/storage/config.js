@@ -52,9 +52,12 @@ module.exports = {
       ],
       methods: {
         "storage.asset.upload": ["upload a new binary asset and get an ID"],
+        "storage.asset.presign": ["issue a presigned direct-upload URL and ticket for large binary assets"],
+        "storage.asset.commit": ["verify and commit a presigned direct-upload ticket into an asset record"],
         "storage.asset.get": ["fetch asset metadata by ID"],
         "storage.asset.resolve": ["resolve asset IDs to accessible URLs"],
-        "storage.asset.delete": ["soft delete an asset by ID"],
+        "storage.asset.delete": ["delete an asset by ID (removes metadata and unreferenced bytes)"],
+        "storage.asset.reap": ["sweep and purge expired TTL assets"],
         "storage.asset.list": ["list all stored assets with pagination"],
         "storage.asset.multi": ["batch fetch multiple assets by ID array"],
         "storage.thumbnail.rebuild": ["rebuild thumbnails for all image assets"]
@@ -68,9 +71,12 @@ module.exports = {
       ],
       methods: {
         "storage.asset.upload": ["上传新的二进制资产并获取 ID"],
+        "storage.asset.presign": ["签发大文件直传预签名 URL 与上传凭证"],
+        "storage.asset.commit": ["校验并提交直传凭证以生成资产记录"],
         "storage.asset.get": ["根据 ID 获取资产元数据"],
         "storage.asset.resolve": ["将资产 ID 解析为可访问的 URL"],
-        "storage.asset.delete": ["软删除指定 ID 的资产"],
+        "storage.asset.delete": ["删除指定 ID 的资产（移除元数据与无引用底层文件）"],
+        "storage.asset.reap": ["扫描并清理已过期的 TTL 临时资产"],
         "storage.asset.list": ["分页列出所有已存储资产"],
         "storage.asset.multi": ["批量根据 ID 数组获取多个资产"],
         "storage.thumbnail.rebuild": ["重建所有图片资产的缩略图"]
@@ -107,7 +113,11 @@ module.exports = {
     // Per-content-hash advisory lock — serializes the upload/delete critical sections
     // that pair a Redis decision with an object-store action (byte-existence check vs
     // purge). Value is a random token, TTL-bounded; see logic/asset.js withContentLock.
-    sha256LockPrefix: 'STORAGE:SHA256:LOCK:'
+    sha256LockPrefix: 'STORAGE:SHA256:LOCK:',
+
+    // Presigned direct-upload tickets (TTL-bounded) & asset TTL expiry index
+    uploadTicketPrefix: 'STORAGE:TICKET:',
+    assetExpiresSortedSet: 'STORAGE:ASSETS:EXPIRES'
   },
 
   // Filesystem
@@ -150,6 +160,8 @@ module.exports = {
     // routeSecret: HMAC secret gating the back-compat /file/:id route for non-public assets.
     defaultVisibility: process.env.STORAGE_DEFAULT_VISIBILITY || 'internal',
     routeSecret: process.env.STORAGE_ROUTE_SECRET || LOCAL_OSS_SECRET,
+    maxDirectBytes: Number(process.env.STORAGE_MAX_DIRECT_BYTES) || 128 * 1024 * 1024,
+    reapIntervalMs: Number(process.env.STORAGE_REAP_INTERVAL_MS || 60000),
     thumbnails: {
       mode: process.env.STORAGE_THUMBNAIL_MODE || 'pregenerate'   // 'pregenerate' | 'off'
     },

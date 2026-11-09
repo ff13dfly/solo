@@ -448,12 +448,30 @@ describe('logger.createLogger.error — redis auto-report gating', () => {
 // redactSensitive() — supplement the existing logger-redact.test.js edge cases
 // ===========================================================================
 describe('logger.redactSensitive — depth + array branches', () => {
-    test('stops recursing past depth 4 (deep secret left intact)', () => {
-        // depth: 0(root)>1>2>3>4>5(here the guard returns value as-is)
-        const deep = { l1: { l2: { l3: { l4: { l5: { token: 'deep-secret' } } } } } };
+    test('redacts up to depth 6 and stops recursing past depth 6', () => {
+        // depth: 0(root)>1>2>3>4>5>6(redacted)>7(guard returns value as-is)
+        const deep = {
+            l1: {
+                l2: {
+                    l3: {
+                        l4: {
+                            l5: {
+                                token: 'depth5-secret',
+                                l6: {
+                                    token: 'depth6-secret',
+                                    l7: { token: 'deep-secret' }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
         const out = redactSensitive(deep);
-        // l5.token sits at depth 5 → returned untouched (NOT masked)
-        expect(out.l1.l2.l3.l4.l5.token).toBe('deep-secret');
+        expect(out.l1.l2.l3.l4.l5.token).toBe('***');
+        expect(out.l1.l2.l3.l4.l5.l6.token).toBe('***');
+        // l7 sits at depth 7 (> MAX_REDACT_DEPTH) → replaced with '[MAX_DEPTH]'
+        expect(out.l1.l2.l3.l4.l5.l6.l7).toBe('[MAX_DEPTH]');
     });
 
     test('arrays of scalars pass through, nested sensitive keys masked', () => {

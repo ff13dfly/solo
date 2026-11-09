@@ -129,11 +129,14 @@ const methods = [
     {
         name: 'fulfillment.instance.cancel',
         params: [
-            { name: 'id',             type: 'string',  required: true,  maxLength: 64,  pattern: 'id', description: 'Instance ID' },
-            { name: 'reason',         type: 'string',  required: true,  maxLength: 512, description: 'Cancellation reason (written to meta.cancel_reason)' },
-            { name: 'notifyCustomer', type: 'boolean', required: false, description: 'Whether to notify the customer' }
+            { name: 'id',                   type: 'string',  required: true,  maxLength: 64,  pattern: 'id', description: 'Instance ID' },
+            { name: 'reason',               type: 'string',  required: true,  maxLength: 512, description: 'Cancellation reason (written to meta.cancel_reason)' },
+            { name: 'notifyCustomer',       type: 'boolean', required: false, description: 'Whether to notify the customer' },
+            { name: 'metaUpdate',           type: 'object',  required: false, description: 'Additional metadata merged into instance.meta upon cancellation' },
+            { name: 'meta',                 type: 'object',  required: false, description: 'Alias for metaUpdate' },
+            { name: 'expectedTransitionId', type: 'string',  required: false, maxLength: 80,  description: 'Optimistic concurrency guard against stale cancel calls' }
         ],
-        description: 'Business-semantic cancel: writes the reason to meta and fires the profile cancel_requested transition.',
+        description: 'Business-semantic cancel: writes the reason to meta and fires the profile cancel_requested transition (or terminates a suspended instance into CANCELLED).',
         returns_schema: INSTANCE_WITH_TASKS,   // advance() → { ...instance, _tasks }
         ai: false
     },

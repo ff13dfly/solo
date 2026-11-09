@@ -51,4 +51,8 @@ schedule 侧 `emit_event` 携带 `{nodeId, kind, payload}`。链路：
 
 ## 处理结论
 
-（待 triage）
+**已核实并修复（2026-11-09）**：
+- 已采纳方案 A，在 `core/nexus`（`api/core/nexus/logic/schedule.js`、`logic/scheduler.js`、`index.js`）正式落地 `action.kind = 'call_method'`：
+  1. `nexus.schedule.create` / `update` 支持 `action: { kind: 'call_method', method: '<service.entity.action>', params: { ... } }`，校验 2~4 段全小写点分 RPC 方法名并拦截 `setting.*`、`administrator.*`、`user.permit.*`、`user.bot.*` 等高权方法；
+  2. `scheduler.js` 到期执行时直接通过 `relay.call(action.method, { ...(action.params || {}), idempotency_key: triggerId })` 触发目标服务 RPC，无需再为单步定时任务绕道 `orchestrator` 建单步 workflow 或在业务进程内手写 `setInterval`；
+  3. 同时向 `system.<svc>` 服务 Bot 开放命名空间受限的 `nexus.schedule.*` 自助注册能力（限定 `<svc>:`/`<svc>.`/`<svc>-` 前缀与 `<svc>.*` 目标方法）。

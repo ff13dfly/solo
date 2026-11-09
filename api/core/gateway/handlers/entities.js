@@ -18,6 +18,25 @@ module.exports = {
         }
     },
 
+    imap: {
+        name: 'imap',
+        description: 'IMAP account configuration for inbound email polling and OTP extraction (pass encrypted at rest)',
+        fields: {
+            id:          { type: 'string',   description: 'Unique identifier', required: true },
+            name:        { type: 'string',   description: 'Display name for this account', required: true },
+            host:        { type: 'string',   description: 'IMAP server hostname (e.g. imap.gmail.com, imap.163.com)', required: true },
+            port:        { type: 'number',   description: 'IMAP server port (default 993 TLS)' },
+            secure:      { type: 'boolean',  description: 'Use implicit TLS (default true)' },
+            user:        { type: 'string',   description: 'Auth username / email address', required: true },
+            mailbox:     { type: 'string',   description: 'Default mailbox folder (default INBOX)' },
+            options:     { type: 'object',   description: 'Optional TLS / timeout settings' },
+            status:      { type: 'enum',     options: ['ACTIVE', 'DELETED'], description: 'Account status' },
+            createdAt:   { type: 'datetime', description: 'Creation timestamp' },
+            updatedAt:   { type: 'datetime', description: 'Last update timestamp' }
+            // pass is intentionally omitted — encrypted at rest, never exposed in UI
+        }
+    },
+
     email_template: {
         name: 'email_template',
         description: 'Email content template with variable interpolation ({{variable}})',

@@ -20,10 +20,14 @@ const path = require('path');
 const { createLocalOssServer } = require('../api/apps/storage/oss/local-oss-server');
 
 const root = process.env.LOCAL_OSS_ROOT || process.env.UPLOAD_DIR || path.join(__dirname, '../uploads/assets');
+if (process.env.NODE_ENV === 'production' && !process.env.LOCAL_OSS_SECRET) {
+    console.error('[local-oss] Refusing to start in production without LOCAL_OSS_SECRET (set a random secret via openssl rand -hex 24)');
+    process.exit(1);
+}
 const secret = process.env.LOCAL_OSS_SECRET || 'solo-local-oss-dev-secret';
 const bucket = process.env.LOCAL_OSS_BUCKET || 'solo';
 const port = Number(process.env.LOCAL_OSS_PORT) || 8755;
-const publicRead = process.env.LOCAL_OSS_PUBLIC_READ !== 'false';
+const publicRead = process.env.LOCAL_OSS_PUBLIC_READ === 'true';
 
 if (!fs.existsSync(root)) fs.mkdirSync(root, { recursive: true });
 

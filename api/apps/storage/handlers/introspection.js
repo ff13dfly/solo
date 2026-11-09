@@ -30,34 +30,47 @@
 // Stored asset metadata shape, reused by get. Only id+sha256 are guaranteed on a raw
 // stored record (legacy rows can be thinner); the rest are typed-but-not-required.
 const ASSET_META = [
-    { name: 'id',           type: 'string', required: true },
-    { name: 'sha256',       type: 'string', required: true },
-    { name: 'originalName', type: 'string' },
-    { name: 'mimeType',     type: 'string' },
-    { name: 'size',         type: 'number' },
-    { name: 'key',          type: 'string' },
-    { name: 'path',         type: 'string' },   // back-compat duplicate of key
-    { name: 'owner',        type: 'string' },   // UID string OR null (unowned/legacy) — not required
-    { name: 'visibility',   type: 'string' },   // 'public' | 'internal' | 'private' (legacy rows may omit)
-    { name: 'createdAt',    type: 'string' },   // ISO-8601 string (not a number)
+    { name: 'id',             type: 'string', required: true },
+    { name: 'sha256',         type: 'string', required: true },
+    { name: 'originalName',   type: 'string' },
+    { name: 'mimeType',       type: 'string' },
+    { name: 'size',           type: 'number' },
+    { name: 'key',            type: 'string' },
+    { name: 'path',           type: 'string' },   // back-compat duplicate of key
+    { name: 'owner',          type: 'string' },   // UID string OR null (unowned/legacy) — not required
+    { name: 'visibility',     type: 'string' },   // 'public' | 'internal' | 'private' (legacy rows may omit)
+    { name: 'delegateDelete', type: 'string' },   // optional UID allowed to delete on behalf of owner
+    { name: 'expiresAt',      type: 'string' },   // optional ISO-8601 expiry timestamp (when uploaded with ttlSec)
+    { name: 'createdAt',      type: 'string' },   // ISO-8601 string (not a number)
 ];
 
 // upload result = freshly-minted (or deduped) metadata, decorated with url/thumbnails.
 // id/sha256/size/url are present on every non-throwing path; the rest are structural
 // metadata always written at birth, but owner is nullable and thumbnails is conditional.
 const ASSET_UPLOAD = [
-    { name: 'id',           type: 'string', required: true },
-    { name: 'sha256',       type: 'string', required: true },
-    { name: 'size',         type: 'number', required: true },
-    { name: 'url',          type: 'string', required: true },   // store.resolveUrl(key) — always a string
-    { name: 'originalName', type: 'string' },
-    { name: 'mimeType',     type: 'string' },
-    { name: 'key',          type: 'string' },
-    { name: 'path',         type: 'string' },
-    { name: 'owner',        type: 'string' },   // null when unowned → typed, not required
-    { name: 'visibility',   type: 'string' },
-    { name: 'createdAt',    type: 'string' },   // ISO-8601 string
-    { name: 'thumbnails',   type: 'object' },   // undefined unless mode='pregenerate' + image → not required
+    { name: 'id',             type: 'string', required: true },
+    { name: 'sha256',         type: 'string', required: true },
+    { name: 'size',           type: 'number', required: true },
+    { name: 'url',            type: 'string', required: true },   // store.resolveUrl(key) — always a string
+    { name: 'originalName',   type: 'string' },
+    { name: 'mimeType',       type: 'string' },
+    { name: 'key',            type: 'string' },
+    { name: 'path',           type: 'string' },
+    { name: 'owner',          type: 'string' },   // null when unowned → typed, not required
+    { name: 'visibility',     type: 'string' },
+    { name: 'delegateDelete', type: 'string' },
+    { name: 'expiresAt',      type: 'string' },
+    { name: 'createdAt',      type: 'string' },   // ISO-8601 string
+    { name: 'thumbnails',     type: 'object' },   // undefined unless mode='pregenerate' + image → not required
+];
+
+const ASSET_PRESIGN = [
+    { name: 'ticket',        type: 'string',  required: true },
+    { name: 'alreadyExists', type: 'boolean', required: true },
+    { name: 'uploadUrl',     type: 'string' },    // null when alreadyExists: true (CAS instant dedup)
+    { name: 'key',           type: 'string',  required: true },
+    { name: 'contentType',   type: 'string',  required: true },
+    { name: 'expiresAt',     type: 'string',  required: true },
 ];
 
 // External placeholder (storage.asset.external): no bytes ⇒ sha256/key/path are null and
@@ -82,13 +95,43 @@ module.exports = [
             { name: 'file', type: 'string', required: true, maxLength: 5242880, desc: 'Base64 encoded file content' },
             { name: 'filename', type: 'string', maxLength: 128, desc: 'Original filename' },
             { name: 'mimeType', type: 'string', maxLength: 64, desc: 'MIME type' },
-            { name: 'visibility', type: 'string', maxLength: 16, desc: 'public | internal | private (default: internal)' }
+            { name: 'visibility', type: 'string', maxLength: 16, desc: 'public | internal | private (default: internal)' },
+            { name: 'ttlSec', type: 'number', desc: 'Optional time-to-live in seconds (max 31536000) for temporary assets' },
+            { name: 'delegateDelete', type: 'string', maxLength: 64, pattern: 'id', desc: 'Optional principal UID permitted to delete this asset on behalf of owner' }
         ],
         returns: ['id', 'sha256', 'size', 'url'],
         returns_schema: ASSET_UPLOAD,
-        description: 'Upload file and return CAS asset ID (records owner + visibility)',
+        description: 'Upload file and return CAS asset ID (records owner + visibility + optional ttlSec)',
         ai: true,
         public: false   // narrowed: writes need an authenticated owner (anon upload closed)
+    },
+    {
+        name: 'storage.asset.presign',
+        params: [
+            { name: 'sha256', type: 'string', required: true, maxLength: 64, desc: '64-char hex SHA-256 of the raw file bytes' },
+            { name: 'size', type: 'number', required: true, desc: 'Exact byte length of the file (1..134217728)' },
+            { name: 'filename', type: 'string', maxLength: 128, desc: 'Original filename' },
+            { name: 'mimeType', type: 'string', maxLength: 64, desc: 'MIME type (bound into the PUT signature)' },
+            { name: 'visibility', type: 'string', maxLength: 16, desc: 'public | internal | private (default: internal)' },
+            { name: 'ttlSec', type: 'number', desc: 'Optional time-to-live in seconds for temporary assets' },
+            { name: 'delegateDelete', type: 'string', maxLength: 64, pattern: 'id', desc: 'Optional principal UID permitted to delete this asset' }
+        ],
+        returns: ['ticket', 'alreadyExists', 'key', 'contentType', 'expiresAt'],
+        returns_schema: ASSET_PRESIGN,
+        description: 'Issue a presigned PUT URL + upload ticket for large binary assets (or CAS instant dedup if bytes already exist)',
+        ai: false,
+        public: false
+    },
+    {
+        name: 'storage.asset.commit',
+        params: [
+            { name: 'ticket', type: 'string', required: true, maxLength: 64, pattern: 'id', desc: 'Upload ticket returned by storage.asset.presign' }
+        ],
+        returns: ['id', 'sha256', 'size', 'url'],
+        returns_schema: ASSET_UPLOAD,
+        description: 'Verify uploaded object bytes (size + sha256) against a presigned ticket and create the CAS asset record',
+        ai: false,
+        public: false
     },
     {
         name: 'storage.asset.external',
@@ -149,6 +192,21 @@ module.exports = [
         ],
         description: 'Delete an asset by ID (removes metadata from Redis and file from disk)',
         ai: false
+    },
+    {
+        name: 'storage.asset.reap',
+        params: [
+            { name: 'limit', type: 'number', desc: 'Max expired assets to purge in one sweep (default 100, max 1000)' }
+        ],
+        returns: ['scanned', 'reaped', 'ids'],
+        returns_schema: [
+            { name: 'scanned', type: 'number', required: true },
+            { name: 'reaped',  type: 'number', required: true },
+            { name: 'ids',     type: 'array',  required: true }
+        ],
+        description: 'Sweep and purge expired TTL assets (admin or system.* bot)',
+        ai: false,
+        public: false
     },
     {
         name: 'storage.asset.list',

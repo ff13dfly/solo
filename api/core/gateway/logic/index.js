@@ -3,6 +3,7 @@ const emailProvider = require('./email');
 const smsProvider = require('./sms');
 const webhookProvider = require('./webhook');
 const { createSmtpEntity, getTransporter } = require('./smtp');
+const { createImapEntity, testImapConnection, pollImapAccount } = require('./imap');
 const EntityFactory = require('../../../library/entity');
 const { insert } = require('../../../library/logger');
 const clock = require('../../../library/clock');
@@ -128,6 +129,7 @@ function createLogic(redisClient, options = {}) {
 
     // --- Entity Factories ---
     const smtpEntity = createSmtpEntity(redisClient);
+    const imapEntity = createImapEntity(redisClient);
 
     const emailTemplateEntity = EntityFactory(redisClient, {
         serviceName: 'gateway',
@@ -166,6 +168,20 @@ function createLogic(redisClient, options = {}) {
             }
         },
 
+        // --- IMAP ACCOUNT MANAGEMENT & INBOUND POLLING ---
+        imap: {
+            create: async (params) => imapEntity.create(params),
+            get:    async (params) => imapEntity.get(params),
+            list:   async (params) => imapEntity.list(params),
+            update: async (params) => imapEntity.update(params),
+            delete: async (params) => imapEntity.delete(params),
+            test:   async ({ id } = {}) => {
+                const cfg = await imapEntity.getDecrypted(id);
+                return testImapConnection(cfg);
+            },
+            poll:   async (params) => pollImapAccount({ redis: redisClient, imapEntity, relay }, params),
+        },
+
         // --- NOTIFICATION CHANNELS ---
         email: {
             template: {
@@ -185,7 +201,7 @@ function createLogic(redisClient, options = {}) {
                 delete: async (params) => emailTemplateEntity.delete(params)
             },
 
-            send: async (params) => {
+            send: async (params, callerCtx = null) => {
                 const { templateId, variables, smtpId, to, subject, content, html, cc, bcc, replyTo } = params;
 
                 let resolvedSubject = subject;
@@ -223,7 +239,7 @@ function createLogic(redisClient, options = {}) {
                         );
                     }
                     try {
-                        attachments = await fetchAttachments(relay, params.attachments, attachCfg);
+                        attachments = await fetchAttachments(relay, params.attachments, { ...attachCfg, callerCtx });
                     } catch (e) {
                         throw jsonrpc.INVALID_PARAMS(`attachments: ${e.message}`);
                     }

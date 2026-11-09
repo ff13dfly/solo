@@ -58,8 +58,9 @@ function toSortableMs(v) {
  * @param {number} [options.idLength=16] - Length of the Base58 ID.
  * @param {boolean} [options.softDelete=false] - Whether to use soft deletion.
  * @param {string[]} [options.searchFields=[]] - Fields to search when keyword is provided in list().
+ * @param {boolean} [options.ownable=true] - Whether row-level $owner isolation applies (set false for global public dictionary entities).
  */
-module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16, softDelete = false, storageType = 'string', sensitiveFields = [], searchFields = [], clientId = false }) => {
+module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16, softDelete = false, storageType = 'string', sensitiveFields = [], searchFields = [], clientId = false, ownable = true }) => {
     if (!redis) throw new Error('[EntityFactory] Redis client is required');
     if (!serviceName || !entityName) throw new Error('[EntityFactory] serviceName and entityName are required');
 
@@ -127,6 +128,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
     // 注意 fail-closed 方向：外部会话只能看到**盖了自己章**的行；enforcement 之前就存在
     // 的行、或 admin 直建的行没有 owner 字段，对外部会话不可见——这是设计而非缺陷。
     const ownerScope = () => {
+        if (!ownable) return null;
         const ctx = walContext.getStore();
         const o = ctx && ctx.owner;
         if (!o) return null;
