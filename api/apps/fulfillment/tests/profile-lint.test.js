@@ -152,6 +152,51 @@ describe('lintProfile — action methods (rule 4: a TASK action must dispatch to
         const p = { id: 'act-wf', transitions: [{ event: 'go', from: 'DRAFT', to: 'B', actions: [{ type: 'workflow', method: 'some-workflow-id' }] }] };
         expect(lintProfile(p, methodIndex).errors).toEqual([]);
     });
+    test('peer_rpc_with_callback actions validate peer, remote method format, and callback.allowedEvents without requiring local methodIndex or Router taskWhitelist', () => {
+        const good = {
+            id: 'act-peer-ok',
+            meta_fields: [{ key: 'rpaDispatch', label: 'RPA Dispatch' }],
+            transitions: [
+                {
+                    event: 'dispatch',
+                    from: 'DRAFT',
+                    to: 'EXECUTING',
+                    actions: [{
+                        kind: 'peer_rpc_with_callback',
+                        peer: 'steward',
+                        method: 'steward.bridge.dispatch',
+                        callback: { allowedEvents: ['rpa_done', 'rpa_failed'], ttlMs: 600000 },
+                        paramsFromMeta: 'rpaDispatch',
+                    }],
+                },
+                { event: 'rpa_done', from: 'EXECUTING', to: 'DONE' },
+                { event: 'rpa_failed', from: 'EXECUTING', to: 'FAILED' },
+            ],
+        };
+        const rGood = lintProfile(good, methodIndex, { taskWhitelist: {} });
+        expect(rGood.errors).toEqual([]);
+
+        const bad = {
+            id: 'act-peer-bad',
+            transitions: [
+                {
+                    event: 'dispatch',
+                    from: 'DRAFT',
+                    to: 'EXECUTING',
+                    actions: [{
+                        kind: 'peer_rpc_with_callback',
+                        peer: '',
+                        method: 'Invalid_Method',
+                        callback: { allowedEvents: [] },
+                    }],
+                },
+            ],
+        };
+        const rBad = lintProfile(bad, methodIndex);
+        expect(rBad.errors.join('\n')).toMatch(/missing a valid 'peer'/);
+        expect(rBad.errors.join('\n')).toMatch(/invalid remote method/);
+        expect(rBad.errors.join('\n')).toMatch(/allowedEvents/);
+    });
     test('WARNING: action params reference an unbacked instance.meta var', () => {
         const p = { id: 'act-pv', transitions: [
             { event: 'pay', from: 'DRAFT', to: 'PAID', actions: [{ type: 'task', method: 'market.order.pay', params: { id: { var: 'instance.meta.orderId' } } }] },

@@ -179,16 +179,40 @@ module.exports = (redisClient, config) => {
         },
 
         /**
-         * Admin: revoke ALL live session tokens of a uid (leak response / deactivate a bot).
+         * Admin (or delegated service bot for non-admin/non-operator accounts):
+         * revoke ALL live session tokens of a uid (leak response / deactivate a seat or bot).
          * security.md option (b): reads the USER:SESSIONS:{uid} reverse index, DELs each
          * session:{token}, then clears the index. Any later request with those tokens
          * resolves to guest at the Router (session key gone) → rejected immediately.
          */
-        async revoke({ uid }) {
+        async revoke({ uid }, callerCtx = {}) {
             if (!uid) throw jsonrpc.MISSING_PARAM('uid');
+            const isDelegatedNonAdmin = callerCtx && callerCtx.isAdmin === false;
+            if (isDelegatedNonAdmin) {
+                if (typeof uid === 'string' && uid.startsWith('system.')) {
+                    throw jsonrpc.FORBIDDEN('Non-admin caller cannot revoke tokens of a system bot');
+                }
+                const userPrefix = config.redis?.userPrefix || 'user:';
+                const rawUser = await redisClient.get(`${userPrefix}${uid}`);
+                if (rawUser) {
+                    let userData = null;
+                    try { userData = JSON.parse(rawUser); } catch (_) { }
+                    if (userData) {
+                        const isProtected =
+                            userData.role === 'admin' ||
+                            userData.permit === 'admin' ||
+                            userData.permit?.allow_all === true ||
+                            userData.categories?.POWER === 'admin' ||
+                            userData.categories?.POWER === 'operator';
+                        if (isProtected && callerCtx.user !== uid) {
+                            throw jsonrpc.FORBIDDEN('Non-admin caller cannot revoke tokens of an admin or operator account');
+                        }
+                    }
+                }
+            }
             const revoked = await killSessions(uid);
 
-            const issuer = walContext.getStore()?.uid || null;
+            const issuer = walContext.getStore()?.uid || callerCtx?.user || null;
             try {
                 logger.insert(`BOT:REVOKE_TOKEN:${uid}`, {
                     op: 'token.revoke', target: uid, issuer, revoked, stamp: Date.now(),

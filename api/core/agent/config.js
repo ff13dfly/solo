@@ -42,10 +42,25 @@ module.exports = {
     geminiApiKey: process.env.GEMINI_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     openaiBaseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1', // RESERVED: for non-standard endpoints
+    openaiJsonMode: process.env.OPENAI_JSON_MODE !== 'false',
     bitexingApiKey: process.env.BITEXING_API_KEY,
     bitexingBaseUrl: process.env.BITEXING_BASE_URL || 'https://bitexingai.com/v1', // RESERVED: for dedicated instances
     qwenApiKey: process.env.DASHSCOPE_API_KEY,
     removeBgApiKey: process.env.REMOVE_BG_API_KEY,
+    // Native Ollama provider (local Apple Silicon / GPU node)
+    ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
+    ollamaDefaultModel: process.env.OLLAMA_MODEL || 'qwen3.5:9b',
+    ollamaKeepAlive: process.env.OLLAMA_KEEP_ALIVE || '30m',
+    ollamaThink: process.env.OLLAMA_THINK === 'true',
+    ollamaTimeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS || 60000),
+    // Cross-box SOLO Peer Agent delegation (`solo-peer/<model>`)
+    peerAgentUrl: process.env.SOLO_AGENT_PEER_URL || '',
+    peerAgentApiKey: process.env.SOLO_AGENT_PEER_API_KEY || '',
+    peerAgentToken: process.env.SOLO_AGENT_PEER_TOKEN || '',
+    peerAgentUser: process.env.SOLO_AGENT_PEER_USER || '',
+    peerAgentPassword: process.env.SOLO_AGENT_PEER_PASSWORD || '',
+    peerAgentDefaultModel: process.env.SOLO_AGENT_PEER_MODEL || 'ollama/qwen3.5:9b',
+    peerAgentTimeoutMs: Number(process.env.SOLO_AGENT_PEER_TIMEOUT_MS || 60000),
     bodyLimit: process.env.BODY_LIMIT || '50mb',
     routerUrl: process.env.ROUTER_URL || urlFor('router', 8600),
     routerPublicKey: process.env.ROUTER_PUBLIC_KEY || '8HrBBG5X9BSKWFaX8QW7hoektDyRZFePb2R9Ad5D84ji',
@@ -84,6 +99,8 @@ Core Principles:
         gemini: { language: 'en' },
         openai: { language: 'en' },
         bitexing: { language: 'zh' },
-        qwen: { language: 'zh' }
+        qwen: { language: 'zh' },
+        ollama: { language: 'zh' },
+        'solo-peer': { language: 'zh' }
     }
 };

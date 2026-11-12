@@ -4,6 +4,7 @@ const rules = require('./rules');
 const { createLogger } = require('../../../library/logger');
 const { walContext } = require('../../../library/entity');
 const { optimisticUpdate } = require('../../../library/optimistic');
+const { createPeerRelay } = require('../../../library/peer-relay');
 const clock = require('../../../library/clock');
 
 const logger = createLogger('fulfillment:instance');
@@ -173,8 +174,10 @@ module.exports = (redis, config, relay = null) => {
             let transitionId;
             let transitionRule;
             let logicData;
+            let issuedPeerTokens = [];
 
             const instance = await optimisticUpdate(redis, key, (current) => {
+                issuedPeerTokens = [];
                 assertOwner(current, req);
                 if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
                     const currentTransitionId = current.history.at(-1)?.transition_id || null;
@@ -248,13 +251,56 @@ module.exports = (redis, config, relay = null) => {
                     (cb) => cb && cb.tokenId !== consumeCallbackId && (!cb.expiresAt || cb.expiresAt > now)
                 );
 
+                // Pre-mint single-use flcb_ capability tokens for any declarative `peer_rpc_with_callback` actions
+                const ruleActions = Array.isArray(transitionRule.actions) ? transitionRule.actions : [];
+                const owner = resolveOwner(req);
+                ruleActions.forEach((act, idx) => {
+                    if (!act || (act.kind !== 'peer_rpc_with_callback' && act.type !== 'peer_rpc_with_callback')) return;
+                    const cbSpec = act.callback || {};
+                    const rawAllowed = Array.isArray(cbSpec.allowedEvents) ? cbSpec.allowedEvents : [];
+                    const cleanEvents = Array.from(new Set(rawAllowed.filter((e) => typeof e === 'string' && e.trim()).map((e) => e.trim())));
+                    if (cleanEvents.length === 0) return;
+
+                    const safeTtl = Math.max(1000, Math.min(Number(cbSpec.ttlMs) || DEFAULT_CALLBACK_TTL_MS, MAX_CALLBACK_TTL_MS));
+                    const rawToken = `flcb_${crypto.randomBytes(24).toString('hex')}`;
+                    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+                    const tokenId = `cbt_${tokenHash.slice(0, 12)}`;
+                    const expiresAt = now + safeTtl;
+
+                    nextPending.push({
+                        tokenId,
+                        allowedEvents: cleanEvents,
+                        expectedTransitionId: transitionId,
+                        createdAt: now,
+                        expiresAt,
+                    });
+                    issuedPeerTokens.push({
+                        actionIndex: idx,
+                        action: act,
+                        rawToken,
+                        tokenHash,
+                        safeTtl,
+                        tokenRecord: {
+                            tokenId,
+                            instanceId: id,
+                            profileId: current.profileId,
+                            allowedEvents: cleanEvents,
+                            expectedTransitionId: transitionId,
+                            owner: owner || null,
+                            issuedBy: req?.user || null,
+                            createdAt: now,
+                            expiresAt,
+                        },
+                    });
+                });
+
                 const next = {
                     ...current,
                     prevState:         fromState,
                     state:             toState,
                     stateChangedAt:    now,
                     meta:              mergedMeta,
-                    pending_callbacks: nextPending,
+                    pending_callbacks: nextPending.slice(-MAX_PENDING_CALLBACKS),
                     ...(current.suspension ? { suspension: null } : {}),
                     history:           [...current.history]
                 };
@@ -289,6 +335,7 @@ module.exports = (redis, config, relay = null) => {
             if (transitionRule.actions) {
                 transitionRule.actions.forEach((action, idx) => {
                     if (action.type === 'workflow') return; // workflow actions use orchestrator's callback model
+                    if (action.kind === 'peer_rpc_with_callback' || action.type === 'peer_rpc_with_callback') return;
                     const resolvedParams = rules.resolveParams(action.params, logicData);
                     _tasks.push({
                         // The Router routes a _task by `service` and posts the FULL method to
@@ -300,6 +347,67 @@ module.exports = (redis, config, relay = null) => {
                         params: { ...resolvedParams, idempotency_key: `${transitionId}:A${idx}` }
                     });
                 });
+            }
+
+            // Persist pre-minted flcb_ tokens and dispatch declarative `peer_rpc_with_callback` actions
+            for (const item of issuedPeerTokens) {
+                const { actionIndex, action, rawToken, tokenHash, safeTtl, tokenRecord } = item;
+                await redis.set(
+                    `${CBTOKEN_PREF}${tokenHash}`,
+                    JSON.stringify(tokenRecord),
+                    { EX: Math.ceil(safeTtl / 1000) }
+                );
+
+                const fromMetaObj = (action.paramsFromMeta && instance.meta && typeof instance.meta[action.paramsFromMeta] === 'object' && !Array.isArray(instance.meta[action.paramsFromMeta]))
+                    ? instance.meta[action.paramsFromMeta]
+                    : {};
+                const explicitParams = action.params ? rules.resolveParams(action.params, logicData) : {};
+                const mergedActionParams = { ...fromMetaObj, ...explicitParams };
+                const idempotencyKey = `${transitionId}:A${actionIndex}`;
+                const dispatchPayload = {
+                    ...mergedActionParams,
+                    idempotencyKey,
+                    upstream: {
+                        ...(mergedActionParams.upstream || {}),
+                        instanceId:           id,
+                        profileId:            instance.profileId,
+                        sourceId:             instance.sourceId,
+                        transitionId,
+                        expectedTransitionId: transitionId,
+                        callbackToken:        rawToken,
+                        tokenId:              tokenRecord.tokenId,
+                        allowedEvents:        tokenRecord.allowedEvents,
+                        expiresAt:            tokenRecord.expiresAt,
+                        callbackUrl:          action.callbackUrl || mergedActionParams.upstream?.callbackUrl || config.publicCallbackUrl || `${config.routerUrl}/jsonrpc`,
+                    },
+                };
+
+                const peerKey = String(action.peer || '').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+                const peerCfg = (config.peers && action.peer && config.peers[action.peer]) || {};
+                const endpoint = action.endpoint
+                    || peerCfg.endpoint
+                    || peerCfg.rpcUrl
+                    || (peerKey && process.env[`SOLO_PEER_${peerKey}_URL`])
+                    || process.env.SOLO_PEER_URL
+                    || '';
+                if (endpoint && action.method) {
+                    const peerOpts = {
+                        endpoint,
+                        apiKey:   action.apiKey   || peerCfg.apiKey   || (peerKey && process.env[`SOLO_PEER_${peerKey}_API_KEY`])   || '',
+                        token:    action.token    || peerCfg.token    || (peerKey && process.env[`SOLO_PEER_${peerKey}_TOKEN`])     || '',
+                        user:     action.user     || peerCfg.user     || peerCfg.username || (peerKey && process.env[`SOLO_PEER_${peerKey}_USER`]) || '',
+                        password: action.password || peerCfg.password || (peerKey && process.env[`SOLO_PEER_${peerKey}_PASSWORD`])  || '',
+                        fetchFn:  config.fetchFn,
+                    };
+                    const peerClient = typeof config.peerRelayFactory === 'function'
+                        ? config.peerRelayFactory(peerOpts)
+                        : createPeerRelay(peerOpts);
+                    try {
+                        await peerClient.call(action.method, dispatchPayload, { idempotencyKey });
+                    } catch (err) {
+                        logger.warn(`Instance ${id} peer_rpc_with_callback (${action.method} -> ${endpoint}) failed: ${err.message}`);
+                    }
+                }
             }
 
             logger.info(`Instance ${id}: ${fromState} → ${toState} (${transitionId}, ${_tasks.length} tasks${forced ? ', forced' : ''})`);

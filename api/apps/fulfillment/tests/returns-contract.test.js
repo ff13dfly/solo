@@ -290,4 +290,46 @@ describe('fulfillment.* — actual return satisfies declared returns_schema', ()
         expect(checkReturn(method('fulfillment.profile.destroy'), out)).toEqual([]);
         expect(out.success).toBe(true);
     });
+
+    // ── BARRIER (Fan-in) ────────────────────────────────────────────────────────
+
+    test('barrier.create, checkin, get, and reap → match declared returns_schema', async () => {
+        const inst = await logic.instance.create({ sourceId: 'ORD-BAR-1', profileId: SM_ID }, REQ);
+        const created = await logic.barrier.create({
+            barrierKey: 'pulse-2026-11-12',
+            expectedCount: 2,
+            ttlMs: 60000,
+            onSettled: {
+                target: 'fulfillment',
+                instanceId: inst.id,
+                event: 'start',
+            },
+        }, REQ);
+        expect(checkReturn(method('fulfillment.barrier.create'), created)).toEqual([]);
+        expect(created.status).toBe('PENDING');
+
+        const got = await logic.barrier.get({ barrierKey: 'pulse-2026-11-12' }, REQ);
+        expect(checkReturn(method('fulfillment.barrier.get'), got)).toEqual([]);
+
+        const c1 = await logic.barrier.checkin({
+            barrierKey: 'pulse-2026-11-12',
+            itemId: 'job-1',
+            outcome: 'DONE',
+            result: { rows: 10 },
+        }, REQ);
+        expect(checkReturn(method('fulfillment.barrier.checkin'), c1)).toEqual([]);
+        expect(c1.justSettled).toBe(false);
+
+        const c2 = await logic.barrier.checkin({
+            barrierKey: 'pulse-2026-11-12',
+            itemId: 'job-2',
+            outcome: 'DONE',
+            result: { rows: 20 },
+        }, REQ);
+        expect(checkReturn(method('fulfillment.barrier.checkin'), c2)).toEqual([]);
+        expect(c2.justSettled).toBe(true);
+
+        const reaped = await logic.barrier.reap({ dryRun: true }, ADMIN_REQ);
+        expect(checkReturn(method('fulfillment.barrier.reap'), reaped)).toEqual([]);
+    });
 });

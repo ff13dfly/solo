@@ -130,6 +130,12 @@ app.post('/jsonrpc', async (req, res) => {
                     if (config.geminiApiKey)  providers.push({ id: 'gemini',  name: 'Gemini',      vision: true });
                     if (config.openaiApiKey)  providers.push({ id: 'openai',  name: 'OpenAI',      vision: false });
                     if (config.bitexingApiKey) providers.push({ id: 'bitexing', name: 'Bitexing',  vision: false });
+                    if (process.env.OLLAMA_BASE_URL || process.env.OLLAMA_MODEL || config.provider === 'ollama') {
+                        providers.push({ id: 'ollama', name: 'Ollama (Local)', vision: true });
+                    }
+                    if (config.peerAgentUrl) {
+                        providers.push({ id: 'solo-peer', name: 'SOLO Peer Agent', vision: true });
+                    }
                     return { providers, default: config.provider || 'qwen' };
                 },
                 // Per-capability model selection (admin) — gated by Router permit (agent.model.*).

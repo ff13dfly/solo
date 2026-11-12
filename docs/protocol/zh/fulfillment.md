@@ -1,12 +1,12 @@
 # 履约生命周期协议 (Fulfillment Lifecycle Protocol)
 
 > [!NOTE]
-> **实现状态：🟢 v1 核心与 RPA 五项协同原语已落地（`v1.3.3`）。** 声明式状态机、Profile 投稿审批与完整性锁（`approvedDigest`）、JsonLogic 条件与证据完整性门禁（`evidence`）、`_tasks` 异步发射、乐观并发锁（`expectedTransitionId`）、状态停留超时自愈（`stateTtls` + `reap`）、任意态人工协办断点栈（`suspend` + `resume`）、一次性安全回调令牌（`token.issue` + `callback`）及来源幂等创建（`idempotent`）均已生产可用。§6.2 `ai_hooks` 与 `type: "workflow"` 编排器直调目前仍为 **🟡 草案·未实现**（跨服务动作统一走 `type: "task"` / `_tasks` 或事件总线触发）。示例中的 erp/sale/commodity 等为业务举例，SOLO 本身不含这些服务。
+> **实现状态：🟢 v1 核心与跨栈 RPA 七项协同原语已落地（`v1.3.4+`）。** 声明式状态机、Profile 投稿审批与完整性锁（`approvedDigest`）、JsonLogic 条件与证据完整性门禁（`evidence`）、`_tasks` 异步发射、声明式跨栈异步委托（`peer_rpc_with_callback`）、批量工单扇入屏障（`fulfillment.barrier.*`）、乐观并发锁（`expectedTransitionId`）、状态停留超时自愈（`stateTtls` + `reap`）、任意态人工协办断点栈（`suspend` + `resume`）、一次性安全回调令牌（`token.issue` + `callback`）及来源幂等创建（`idempotent`）均已生产可用。§6.2 `ai_hooks` 与 `type: "workflow"` 编排器直调目前仍为 **🟡 草案·未实现**（跨服务动作统一走 `type: "task"` / `_tasks`、`kind: "peer_rpc_with_callback"` 或事件总线触发）。示例中的 erp/sale/commodity 等为业务举例，SOLO 本身不含这些服务。
 
 ---
 
-> **协议版本**: 1.6.0
-> **状态**: 已实现 (v1.3.3)
+> **协议版本**: 1.7.0
+> **状态**: 已实现 (v1.3.4+)
 > **作者**: Antigravity & Fuu & Claude
 
 ---
@@ -208,9 +208,10 @@
 
 **Action 类型说明：**
 
-| `type` | 说明 | 实现状态 |
+| `type` / `kind` | 说明 | 实现状态 |
 |--------|------|----------|
-| `task`（默认） | 通过 `_tasks` 交 Router 异步派发单个 RPC（自动注入 `idempotency_key: "{transition_id}:A{idx}"`） | 🟢 已实现 |
+| `task`（默认） | 通过 `_tasks` 交 Router 异步派发单个本栈 RPC（自动注入 `idempotency_key: "{transition_id}:A{idx}"`） | 🟢 已实现 |
+| `peer_rpc_with_callback` | 声明式跨栈异步委托：引擎在状态落盘时自动签发绑定当前 `transition_id` 的单次 `flcb_...` 回调令牌，经 `library/peer-relay` 向对端 SOLO 栈（如 `steward.bridge.dispatch`）投递并注入 `upstream.callbackToken` | 🟢 已实现 |
 | `workflow` | 调用编排器执行多步 workflow，支持 `on_complete` 回调 | 🟡 草案·未实现（当前统一通过 `type: "task"` 或 `EVENT:FULFILLMENT:TRANSITIONED` 事件触发编排器） |
 
 **`type: "task"` 专属字段：**
@@ -220,6 +221,16 @@
 | `service` | 目标服务名（须在 Router `setting.task` 白名单中授权 `allowFrom: ['fulfillment']`） |
 | `method` | RPC 方法名（可写短名 `inbox.send` 或全名 `notification.inbox.send`） |
 | `params` | 调用参数，支持 JsonLogic 变量注入（`var`、`cat`、`+`） |
+
+**`kind: "peer_rpc_with_callback"` 专属字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `peer` / `endpoint` | 对端 SOLO 栈标识（映射环境变量 `SOLO_PEER_<PEER>_URL` 或 `config.peers[peer]`）或显式 JSON-RPC 端点 URL |
+| `method` | 对端 RPC 方法名（如 `steward.bridge.dispatch`） |
+| `callback.allowedEvents` | 必填非空数组，允许对端回调触发的 `transition.event` 白名单（Lint 强制核验这些事件在目标态 `to` 下有定义） |
+| `callback.ttlMs` | 可选，回调令牌有效期（毫秒，默认 30 分钟，上限 7 天） |
+| `paramsFromMeta` | 可选，从 `instance.meta[paramsFromMeta]` 读取业务派单参数并与 `params` 合并，自动附加 `idempotencyKey` 与 `upstream: { instanceId, profileId, sourceId, transitionId, expectedTransitionId, callbackToken, tokenId, allowedEvents, expiresAt, callbackUrl }` |
 
 ### 2.3 Profile 存储与双轴治理规范
 Profile 由 `library/entity.js` 存储在 Redis 中（支持软删除与投稿审批双轴）：
@@ -309,6 +320,13 @@ TTL:   无（持久化）
    - 由外部定时任务调用 `fulfillment.instance.reap({ profileId?, dryRun?, limit? })` 或配置环境变量 `FULFILLMENT_REAP_INTERVAL_MS` 启动服务内置周期扫描器，自动将超时实例推进至超时分支并派发下游补偿 `_tasks`。
 5. **反静默假成功证据门禁（`transition.evidence`）**：
    - 在状态迁移落盘前拦截空表（`minRows`）、过短内容（`minBytes`）、`****` 脱敏乱码（`rejectMasked`）与 `127.0.0.1`/`localhost` 本地死链（`rejectLoopbackUrls`），防止外部脚本把报错页或残缺采集团体伪装成履约成功。
+6. **声明式跨栈异步委托（`transition.actions[].kind = "peer_rpc_with_callback"`）**：
+   - 消灭各业务仓重复手写的跨栈登录续期与 `token.issue` 胶水：状态跃迁落盘时自动签发绑定当前 `transition_id` 的 `flcb_...` 令牌，合并 `instance.meta[paramsFromMeta]` 与 `upstream.callbackToken`，经 `library/peer-relay`（支持 `X-API-Key`、Bearer JWT 或 `user.login` 自动续期）投递至对端 SOLO 栈。
+7. **批量工单扇入汇聚屏障（`fulfillment.barrier.{create,checkin,get,reap}`）**：
+   - 针对「定时任务组扇出 N 张采集子单 → 全员终局汇聚 → 触发下游履约」场景：
+     - `fulfillment.barrier.create({ barrierKey, expectedCount, ttlMs?, onSettled?, meta? })`：按 `barrierKey` 幂等登记汇聚屏障；
+     - `fulfillment.barrier.checkin({ barrierKey, itemId, outcome: 'DONE'|'FAILED'|'SKIPPED', result? })`：子任务终态幂等打卡，当 `completedCount === expectedCount` 时原子结算为 `SETTLED` 并**唯一一次**触发 `onSettled`（支持推进本栈 `fulfillment` 实例、派发本栈 `_tasks` 或通过 `peer-relay` 回调对端 SOLO 栈）；
+     - `fulfillment.barrier.reap({ dryRun?, limit? })`：扫描超过 `expiresAt` 仍未齐套的 `PENDING` 屏障，原子结算为 `EXPIRED`（`timedOut: true`）并触发超时分支。
 
 ---
 

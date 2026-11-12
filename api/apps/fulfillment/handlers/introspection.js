@@ -405,6 +405,103 @@ const methods = [
         ai: false
     },
 
+    // --- Batch Fan-in Barrier Methods ---
+    {
+        name: 'fulfillment.barrier.create',
+        params: [
+            { name: 'barrierKey',    type: 'string', required: true,  maxLength: 128, description: 'Unique batch barrier identifier (e.g. erp-daily:2026-11-12)' },
+            { name: 'expectedCount', type: 'number', required: true,  description: 'Number of child tasks expected to check in before the barrier settles' },
+            { name: 'ttlMs',         type: 'number', required: false, description: 'Deadline in ms before barrier.reap settles the barrier as EXPIRED (default 2h)' },
+            { name: 'onSettled',     type: 'object', required: false, description: 'Declarative target fired once when all items check in or TTL expires ({ target: "fulfillment"|"peer"|"local", instanceId?, event?, endpoint?, method?, callbackToken? })' },
+            { name: 'meta',          type: 'object', required: false, description: 'Optional metadata carried into the settled callback' }
+        ],
+        description: 'Register (or idempotently fetch) a fan-in batch barrier that settles once N child tasks reach terminal state',
+        returns_schema: [
+            { name: 'barrierKey',     type: 'string',  required: true },
+            { name: 'status',         type: 'string',  required: true },
+            { name: 'expectedCount',  type: 'number',  required: true },
+            { name: 'completedCount', type: 'number',  required: true },
+            { name: 'succeeded',      type: 'number',  required: true },
+            { name: 'failed',         type: 'number',  required: true },
+            { name: 'skipped',        type: 'number',  required: true },
+            { name: 'timedOut',       type: 'boolean', required: true },
+            { name: 'items',          type: 'object',  required: true },
+            { name: 'meta',           type: 'object',  required: true },
+            { name: 'createdAt',      type: 'number',  required: true },
+            { name: 'expiresAt',      type: 'number',  required: true },
+            { name: 'settledAt',      type: 'number' },
+            { name: 'deduplicated',   type: 'boolean' },
+        ],
+        ai: false
+    },
+    {
+        name: 'fulfillment.barrier.checkin',
+        params: [
+            { name: 'barrierKey', type: 'string', required: true,  maxLength: 128, description: 'Batch barrier key' },
+            { name: 'itemId',     type: 'string', required: true,  maxLength: 128, description: 'Unique child task/job ID within the barrier round' },
+            { name: 'outcome',    type: 'string', required: false, maxLength: 32,  description: 'Terminal outcome: DONE (default) | FAILED | SKIPPED' },
+            { name: 'result',     type: 'object', required: false, description: 'Optional structured output from the child task' }
+        ],
+        description: 'Atomically check in a child task outcome to a batch barrier; fires onSettled exactly once when completedCount reaches expectedCount',
+        returns_schema: [
+            { name: 'barrierKey',     type: 'string',  required: true },
+            { name: 'status',         type: 'string',  required: true },
+            { name: 'expectedCount',  type: 'number',  required: true },
+            { name: 'completedCount', type: 'number',  required: true },
+            { name: 'succeeded',      type: 'number',  required: true },
+            { name: 'failed',         type: 'number',  required: true },
+            { name: 'skipped',        type: 'number',  required: true },
+            { name: 'timedOut',       type: 'boolean', required: true },
+            { name: 'items',          type: 'object',  required: true },
+            { name: 'meta',           type: 'object',  required: true },
+            { name: 'createdAt',      type: 'number',  required: true },
+            { name: 'expiresAt',      type: 'number',  required: true },
+            { name: 'settledAt',      type: 'number' },
+            { name: 'justSettled',    type: 'boolean', required: true },
+            { name: '_tasks',         type: 'array',   required: true },
+        ],
+        ai: false
+    },
+    {
+        name: 'fulfillment.barrier.get',
+        params: [
+            { name: 'barrierKey', type: 'string', required: true, maxLength: 128, description: 'Batch barrier key' }
+        ],
+        description: 'Inspect current progress and child outcomes of a batch barrier',
+        returns_schema: [
+            { name: 'barrierKey',     type: 'string',  required: true },
+            { name: 'status',         type: 'string',  required: true },
+            { name: 'expectedCount',  type: 'number',  required: true },
+            { name: 'completedCount', type: 'number',  required: true },
+            { name: 'succeeded',      type: 'number',  required: true },
+            { name: 'failed',         type: 'number',  required: true },
+            { name: 'skipped',        type: 'number',  required: true },
+            { name: 'timedOut',       type: 'boolean', required: true },
+            { name: 'items',          type: 'object',  required: true },
+            { name: 'meta',           type: 'object',  required: true },
+            { name: 'createdAt',      type: 'number',  required: true },
+            { name: 'expiresAt',      type: 'number',  required: true },
+            { name: 'settledAt',      type: 'number' },
+        ],
+        ai: true
+    },
+    {
+        name: 'fulfillment.barrier.reap',
+        params: [
+            { name: 'dryRun', type: 'boolean', required: false, description: 'When true, reports expired barriers without mutating state' },
+            { name: 'limit',  type: 'number',  required: false, description: 'Max expired barriers to settle in one sweep (default 100)' }
+        ],
+        description: 'Admin/scheduled reaper: sweep expired PENDING batch barriers into EXPIRED and trigger their onSettled callback once',
+        returns_schema: [
+            { name: 'scanned', type: 'number',  required: true },
+            { name: 'expired', type: 'number',  required: true },
+            { name: 'reaped',  type: 'array',   required: true },
+            { name: 'dryRun',  type: 'boolean', required: true },
+            { name: '_tasks',  type: 'array',   required: true },
+        ],
+        ai: false
+    },
+
     // --- System Methods ---
     { name: 'ping',     params: [], description: 'Health check',                ai: true,  public: true },
     { name: 'methods',  params: [], description: 'Get service surface area',    ai: false, public: true },

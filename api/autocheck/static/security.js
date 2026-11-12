@@ -117,8 +117,28 @@ function check(servicePath, results) {
         // 检查跨服务直接 HTTP 调用（架构规范：微服务间只能通过 Router 或 _tasks 通信）
         // 豁免：ERP 服务需要直接调用用友 T+ 外部 API；tplus_client.js、webhook 等明确外部集成文件
         const serviceName = path.basename(servicePath);
-        const EXEMPT_SERVICES = ['erp', 'gateway'];  // 这些服务允许直接外部 HTTP（有明确外部依赖）
+        const EXEMPT_SERVICES = ['erp', 'gateway', 'connector', 'agent'];  // 这些服务允许直接外部 HTTP（有明确外部依赖）
         const EXEMPT_FILES = ['tplus', 'webhook', 'client', 'gateway', 'proxy'];  // 文件名含这些词豁免
+
+        // 检查业务服务（非 agent/connector）是否绕过 core/agent 直连本地 Ollama (:11434) 或直接读取 LLM API Key
+        if (serviceName !== 'agent' && serviceName !== 'connector') {
+            const AI_BYPASS_PATTERNS = [
+                { name: 'direct Ollama (:11434)', pat: /:11434\b/ },
+                { name: 'DASHSCOPE_API_KEY',      pat: /process\.env\.DASHSCOPE_API_KEY\b/ },
+                { name: 'OPENAI_API_KEY',         pat: /process\.env\.OPENAI_API_KEY\b/ },
+                { name: 'GEMINI_API_KEY',         pat: /process\.env\.GEMINI_API_KEY\b/ },
+            ];
+            files.forEach(file => {
+                const content = fs.readFileSync(path.join(logicPath, file), 'utf-8');
+                AI_BYPASS_PATTERNS.forEach(({ name, pat }) => {
+                    if (pat.test(content)) {
+                        results.warnings.push(
+                            `⚠️ [架构] logic/${file}: 发现直接调用 LLM/Ollama (${name})，业务服务应统一通过 relay.call('agent.*') 调用 core/agent`
+                        );
+                    }
+                });
+            });
+        }
 
         // 匹配 HTTP 调用模式（排除注释行）
         const HTTP_PATTERNS = [

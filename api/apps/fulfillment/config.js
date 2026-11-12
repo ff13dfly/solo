@@ -24,6 +24,8 @@ module.exports = {
         instanceIndex:       'FULFILLMENT:INSTANCE:INDEX',
         sourceIndexPrefix:   'FULFILLMENT:SOURCE:',
         callbackTokenPrefix: 'FULFILLMENT:CBTOKEN:',
+        barrierPrefix:       'FULFILLMENT:BARRIER:', // RESERVED: used by logic/barrier.js
+        barrierIndex:        'FULFILLMENT:BARRIER:INDEX', // RESERVED: used by logic/barrier.js
         profilePrefix:       'FULFILLMENT:PROFILE:',
         profileIndex:        'FULFILLMENT:PROFILE:INDEX',
 
@@ -70,6 +72,10 @@ module.exports = {
                 'fulfillment.profile.delete':      ['Soft delete a fulfillment profile'],
                 'fulfillment.profile.restore':     ['Restore a soft-deleted profile'],
                 'fulfillment.profile.destroy':     ['Permanently delete a fulfillment profile'],
+                'fulfillment.barrier.create':      ['Register a fan-in batch barrier for N child tasks'],
+                'fulfillment.barrier.checkin':     ['Atomically check in a child task outcome to a batch barrier'],
+                'fulfillment.barrier.get':         ['Inspect progress and child outcomes of a batch barrier'],
+                'fulfillment.barrier.reap':        ['Sweep expired PENDING batch barriers and fire onSettled once'],
                 'ping':    ['Service health check'],
                 'methods': ['Get service method list'],
                 'entities': ['Get entity schema definitions']
@@ -105,6 +111,10 @@ module.exports = {
                 'fulfillment.profile.delete':      ['软删除履约配置模板'],
                 'fulfillment.profile.restore':     ['恢复已软删除的配置模板'],
                 'fulfillment.profile.destroy':     ['永久删除履约配置模板'],
+                'fulfillment.barrier.create':      ['注册扇入批次汇聚屏障（等待 N 张子单终态）'],
+                'fulfillment.barrier.checkin':     ['向批次汇聚屏障原子打卡子任务终态结果'],
+                'fulfillment.barrier.get':         ['查询批次汇聚屏障进度与子任务结果'],
+                'fulfillment.barrier.reap':        ['扫描并收口超时的 PENDING 批次汇聚屏障'],
                 'ping':    ['服务健康检查'],
                 'methods': ['获取服务方法列表'],
                 'entities': ['获取实体定义']

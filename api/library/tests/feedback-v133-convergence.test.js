@@ -32,38 +32,112 @@ const { isInternalOrReservedHost, assertPublicHostname } = require('../ssrf');
 const { redactSensitive } = require('../logger');
 const createEntity = require('../entity');
 const { walContext } = require('../entity');
-const { createStorageProvider, createLocalOssServer } = require('../../apps/storage/oss');
-const createAssetLogic = require('../../apps/storage/logic/asset');
-const storageConfig = require('../../apps/storage/config');
-const createFulfillmentLogic = require('../../apps/fulfillment/logic');
-const fulfillmentConfig = require('../../apps/fulfillment/config');
-const createScheduleLogic = require('../../core/nexus/logic/schedule');
-const createSchedulerLogic = require('../../core/nexus/logic/scheduler');
-const nexusConfig = require('../../core/nexus/config');
-const { fetchAttachments } = require('../../core/gateway/logic/attachments');
-const { createImapEntity } = require('../../core/gateway/logic/imap');
 const { generateId } = require('../generator');
-const createUserLogic = require('../../core/user/logic/user');
-const createRoleLogic = require('../../core/user/logic/role');
-const userConfig = require('../../core/user/config');
 
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6399';
+const HAS_SOLO_SOURCE_TREE = fs.existsSync(path.join(__dirname, '../../core/user/index.js'))
+    && fs.existsSync(path.join(__dirname, '../../apps/storage/oss/index.js'));
 
-describe('SOLO v1.3.3 Security & Convergence Feedback Suite', () => {
+const { createStorageProvider, createLocalOssServer } = HAS_SOLO_SOURCE_TREE ? require('../../apps/storage/oss') : {};
+const createAssetLogic = HAS_SOLO_SOURCE_TREE ? require('../../apps/storage/logic/asset') : null;
+const storageConfig = HAS_SOLO_SOURCE_TREE ? require('../../apps/storage/config') : null;
+const createFulfillmentLogic = HAS_SOLO_SOURCE_TREE ? require('../../apps/fulfillment/logic') : null;
+const fulfillmentConfig = HAS_SOLO_SOURCE_TREE ? require('../../apps/fulfillment/config') : null;
+const createScheduleLogic = HAS_SOLO_SOURCE_TREE ? require('../../core/nexus/logic/schedule') : null;
+const createSchedulerLogic = HAS_SOLO_SOURCE_TREE ? require('../../core/nexus/logic/scheduler') : null;
+const nexusConfig = HAS_SOLO_SOURCE_TREE ? require('../../core/nexus/config') : null;
+const { fetchAttachments } = HAS_SOLO_SOURCE_TREE ? require('../../core/gateway/logic/attachments') : {};
+const { createImapEntity } = HAS_SOLO_SOURCE_TREE ? require('../../core/gateway/logic/imap') : {};
+const createUserLogic = HAS_SOLO_SOURCE_TREE ? require('../../core/user/logic/user') : null;
+const createRoleLogic = HAS_SOLO_SOURCE_TREE ? require('../../core/user/logic/role') : null;
+const userConfig = HAS_SOLO_SOURCE_TREE ? require('../../core/user/config') : null;
+
+const { spawn } = require('child_process');
+const net = require('net');
+const REDIS_CANDIDATES = [
+    process.env.TEST_REDIS_URL,
+    process.env.REDIS_URL,
+    'redis://127.0.0.1:6379',
+    'redis://127.0.0.1:6399',
+].filter(Boolean);
+const describeInSoloRepo = HAS_SOLO_SOURCE_TREE ? describe : describe.skip;
+
+async function pickFreePort() {
+    return new Promise((resolve, reject) => {
+        const srv = net.createServer();
+        srv.listen(0, '127.0.0.1', () => {
+            const { port } = srv.address();
+            srv.close(() => resolve(port));
+        });
+        srv.on('error', reject);
+    });
+}
+
+describeInSoloRepo('SOLO v1.3.3 Security & Convergence Feedback Suite', () => {
     let redis;
+    let spawnedRedisProc = null;
 
     beforeAll(async () => {
         process.env.GATEWAY_SECRET_KEY = process.env.GATEWAY_SECRET_KEY || 'test-gateway-secret-key-32-chars!!';
-        redis = createClient({ url: REDIS_URL, database: 13 });
-        redis.on('error', () => {});
-        await redis.connect();
-        await redis.flushDb();
+        for (const url of REDIS_CANDIDATES) {
+            const client = createClient({
+                url,
+                database: 13,
+                socket: { reconnectStrategy: false, connectTimeout: 500 },
+            });
+            client.on('error', () => {});
+            try {
+                await client.connect();
+                await client.flushDb();
+                redis = client;
+                break;
+            } catch (_) {
+                try { client.destroy(); } catch (_e) {}
+            }
+        }
+        if (!redis) {
+            const port = await pickFreePort();
+            spawnedRedisProc = spawn('redis-server', ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--appendonly', 'no'], {
+                stdio: 'ignore',
+            });
+            const url = `redis://127.0.0.1:${port}`;
+            for (let i = 0; i < 20; i++) {
+                await new Promise((r) => setTimeout(r, 80));
+                const client = createClient({ url, socket: { reconnectStrategy: false, connectTimeout: 500 } });
+                client.on('error', () => {});
+                try {
+                    await client.connect();
+                    redis = client;
+                    break;
+                } catch (_) {
+                    try { client.destroy(); } catch (_e) {}
+                }
+            }
+        }
+        if (!redis) throw new Error('No local Redis available for test');
+        try {
+            await redis.json.set('__json_probe__', '$', { ok: 1 });
+            await redis.del('__json_probe__');
+        } catch (_) {
+            redis.json.set = async (k, _p, val) => redis.set(k, JSON.stringify(val));
+            redis.json.get = async (k) => {
+                const raw = await redis.get(k);
+                return raw ? JSON.parse(raw) : null;
+            };
+        }
     });
 
     afterAll(async () => {
         if (redis) {
-            await redis.flushDb();
-            await redis.quit();
+            if (redis.isOpen) {
+                await redis.flushDb().catch(() => {});
+                await redis.quit().catch(() => {});
+            } else {
+                try { redis.destroy(); } catch (_) {}
+            }
+        }
+        if (spawnedRedisProc) {
+            try { spawnedRedisProc.kill('SIGTERM'); } catch (_) {}
+            spawnedRedisProc = null;
         }
     });
 

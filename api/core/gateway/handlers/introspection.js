@@ -281,7 +281,7 @@ module.exports = [
             { name: 'provider', type: 'string', required: true },   // 'local' | 'removebg'
             { name: 'image',    type: 'string' },                   // base64 cutout — guaranteed only on the remove.bg path
         ],
-        description: 'Remove image background via local ONNX server or cloud API fallback',
+        description: '@deprecated Prefer `agent.image.ps` (or domain `connector`) for new callers. Remove image background via local ONNX server or cloud API fallback',
         ai: false
     }
 ];

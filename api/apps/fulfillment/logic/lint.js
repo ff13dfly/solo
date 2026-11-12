@@ -188,8 +188,31 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
         const actions = Array.isArray(t.actions) ? t.actions : [];
         for (const a of actions) {
             if (!a || a.type === 'workflow') continue;
+            const isPeerCallback = a.kind === 'peer_rpc_with_callback' || a.type === 'peer_rpc_with_callback';
             if (typeof a.method !== 'string' || !a.method) {
                 errors.push(`${pname}: transition '${t.event || '?'}' has a task action with no method`);
+                continue;
+            }
+            if (isPeerCallback) {
+                if ((!a.peer || typeof a.peer !== 'string' || !a.peer.trim()) && (!a.endpoint || typeof a.endpoint !== 'string' || !a.endpoint.trim())) {
+                    errors.push(`${pname}: transition '${t.event || '?'}' peer_rpc_with_callback action '${a.method}' is missing a valid 'peer' or 'endpoint'`);
+                }
+                if (!/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*){1,3}$/.test(a.method)) {
+                    errors.push(`${pname}: transition '${t.event || '?'}' peer_rpc_with_callback action has invalid remote method '${a.method}'`);
+                }
+                const cbEvents = a.callback && Array.isArray(a.callback.allowedEvents) ? a.callback.allowedEvents : [];
+                if (cbEvents.length === 0) {
+                    errors.push(`${pname}: transition '${t.event || '?'}' peer_rpc_with_callback action '${a.method}' must declare non-empty callback.allowedEvents`);
+                } else {
+                    for (const evName of cbEvents) {
+                        if (!transitions.some((tr) => tr && tr.event === evName && (tr.from === t.to || tr.from === '*'))) {
+                            errors.push(`${pname}: transition '${t.event || '?'}' peer_rpc_with_callback callback event '${evName}' is not defined from target state '${t.to}'`);
+                        }
+                    }
+                }
+                if (a.paramsFromMeta && typeof a.paramsFromMeta === 'string' && !fieldKeys.has(a.paramsFromMeta)) {
+                    warnings.push(`${pname}: transition '${t.event || '?'}' peer_rpc_with_callback '${a.method}' reads paramsFromMeta '${a.paramsFromMeta}' with no declared meta_field — ensure it is populated in instance.meta`);
+                }
                 continue;
             }
             if (!hasOwn(methodIndex, a.method)) {
@@ -237,7 +260,7 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
         const allowSet = allow instanceof Set ? allow : new Set(Array.isArray(allow) ? allow : []);
         for (const t of transitions) {
             for (const a of (Array.isArray(t && t.actions) ? t.actions : [])) {
-                if (!a || a.type === 'workflow') continue;
+                if (!a || a.type === 'workflow' || a.kind === 'peer_rpc_with_callback' || a.type === 'peer_rpc_with_callback') continue;
                 if (typeof a.method === 'string' && a.method && !allowSet.has(a.method)) {
                     errors.push(`${pname}: transition '${t.event || '?'}' action '${a.method}' is not in the allowed-action policy`);
                 }
@@ -263,7 +286,7 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
         const SOURCE = 'fulfillment';   // _tasks are dispatched with sourceService = this service
         for (const t of transitions) {
             for (const a of (Array.isArray(t && t.actions) ? t.actions : [])) {
-                if (!a || a.type === 'workflow') continue;
+                if (!a || a.type === 'workflow' || a.kind === 'peer_rpc_with_callback' || a.type === 'peer_rpc_with_callback') continue;
                 if (typeof a.method !== 'string' || !a.method) continue;   // rule 4 already errored
                 // Same derivation the runtime uses (instance.js): explicit service, else the
                 // method's namespace.

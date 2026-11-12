@@ -5,6 +5,10 @@ const crypto = require('crypto');
 /**
  * RMBG: Background removal via local ONNX server with cloud API fallback.
  *
+ * @deprecated Kept for backward compatibility (`gateway.rmbg.cutout`).
+ * New callers should use `agent.image.ps` (`core/agent`) so `core/gateway`
+ * remains focused on notification channels (Email / SMS / Webhook / IMAP).
+ *
  * Priority:
  *   1. Local RMBG server (RMBG_LOCAL_URL env, default http://localhost:3099)
  *   2. Remove.bg cloud API (REMOVEBG_API_KEY env, if set)

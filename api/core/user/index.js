@@ -273,10 +273,10 @@ app.post('/jsonrpc', async (req, res) => {
                     const callerUid = context.user;
                     return Methods.bot.tokenRefresh(p, callerUid);
                 },
-                // ── Token active revocation (admin): kill all of a uid's live sessions ──
-                'user.token.revoke': (p) => {
-                    if (!isAdmin) throw jsonrpc.UNAUTHORIZED();
-                    return Methods.bot.revoke(p);
+                // ── Token active revocation (admin or delegated service bot for non-admin accounts) ──
+                'user.token.revoke': async (p) => {
+                    await assertAdminOrDelegated('user.token.revoke');
+                    return Methods.bot.revoke(p, { isAdmin, user: req.user });
                 },
                 // ── Roles (authority.md) — named permit templates for internal users + passports ──
                 // Permit-gated by the Router's checkAccess (CLAUDE.md §5). role.set/assign are

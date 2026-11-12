@@ -177,5 +177,7 @@ module.exports = {
         '<rootDir>/core/gateway/tests/solo-bridge.test.js',
         // v1.3.3 安全反馈与 Steward 越界自建逻辑收敛回归套件（2026-11-09）
         '<rootDir>/library/tests/feedback-v133-convergence.test.js',
+        // 出站分层、core/agent 原生 OllamaProvider 与跨栈 peer-relay 回归套件（2026-11-12）
+        '<rootDir>/library/tests/outbound-peer-ollama.test.js',
     ],
 };

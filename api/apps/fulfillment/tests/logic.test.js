@@ -935,3 +935,211 @@ describe('introspection compliance', () => {
         expect(entities.instance.softDelete).toBe(false);
     });
 });
+
+// ============================================================
+// PEER_RPC_WITH_CALLBACK & FAN-IN BARRIER (v1.3.4+)
+// ============================================================
+
+describe('peer_rpc_with_callback & fulfillment.barrier', () => {
+    test('transition with kind=peer_rpc_with_callback mints bound flcb_ token and dispatches via peerRelayFactory', async () => {
+        const peerCalls = [];
+        const customLogic = createLogic(redis, {
+            ...config,
+            peers: {
+                steward: {
+                    endpoint: 'https://rpa-api.w3os.net/rpc',
+                    user: 'svc_bot',
+                    password: 'secret',
+                },
+            },
+            peerRelayFactory(peerOpts) {
+                return {
+                    async call(method, params) {
+                        peerCalls.push({ peerOpts, method, params });
+                        return { jobId: 'HJ-1001', status: 'PENDING' };
+                    },
+                };
+            },
+        });
+
+        await customLogic.profile.create({
+            id: 'rpa-dispatch-prof',
+            name: 'RPA Dispatch Profile',
+            transitions: [
+                {
+                    event: 'dispatch_requested',
+                    from: 'DRAFT',
+                    to: 'EXECUTING',
+                    actions: [
+                        {
+                            kind: 'peer_rpc_with_callback',
+                            peer: 'steward',
+                            method: 'steward.bridge.dispatch',
+                            callback: {
+                                allowedEvents: ['rpa_succeeded', 'rpa_failed', 'assist_required'],
+                                ttlMs: 1800000,
+                            },
+                            paramsFromMeta: 'rpaDispatch',
+                        },
+                    ],
+                },
+                { event: 'rpa_succeeded', from: 'EXECUTING', to: 'COMPLETED' },
+                { event: 'rpa_failed', from: 'EXECUTING', to: 'FAILED' },
+                { event: 'assist_required', from: 'EXECUTING', to: 'ASSIST_REQUIRED' },
+            ],
+        });
+
+        const inst = await customLogic.instance.create({
+            sourceId: 'INV-2026-01',
+            profileId: 'rpa-dispatch-prof',
+            meta: {
+                rpaDispatch: {
+                    storeId: 'store-hz-01',
+                    slug: 'chinatax.blue.issue',
+                    inputs: { amount: 12800 },
+                },
+            },
+        }, MOCK_REQ);
+
+        const out = await customLogic.instance.transition({
+            id: inst.id,
+            event: 'dispatch_requested',
+        }, MOCK_REQ);
+
+        expect(out.state).toBe('EXECUTING');
+        expect(out._tasks).toEqual([]); // peer_rpc_with_callback does not leak into local Router _tasks
+
+        expect(peerCalls).toHaveLength(1);
+        expect(peerCalls[0].method).toBe('steward.bridge.dispatch');
+        expect(peerCalls[0].params.storeId).toBe('store-hz-01');
+        expect(peerCalls[0].params.upstream.instanceId).toBe(inst.id);
+        expect(peerCalls[0].params.upstream.expectedTransitionId).toBe(`${inst.id}-T2`);
+        expect(peerCalls[0].params.upstream.callbackToken).toMatch(/^flcb_/);
+
+        // Verify the auto-issued flcb_ token works for fulfillment.instance.callback
+        const cbOut = await customLogic.instance.callback({
+            event: 'rpa_succeeded',
+            metaUpdate: { invoiceNo: '26332000000012345678' },
+        }, { callbackToken: peerCalls[0].params.upstream.callbackToken });
+        expect(cbOut.state).toBe('COMPLETED');
+        expect(cbOut.meta.invoiceNo).toBe('26332000000012345678');
+    });
+
+    test('fulfillment.barrier — idempotent fan-in settles exactly once at expectedCount and advances target instance', async () => {
+        await redis.set(`${config.redis.profilePrefix}${SM_ID}`, JSON.stringify(SM_PROFILE));
+        const inst = await logic.instance.create({ sourceId: 'PULSE-2026-11-12', profileId: SM_ID }, MOCK_REQ);
+
+        const bar = await logic.barrier.create({
+            barrierKey: 'erp-harvest-2026-11-12',
+            expectedCount: 3,
+            ttlMs: 600000,
+            onSettled: {
+                target: 'fulfillment',
+                instanceId: inst.id,
+                event: 'start',
+            },
+        }, MOCK_REQ);
+        expect(bar.status).toBe('PENDING');
+        expect(bar.expectedCount).toBe(3);
+
+        // Item 1 check-in + duplicate check-in
+        const c1 = await logic.barrier.checkin({
+            barrierKey: 'erp-harvest-2026-11-12',
+            itemId: 'jky-sales',
+            outcome: 'DONE',
+            result: { file: 'jky-sales.xlsx', rows: 512 },
+        }, MOCK_REQ);
+        expect(c1.completedCount).toBe(1);
+        expect(c1.justSettled).toBe(false);
+
+        const c1Dup = await logic.barrier.checkin({
+            barrierKey: 'erp-harvest-2026-11-12',
+            itemId: 'jky-sales',
+            outcome: 'DONE',
+            result: { file: 'jky-sales.xlsx', rows: 512 },
+        }, MOCK_REQ);
+        expect(c1Dup.completedCount).toBe(1);
+        expect(c1Dup.justSettled).toBe(false);
+
+        // Item 2 check-in (SKIPPED)
+        const c2 = await logic.barrier.checkin({
+            barrierKey: 'erp-harvest-2026-11-12',
+            itemId: 'jst-aftersale',
+            outcome: 'SKIPPED',
+            result: { reason: 'empty window' },
+        }, MOCK_REQ);
+        expect(c2.completedCount).toBe(2);
+        expect(c2.justSettled).toBe(false);
+
+        // Item 3 check-in (DONE) → hits expectedCount=3 → settles barrier and transitions instance!
+        const c3 = await logic.barrier.checkin({
+            barrierKey: 'erp-harvest-2026-11-12',
+            itemId: 'jst-stock',
+            outcome: 'DONE',
+            result: { file: 'jst-stock.xlsx', rows: 1200 },
+        }, MOCK_REQ);
+        expect(c3.completedCount).toBe(3);
+        expect(c3.justSettled).toBe(true);
+        expect(c3.status).toBe('SETTLED');
+        expect(c3.succeeded).toBe(2);
+        expect(c3.skipped).toBe(1);
+        expect(c3.failed).toBe(0);
+
+        const updatedInst = await logic.instance.get({ id: inst.id }, MOCK_REQ);
+        expect(updatedInst.state).toBe('PROCESSING');
+        expect(updatedInst.meta.barrier).toMatchObject({
+            barrierKey: 'erp-harvest-2026-11-12',
+            status: 'SETTLED',
+            timedOut: false,
+            expectedCount: 3,
+            completedCount: 3,
+            succeeded: 2,
+            skipped: 1,
+            failed: 0,
+        });
+    });
+
+    test('fulfillment.barrier.reap — settles expired barriers past ttlMs with EXPIRED status', async () => {
+        await redis.set(`${config.redis.profilePrefix}${SM_ID}`, JSON.stringify(SM_PROFILE));
+        const inst = await logic.instance.create({ sourceId: 'PULSE-TIMEOUT', profileId: SM_ID }, MOCK_REQ);
+
+        await logic.barrier.create({
+            barrierKey: 'erp-timeout-round',
+            expectedCount: 2,
+            ttlMs: 1000,
+            onSettled: {
+                target: 'fulfillment',
+                instanceId: inst.id,
+                event: 'start',
+                timeoutEvent: 'start',
+            },
+        }, MOCK_REQ);
+
+        await logic.barrier.checkin({
+            barrierKey: 'erp-timeout-round',
+            itemId: 'only-one',
+            outcome: 'DONE',
+            result: { ok: true },
+        }, MOCK_REQ);
+
+        // Backdate expiresAt in Redis to simulate expiration
+        const key = `${config.redis.barrierPrefix}erp-timeout-round`;
+        const raw = JSON.parse(await redis.get(key));
+        raw.expiresAt = clock.now() - 5000;
+        await redis.set(key, JSON.stringify(raw));
+
+        const reaped = await logic.barrier.reap({}, ADMIN_REQ);
+        expect(reaped.expired).toBe(1);
+        expect(reaped.reaped[0]).toMatchObject({
+            barrierKey: 'erp-timeout-round',
+            status: 'EXPIRED',
+            completedCount: 1,
+            expectedCount: 2,
+        });
+
+        const afterInst = await logic.instance.get({ id: inst.id }, MOCK_REQ);
+        expect(afterInst.state).toBe('PROCESSING');
+        expect(afterInst.meta.barrier.status).toBe('EXPIRED');
+        expect(afterInst.meta.barrier.timedOut).toBe(true);
+    });
+});

@@ -488,6 +488,9 @@ async function testImapConnection(cfg) {
     const session = await createImapSession(cfg);
     try {
         await session.command(`LOGIN ${imapQuote(cfg.user)} ${imapQuote(cfg.pass)}`);
+        // RFC 2971 ID extension required by NetEase (163.com / 126.com / yeah.net / qiye.163.com)
+        // before SELECT/EXAMINE to avoid "NO SELECT Unsafe Login"; ignored if server returns BAD/NO.
+        await session.command('ID ("name" "SOLO-Gateway" "version" "1.0.0" "vendor" "SOLO")').catch(() => {});
         const mailbox = cfg.mailbox || 'INBOX';
         await session.command(`EXAMINE ${imapQuote(mailbox)}`);
         await session.command('LOGOUT').catch(() => {});
@@ -540,6 +543,7 @@ async function pollImapAccount({ redis, imapEntity, relay = null }, params = {})
         const session = await createImapSession(cfg);
         try {
             await session.command(`LOGIN ${imapQuote(cfg.user)} ${imapQuote(cfg.pass)}`);
+            await session.command('ID ("name" "SOLO-Gateway" "version" "1.0.0" "vendor" "SOLO")').catch(() => {});
             await session.command(`${markSeen ? 'SELECT' : 'EXAMINE'} ${imapQuote(mailbox)}`);
 
             const criteria = [];

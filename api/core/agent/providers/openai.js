@@ -12,9 +12,22 @@ class OpenAIProvider {
     constructor(config) {
         this.config = config;
         this.client = new OpenAI({
-            apiKey: config.openaiApiKey,
+            apiKey: config.openaiApiKey || 'sk-placeholder',
             baseURL: config.openaiBaseUrl // Delegate to custom endpoint
         });
+    }
+
+    _resolveModel(model, fallback = 'gpt-4o') {
+        const raw = String(model || '').trim();
+        if (!raw || raw.toLowerCase() === 'openai') return fallback;
+        return raw.replace(/^openai[/:]/i, '').trim() || fallback;
+    }
+
+    _useJsonMode() {
+        if (typeof this.config?.openaiJsonMode === 'boolean') {
+            return this.config.openaiJsonMode;
+        }
+        return process.env.OPENAI_JSON_MODE !== 'false';
     }
 
     // --- CORE LLM METHODS ---
@@ -25,7 +38,7 @@ class OpenAIProvider {
      */
     async parseImage({ image, prompt, model }) {
         logger.info('[OpenAI] Parsing Image (Delegate)...');
-        const targetModel = model || "gpt-4o"; // Placeholder default
+        const targetModel = this._resolveModel(model, "gpt-4o"); // Placeholder default
         
         try {
             const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
@@ -77,7 +90,7 @@ class OpenAIProvider {
 
     async transcribeAudio({ audio, model }) {
         logger.info('[OpenAI] Transcribing Audio (Delegate)...');
-        const targetModel = model || "whisper-1";
+        const targetModel = this._resolveModel(model, "whisper-1");
         
         try {
             // Placeholder: Most proxies handle audio via specialized endpoints
@@ -95,7 +108,7 @@ class OpenAIProvider {
 
     async parseText({ text, schema, model }) {
         logger.info('[OpenAI] Parsing Text (Delegate)...');
-        const targetModel = model || "gpt-4o";
+        const targetModel = this._resolveModel(model, "gpt-4o");
         
         try {
             const prompt = `
@@ -107,16 +120,20 @@ class OpenAIProvider {
                 Return ONLY valid JSON.
             `;
 
-            const response = await this.client.chat.completions.create({
+            const reqPayload = {
                 model: targetModel,
                 messages: [{ role: "user", content: prompt }],
-                response_format: { type: "json_object" }
-            });
+            };
+            if (this._useJsonMode()) {
+                reqPayload.response_format = { type: "json_object" };
+            }
+            const response = await this.client.chat.completions.create(reqPayload);
 
             const output = response.choices[0].message.content;
+            const cleaned = String(output || '').replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim();
             return {
                 success: true,
-                data: JSON.parse(output),
+                data: JSON.parse(cleaned),
                 metadata: { provider: 'openai', model: targetModel }
             };
         } catch (error) {
@@ -128,7 +145,7 @@ class OpenAIProvider {
     async chat(params) {
         const { text, model } = params;
         logger.info('[OpenAI] Chatting (Delegate)...');
-        const targetModel = model || "gpt-4o";
+        const targetModel = this._resolveModel(model, "gpt-4o");
         const lang = this.config.language || 'en';
         const PromptBuilder = require('../logic/prompt');
 
@@ -152,22 +169,26 @@ class OpenAIProvider {
 
     async suggestCategoryAttrs({ categoryPath, model }) {
         logger.info('[OpenAI] Suggesting category attributes (Delegate):', categoryPath.join(' > '));
-        const targetModel = model || "gpt-4o";
+        const targetModel = this._resolveModel(model, "gpt-4o");
         const PromptBuilder = require('../logic/prompt');
         const { system, user } = PromptBuilder.buildCategoryAttrSuggest(categoryPath);
         
         try {
-            const response = await this.client.chat.completions.create({
+            const reqPayload = {
                 model: targetModel,
                 messages: [
                     { role: "system", content: system },
                     { role: "user", content: user }
                 ],
-                response_format: { type: "json_object" }
-            });
+            };
+            if (this._useJsonMode()) {
+                reqPayload.response_format = { type: "json_object" };
+            }
+            const response = await this.client.chat.completions.create(reqPayload);
 
             const text = response.choices[0].message.content.trim();
-            const attrs = JSON.parse(text);
+            const cleaned = text.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim();
+            const attrs = JSON.parse(cleaned);
             return attrs;
         } catch (error) {
             logger.error('[OpenAI] Suggest Error:', error);
@@ -182,17 +203,24 @@ class OpenAIProvider {
      */
     async decide({ instruction, context, choices, schema, model }) {
         logger.info('[OpenAI] Decide (Delegate)...');
-        const targetModel = model || 'gpt-4o-mini';
+        const targetModel = this._resolveModel(model, 'gpt-4o-mini');
         const PromptBuilder = require('../logic/prompt');
         const prompt = PromptBuilder.buildDecide({ instruction, context, choices, schema });
         try {
-            const response = await this.client.chat.completions.create({
+            const reqPayload = {
                 model: targetModel,
                 messages: [{ role: 'user', content: prompt }],
-                response_format: { type: 'json_object' },
                 temperature: 0,
-            });
-            const data = JSON.parse(response.choices[0].message.content);
+            };
+            if (this._useJsonMode()) {
+                reqPayload.response_format = { type: 'json_object' };
+            }
+            const response = await this.client.chat.completions.create(reqPayload);
+            const rawContent = String(response.choices[0].message.content || '')
+                .replace(/```(?:json)?\s*/gi, '')
+                .replace(/```/g, '')
+                .trim();
+            const data = JSON.parse(rawContent);
             return { success: true, data, metadata: { provider: 'openai', model: targetModel } };
         } catch (error) {
             logger.error('[OpenAI] Decide Error:', error.message);

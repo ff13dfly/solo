@@ -159,7 +159,13 @@ app.post('/jsonrpc', authHandlers.middleware, async (req, res) => {
                 // profile 的全部实例，普通投稿人不能用它当 DoS 开关。
                 'fulfillment.profile.submit':  (p) => { if (p && p.enroll && !isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.submit(p, req); },
                 'fulfillment.profile.approve': (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.approve(p, req); },
-                'fulfillment.profile.reject':  (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.reject(p, req); }
+                'fulfillment.profile.reject':  (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.profile.reject(p, req); },
+
+                // Batch Fan-in Barrier
+                'fulfillment.barrier.create':  (p) => Methods.barrier.create(p, req),
+                'fulfillment.barrier.checkin': (p) => Methods.barrier.checkin(p, req),
+                'fulfillment.barrier.get':     (p) => Methods.barrier.get(p, req),
+                'fulfillment.barrier.reap':    (p) => { if (!isAdmin) throw jsonrpc.UNAUTHORIZED(); return Methods.barrier.reap(p, req); }
             };
 
             if (!handlers[method]) {
