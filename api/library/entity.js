@@ -1,4 +1,6 @@
 const { AsyncLocalStorage } = require('async_hooks');
+const fs = require('fs');
+const path = require('path');
 const generator = require('./generator');
 const jsonrpc = require('./jsonrpc');
 const { STATUS, WAL } = require('./constants');
@@ -27,11 +29,8 @@ const walContext = new AsyncLocalStorage();
  *
  * @note Delegates to clock.toMsOr() (v1.2.13) so the fleet has ONE home for this
  *       coercion — steward had independently re-written the same six lines as
- *       `hive/logic/node.js:lastSeenMs()`. This is the READ side only: the write
- *       side of this file still calls Date.now() directly rather than clock.now(),
- *       which is a separate open item (docs/feedback/entity-factory-bypasses-clock.md
- *       建议 1, deferred by triage 2026-08-30). Do not read this require() as that
- *       item being done.
+ *       `hive/logic/node.js:lastSeenMs()`. Both the read side and the write side
+ *       of this file now route through `library/clock` (`clock.now()` / `clock.toMsOr()`).
  */
 function toSortableMs(v) {
     return clock.toMsOr(v, 0);
@@ -59,8 +58,10 @@ function toSortableMs(v) {
  * @param {boolean} [options.softDelete=false] - Whether to use soft deletion.
  * @param {string[]} [options.searchFields=[]] - Fields to search when keyword is provided in list().
  * @param {boolean} [options.ownable=true] - Whether row-level $owner isolation applies (set false for global public dictionary entities).
+ * @param {object}  [options.retention=null] - Optional terminal-state lifecycle retention config:
+ *                                             { ttlDays = 30, terminalStates = ['DONE','EXPIRED','CANCELLED','COMPLETED','FAILED','DELETED'], stateField = 'status', coldArchive = true }
  */
-module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16, softDelete = false, storageType = 'string', sensitiveFields = [], searchFields = [], clientId = false, ownable = true }) => {
+module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16, softDelete = false, storageType = 'string', sensitiveFields = [], searchFields = [], clientId = false, ownable = true, retention = null }) => {
     if (!redis) throw new Error('[EntityFactory] Redis client is required');
     if (!serviceName || !entityName) throw new Error('[EntityFactory] serviceName and entityName are required');
 
@@ -132,20 +133,57 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
         const ctx = walContext.getStore();
         const o = ctx && ctx.owner;
         if (!o) return null;
-        if (!o.field || o.value === undefined || o.value === null || o.value === '') {
+        if (!o.field) {
             throw jsonrpc.FORBIDDEN('Invalid $owner row-isolation constraint');
         }
-        return o;
+        if (Array.isArray(o.values)) {
+            const clean = o.values.filter((v) => v !== undefined && v !== null && v !== '');
+            if (clean.length === 0) {
+                throw jsonrpc.FORBIDDEN('Invalid $owner.values row-isolation constraint (empty set)');
+            }
+            const valuesSet = new Set(clean);
+            return {
+                field: o.field,
+                value: clean.length === 1 ? clean[0] : undefined,
+                values: clean,
+                matches: (val) => valuesSet.has(val),
+            };
+        }
+        if (o.value === undefined || o.value === null || o.value === '') {
+            throw jsonrpc.FORBIDDEN('Invalid $owner row-isolation constraint');
+        }
+        return {
+            field: o.field,
+            value: o.value,
+            values: [o.value],
+            matches: (val) => val === o.value,
+        };
+    };
+    const stampOrValidateOwner = (targetObj, existingVal = undefined) => {
+        const o = ownerScope();
+        if (!o) return;
+        if (o.values.length === 1) {
+            targetObj[o.field] = o.values[0];
+            return;
+        }
+        const candidate = targetObj[o.field] !== undefined ? targetObj[o.field] : existingVal;
+        if (candidate === undefined || candidate === null || candidate === '') {
+            throw jsonrpc.INVALID_PARAM(`Missing required scope field "${o.field}" (permitted values: ${o.values.join(', ')})`);
+        }
+        if (!o.matches(candidate)) {
+            throw jsonrpc.FORBIDDEN(`Value "${candidate}" for "${o.field}" is outside caller's permitted scope`);
+        }
+        targetObj[o.field] = candidate;
     };
     const ownerFilter = (filter) => {
         const o = ownerScope();
         if (!o) return filter;
-        const pred = (item) => !!item && item[o.field] === o.value;
+        const pred = (item) => !!item && o.matches(item[o.field]);
         return filter ? (item) => pred(item) && filter(item) : pred;
     };
     const assertOwned = (data) => {
         const o = ownerScope();
-        if (o && data && data[o.field] !== o.value) throw jsonrpc.NOT_FOUND(entityName);
+        if (o && data && !o.matches(data[o.field])) throw jsonrpc.NOT_FOUND(entityName);
         return data;
     };
 
@@ -190,7 +228,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             user: ctx && ctx.uid ? String(ctx.uid) : '',
             txn: (ctx && ctx.txn) || '',
             trace: (ctx && ctx.trace) ? String(ctx.trace) : '',
-            stamp: String(Date.now())
+            stamp: String(clock.now())
         };
     };
 
@@ -218,7 +256,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
                 after: sanitize(after),
                 user: ctx?.uid || null,
                 txn: ctx?.txn || null,
-                stamp: Date.now()
+                stamp: clock.now()
             });
         } catch (e) {
             console.error(`[EntityFactory:WAL] Failed to write log for ${op} ${key}: ${e.message}`);
@@ -284,6 +322,10 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
          * Create a new entity instance.
          */
         async create(params) {
+            // Validate multi-value $owner scope BEFORE reserving the Redis key so invalid creates leave no orphan key.
+            const _preCheck = { ...params };
+            stampOrValidateOwner(_preCheck);
+
             let id;
             let key;
 
@@ -319,7 +361,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             }
 
             const indexKey = getIndexKey();
-            const now = Date.now();
+            const now = clock.now();
             const data = {
                 status: STATUS_ACTIVE,
                 ...params,
@@ -329,8 +371,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             };
             // 行隔离盖章：owner-scoped 会话建的行归它所有。放在 params 展开之后 = 覆盖
             // 客户端传入的同名字段（防伪造归属），且先于 WAL 快照（账本记录的是终值）。
-            const _owner = ownerScope();
-            if (_owner) data[_owner.field] = _owner.value;
+            stampOrValidateOwner(data);
 
             // Cursor index score = insertion sequence (INCR), not createdAt. createdAt can be
             // client-supplied (backdated imports) and two creates can land in the same ms —
@@ -410,11 +451,14 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
 
             for (let start = 0; start < rows.length; start += chunkSize) {
                 const slice = rows.slice(start, start + chunkSize);
+                for (const params of slice) {
+                    stampOrValidateOwner({ ...params });
+                }
                 const ids = await assignBulkIds(slice);
                 const base = await redis.incrBy(getCursorSeqKey(), slice.length);
                 const firstSeq = base - slice.length + 1;
 
-                const now = Date.now();
+                const now = clock.now();
                 const multi = redis.multi();
                 const batch = [];
                 for (let i = 0; i < slice.length; i++) {
@@ -429,7 +473,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
                         updatedAt: now
                     };
                     // 行隔离盖章：与 create() 同序（params 展开之后，先于 WAL 快照）。
-                    if (owner) data[owner.field] = owner.value;
+                    if (owner) stampOrValidateOwner(data);
 
                     if (useJson) multi.json.set(key, '$', data);
                     else multi.set(key, JSON.stringify(data));
@@ -480,15 +524,15 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             // owner 字段不可被 update 改走（否则 owner-scoped 会话能把行转让/脱离隔离）。
             const _owner = ownerScope();
             if (_owner) {
-                await this.get({ id });
-                updates[_owner.field] = _owner.value;
+                const currentRow = await this.get({ id });
+                stampOrValidateOwner(updates, currentRow[_owner.field]);
             }
 
             if (useJson) {
                 // RedisJSON 存储:读改写本身仍非原子(并发 update 可互相覆盖,已知缺口 §8.2,
                 // 目前无并发 patch 热点);但【写 + 账本】已绑进同一个 MULTI。
                 const existing = await this.get({ id });
-                const updated = { ...existing, ...updates, updatedAt: Date.now() };
+                const updated = { ...existing, ...updates, updatedAt: clock.now() };
                 if (canAtomicWal) {
                     const multi = redis.multi();
                     multi.json.set(key, '$', updated);
@@ -507,7 +551,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             let before = null;
             const updated = await optimisticUpdate(redis, key, (existing) => {
                 before = existing;
-                return { ...existing, ...updates, updatedAt: Date.now() };
+                return { ...existing, ...updates, updatedAt: clock.now() };
             }, canAtomicWal
                 ? { onMulti: (multi, { before: b, next }) => walMulti(multi, 'update', key, b, next) }
                 : {});
@@ -606,7 +650,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             for (let start = 0; start < ids.length; start += chunkSize) {
                 const slice = ids.slice(start, start + chunkSize);
                 const existing = await readManyData(slice.map(getDataKey));
-                const now = Date.now();
+                const now = clock.now();
                 const multi = redis.multi();
                 const pendingWal = [];
                 let queued = 0;
@@ -615,7 +659,7 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
                     const id = slice[i];
                     const before = existing[i];
                     // Absent, or not this session's row → skip (see @attention 1).
-                    if (!before || (owner && before[owner.field] !== owner.value)) { skipped++; continue; }
+                    if (!before || (owner && !owner.matches(before[owner.field]))) { skipped++; continue; }
                     const key = getDataKey(id);
 
                     if (softDelete) {
@@ -1008,6 +1052,148 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             }
 
             return { success: true };
+        },
+
+        /**
+         * Lifecycle retention & cold archive compaction (`entity.compact`).
+         *
+         * @why High-turnover entities (`hive.job`, `scout.capture`, `gateway.delivery`,
+         *      `orchestrator.run`) accumulate thousands of terminal records in hot Redis
+         *      memory, slowing down unindexed `list()` scans while still needing audit
+         *      traceability. `compact()` evicts terminal records older than `ttlDays` ONLY
+         *      after appending and `fsync`ing them to a monthly JSONL cold archive file, and
+         *      atomically cleans up the data key + SET index + cursor ZSET in one `MULTI`.
+         *      (docs/feedback/done/entity-lifecycle-retention-and-oss-loopback-guard.md §一)
+         */
+        async compact({
+            dryRun = false,
+            batchSize = 500,
+            archiveDir = null,
+            ttlDays = undefined,
+            terminalStates = undefined,
+            stateField = undefined,
+            coldArchive = undefined,
+        } = {}) {
+            const retCfg = retention || {};
+            const effectiveTtlDays = ttlDays !== undefined ? Number(ttlDays) : (retCfg.ttlDays !== undefined ? Number(retCfg.ttlDays) : 30);
+            if (!Number.isFinite(effectiveTtlDays) || effectiveTtlDays < 0) {
+                throw jsonrpc.INVALID_PARAM('retention ttlDays must be a non-negative number');
+            }
+            const effectiveStates = new Set(
+                Array.isArray(terminalStates)
+                    ? terminalStates
+                    : (Array.isArray(retCfg.terminalStates)
+                        ? retCfg.terminalStates
+                        : ['DONE', 'EXPIRED', 'CANCELLED', 'COMPLETED', 'FAILED', 'DELETED'])
+            );
+            const effectiveStateField = stateField || retCfg.stateField || 'status';
+            const shouldColdArchive = coldArchive !== undefined ? Boolean(coldArchive) : (retCfg.coldArchive !== false);
+
+            const indexKey = getIndexKey();
+            const cursorIndexKey = getCursorIndexKey();
+            const owner = ownerScope();
+            const ids = await redis.sMembers(indexKey); // SAFE: explicit off-peak maintenance method
+
+            if (!ids || ids.length === 0) {
+                return { scanned: 0, archived: 0, skippedActive: 0, dryRun: !!dryRun, archiveFile: null };
+            }
+
+            const now = clock.now();
+            const cutoffMs = now - effectiveTtlDays * 86400 * 1000;
+            const d = new Date(now);
+            const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+            const baseLogDir = archiveDir || process.env.LOG_DIR || path.join(process.cwd(), 'logs');
+            const coldDir = path.join(baseLogDir, 'archive');
+            const archiveFilePath = shouldColdArchive
+                ? path.join(coldDir, `${serviceName.toLowerCase()}-${entityName.toLowerCase()}-${ym}.jsonl`)
+                : null;
+
+            let scanned = 0;
+            let archived = 0;
+            let skippedActive = 0;
+            const step = Math.max(1, Number(batchSize) || 500);
+
+            for (let start = 0; start < ids.length; start += step) {
+                const slice = ids.slice(start, start + step);
+                const rows = await readManyData(slice.map(getDataKey));
+                const toEvict = [];
+
+                for (let i = 0; i < slice.length; i++) {
+                    const id = slice[i];
+                    const row = rows[i];
+                    if (!row) continue;
+                    if (owner && !owner.matches(row[owner.field])) continue;
+                    scanned++;
+
+                    const stateVal = row[effectiveStateField];
+                    const rowTs = toSortableMs(row.updatedAt !== undefined ? row.updatedAt : row.createdAt);
+                    if (!effectiveStates.has(stateVal) || rowTs > cutoffMs) {
+                        skippedActive++;
+                        continue;
+                    }
+                    toEvict.push({ id, key: getDataKey(id), row });
+                }
+
+                if (toEvict.length === 0) continue;
+
+                if (dryRun) {
+                    archived += toEvict.length;
+                    continue;
+                }
+
+                // 1. Durable cold archive write + fsync BEFORE any Redis key deletion
+                if (shouldColdArchive && archiveFilePath) {
+                    fs.mkdirSync(coldDir, { recursive: true });
+                    const lines = toEvict.map(({ row }) => JSON.stringify({
+                        archivedAt: now,
+                        service: serviceName,
+                        entity: entityName,
+                        record: sanitize(row),
+                    })).join('\n') + '\n';
+                    const fd = fs.openSync(archiveFilePath, 'a');
+                    try {
+                        fs.writeFileSync(fd, lines, 'utf8');
+                        fs.fsyncSync(fd);
+                    } finally {
+                        fs.closeSync(fd);
+                    }
+                }
+
+                // 2. Atomic eviction of data key + SET index + ZSET cursor index
+                if (typeof redis.multi === 'function') {
+                    const multi = redis.multi();
+                    for (const { id, key, row } of toEvict) {
+                        multi.del(key);
+                        multi.sRem(indexKey, id);
+                        multi.zRem(cursorIndexKey, id);
+                        if (canAtomicWal) walMulti(multi, 'compact', key, row, null);
+                    }
+                    await multi.exec();
+                    if (!canAtomicWal) {
+                        for (const { key, row } of toEvict) walFile('compact', key, row, null);
+                    }
+                } else {
+                    for (const { id, key, row } of toEvict) {
+                        await redis.del(key);
+                        await redis.sRem(indexKey, id);
+                        if (typeof redis.zRem === 'function') await redis.zRem(cursorIndexKey, id);
+                        walFile('compact', key, row, null);
+                    }
+                }
+
+                archived += toEvict.length;
+            }
+
+            const archivePathOut = archived > 0 && shouldColdArchive ? archiveFilePath : null;
+            return {
+                scanned,
+                archived,
+                evicted: dryRun ? 0 : archived,
+                skippedActive,
+                dryRun: !!dryRun,
+                archiveFile: archivePathOut,
+                archivedFile: archivePathOut,
+            };
         }
     };
 };

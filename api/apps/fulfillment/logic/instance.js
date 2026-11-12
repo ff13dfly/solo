@@ -69,11 +69,28 @@ module.exports = (redis, config, relay = null) => {
     }
 
     function resolveOwner(req) {
-        return walContext.getStore()?.owner || req?.constraints?.$owner || null;
+        return walContext.getStore()?.owner || req?.constraints?.$owner || req?.$owner || null;
     }
 
-    function sourceIndexKey(owner, profileId, sourceId) {
-        const ownerScope = (owner && owner.field) ? `${owner.field}=${owner.value}` : '_';
+    function matchesOwner(owner, record) {
+        if (!owner || !owner.field) return true;
+        if (!record) return false;
+        if (Array.isArray(owner.values)) {
+            return owner.values.includes(record[owner.field]);
+        }
+        return record[owner.field] === owner.value;
+    }
+
+    function sourceIndexKey(owner, profileId, sourceId, explicitOwnerVal = undefined) {
+        let ownerScope = '_';
+        if (owner && owner.field) {
+            if (Array.isArray(owner.values)) {
+                const chosen = explicitOwnerVal !== undefined ? explicitOwnerVal : (owner.values.length === 1 ? owner.values[0] : owner.values.slice().sort().join('|'));
+                ownerScope = `${owner.field}=${chosen}`;
+            } else {
+                ownerScope = `${owner.field}=${owner.value}`;
+            }
+        }
         const tupleHash = crypto.createHash('sha256')
             .update(JSON.stringify([ownerScope, String(profileId), String(sourceId)]))
             .digest('hex')
@@ -103,9 +120,64 @@ module.exports = (redis, config, relay = null) => {
 
     function assertOwner(instance, req) {
         const owner = resolveOwner(req);
-        if (owner && owner.field && instance[owner.field] !== owner.value) {
+        if (!matchesOwner(owner, instance)) {
             throw jsonrpc.NOT_FOUND(`Instance ${instance.id}`);
         }
+    }
+
+    function pickByDotPath(obj, dotPath) {
+        if (!obj || typeof obj !== 'object' || typeof dotPath !== 'string' || !dotPath) return undefined;
+        return dotPath.split('.').reduce((acc, part) => {
+            if (!acc || typeof acc !== 'object' || PROTO_KEYS.has(part)) return undefined;
+            return Object.prototype.hasOwnProperty.call(acc, part) ? acc[part] : undefined;
+        }, obj);
+    }
+
+    /**
+     * Auto-fetch missing `profile.meta_fields[].source` values via `relay.call` before
+     * evaluating transition conditions (docs/feedback/done/fulfillment-condition-fail-open.md §二).
+     */
+    async function fetchMissingSourcedMeta(profile, instance, callerMetaUpdate, req) {
+        if (!relay || typeof relay.call !== 'function') return {};
+        const metaFields = Array.isArray(profile && profile.meta_fields) ? profile.meta_fields : [];
+        if (metaFields.length === 0) return {};
+
+        const fetched = {};
+        const baseMeta = { ...(instance.meta || {}), ...callerMetaUpdate };
+
+        for (const mf of metaFields) {
+            if (!mf || typeof mf.key !== 'string' || !mf.key || PROTO_KEYS.has(mf.key)) continue;
+            if (!mf.source || typeof mf.source !== 'object') continue;
+            // Only auto-fetch when the field is currently absent from both stored meta and caller metaUpdate
+            if (baseMeta[mf.key] !== undefined && baseMeta[mf.key] !== null && baseMeta[mf.key] !== '') continue;
+
+            const s = mf.source;
+            const rawMethod = typeof s.method === 'string' ? s.method.trim() : '';
+            if (!rawMethod) continue;
+            const fullMethod = (s.service && !rawMethod.startsWith(`${s.service}.`))
+                ? `${s.service}.${rawMethod}`
+                : rawMethod;
+            const pickPath = typeof s.pick === 'string' && s.pick
+                ? s.pick
+                : (typeof s.field === 'string' && s.field ? s.field : null);
+            if (!pickPath) continue;
+
+            try {
+                const logicCtx = buildLogicData(instance, { ...baseMeta, ...fetched }, req);
+                const resolvedParams = s.params
+                    ? rules.resolveParams(s.params, logicCtx)
+                    : { id: instance.sourceId };
+                const res = await relay.call(fullMethod, resolvedParams);
+                const pickedVal = pickByDotPath(res, pickPath);
+                if (pickedVal !== undefined) {
+                    fetched[mf.key] = pickedVal;
+                }
+            } catch (err) {
+                logger.warn(`Auto-fetch meta_field '${mf.key}' from ${fullMethod} failed for instance ${instance.id}: ${err.message}`);
+            }
+        }
+
+        return stripSensitiveMeta(fetched);
     }
 
     async function getInstance(id, req) {
@@ -136,6 +208,7 @@ module.exports = (redis, config, relay = null) => {
     // (docs/feedback/done/fulfillment-actions-have-no-business-egress.md §3.2)
     const buildLogicData = (instance, mergedMeta, req) => ({
         instance:    { ...instance, meta: mergedMeta },
+        meta:        mergedMeta,
         now:         clock.now(),
         user:        req?.user        || null,
         permit:      req?.permit      || null,
@@ -169,6 +242,10 @@ module.exports = (redis, config, relay = null) => {
                 throw jsonrpc.FORBIDDEN(`Profile ${initialInstance.profileId} is not activated (reviewState: ${profile.reviewState}) — it must be (re-)approved before its instances can transition`);
             }
 
+            // Auto-fetch any declared `profile.meta_fields[].source` values missing from instance.meta + metaUpdate
+            const autoFetchedMeta = await fetchMissingSourcedMeta(profile, initialInstance, safeMetaUpdate, req);
+            const effectiveMetaUpdate = { ...autoFetchedMeta, ...safeMetaUpdate };
+
             let fromState;
             let toState;
             let transitionId;
@@ -197,8 +274,8 @@ module.exports = (redis, config, relay = null) => {
                         );
                     }
                 }
-                // Merge metaUpdate BEFORE evaluating conditions so cached values satisfy them.
-                const mergedMeta = { ...current.meta, ...safeMetaUpdate };
+                // Merge metaUpdate (plus auto-fetched source values) BEFORE evaluating conditions.
+                const mergedMeta = { ...current.meta, ...effectiveMetaUpdate };
                 logicData = buildLogicData(current, mergedMeta, req);
 
                 // Candidates share (event, from); they may differ by condition (branching).
@@ -306,7 +383,7 @@ module.exports = (redis, config, relay = null) => {
                 };
 
                 const entry = { state: toState, event, transition_id: transitionId, user: req?.user || null, trace: walContext.getStore()?.trace || null, stamp: now };
-                if (Object.keys(safeMetaUpdate).length) entry.meta_update = safeMetaUpdate;
+                if (Object.keys(effectiveMetaUpdate).length) entry.meta_update = effectiveMetaUpdate;
                 if (forced) entry.forced = true;
                 if (reason) entry.reason = reason;
                 next.history.push(entry);
@@ -420,7 +497,8 @@ module.exports = (redis, config, relay = null) => {
          * fulfillment.instance.create — new lifecycle record in DRAFT state.
          * Optional `idempotent: true` deduplicates by (profileId, sourceId) within $owner scope.
          */
-        async create({ sourceId, profileId, meta = {}, idempotent = false }, req) {
+        async create(params = {}, req) {
+            const { sourceId, profileId, meta = {}, idempotent = false } = params;
             if (!sourceId)  throw jsonrpc.MISSING_PARAM('sourceId');
             if (!profileId) throw jsonrpc.MISSING_PARAM('profileId');
 
@@ -433,7 +511,25 @@ module.exports = (redis, config, relay = null) => {
             }
 
             const owner = resolveOwner(req);
-            const srcKey = sourceIndexKey(owner, profileId, sourceId);
+            let ownerVal = owner && owner.field ? owner.value : undefined;
+            if (owner && owner.field && Array.isArray(owner.values)) {
+                const clean = owner.values.filter((v) => v !== undefined && v !== null && v !== '');
+                if (clean.length === 1) {
+                    ownerVal = clean[0];
+                } else {
+                    const supplied = params[owner.field] !== undefined
+                        ? params[owner.field]
+                        : (meta && meta[owner.field]);
+                    if (supplied === undefined || supplied === null || supplied === '') {
+                        throw jsonrpc.INVALID_PARAM(`Missing required scope field "${owner.field}" in params or meta (permitted values: ${clean.join(', ')})`);
+                    }
+                    if (!clean.includes(supplied)) {
+                        throw jsonrpc.FORBIDDEN(`Value "${supplied}" for "${owner.field}" is outside caller's permitted scope`);
+                    }
+                    ownerVal = supplied;
+                }
+            }
+            const srcKey = sourceIndexKey(owner, profileId, sourceId, ownerVal);
 
             return withInstanceLock(srcKey, async () => {
                 if (idempotent) {
@@ -453,7 +549,7 @@ module.exports = (redis, config, relay = null) => {
                         const match = rows
                             .filter(Boolean)
                             .map((r) => JSON.parse(r))
-                            .find((i) => i.profileId === profileId && i.sourceId === sourceId && (!owner || !owner.field || i[owner.field] === owner.value));
+                            .find((i) => i.profileId === profileId && i.sourceId === sourceId && matchesOwner(owner, i));
                         if (match) {
                             await redis.set(srcKey, match.id);
                             return { ...match, deduplicated: true };
@@ -486,7 +582,7 @@ module.exports = (redis, config, relay = null) => {
                     stateChangedAt:    now,
                     createdAt:         now,
                     createdBy:         req?.user || null,
-                    ...(owner && owner.field ? { [owner.field]: owner.value, _ownerScope: { field: owner.field, value: owner.value } } : {}),
+                    ...(owner && owner.field ? { [owner.field]: ownerVal, _ownerScope: { field: owner.field, value: ownerVal } } : {}),
                     meta:              safeMeta,
                     pending_callbacks: [],
                     history: [{
@@ -555,7 +651,7 @@ module.exports = (redis, config, relay = null) => {
 
             let items = results.filter(r => r !== null).map(r => JSON.parse(r));
             const owner = resolveOwner(req);
-            if (owner && owner.field) items = items.filter(i => i[owner.field] === owner.value);
+            if (owner && owner.field) items = items.filter(i => matchesOwner(owner, i));
             if (state)     items = items.filter(i => i.state === state);
             if (sourceId)  items = items.filter(i => i.sourceId === sourceId);
             if (profileId) items = items.filter(i => i.profileId === profileId);

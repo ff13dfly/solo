@@ -68,6 +68,6 @@ CHANGELOG 自己也写了「满盘会拖垮整栈」，还为此加了 `archiver
 3. **（可选）让 `archiver.disk.low` 的告警文案带上轮转脚本的路径**。
    告警响的那一刻正是最需要那把扳手的时刻，而那时人多半在别的上下文里。
 
-## 四、处理结论
+## 四、处理结论（2026-11-12 落地归档）
 
-（待 triage）
+- ✅ 已将 `deploy/wal-rotate.sh` 纳入 `deploy/scaffold/wal-rotate.sh`，并加入 `deploy/scaffold/init.sh`、`deploy/scaffold/upgrade.sh` 及 `deploy/check-upgrade-path.sh` 的 `[Solo→Project]` 下发脚本清单（含 DIVERGED 保护与头注挂载说明）。本篇移入 `docs/feedback/done/`。

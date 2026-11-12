@@ -141,6 +141,18 @@ function createStorageProvider(storageConfig = {}, deps = {}) {
              '`visibility` (which gates the RPC face only). For byte-level isolation set ' +
              'STORAGE_ACCESS=private (signed, expiring urls).');
     }
+    if (provider === 'local' && process.env.NODE_ENV === 'production') {
+        const localCfg = storageConfig.local || {};
+        const effectiveOrigin = String(localCfg.outwardOrigin || localCfg.publicBase || localCfg.endpoint || '');
+        if (!effectiveOrigin || /^https?:\/\/(?:127\.|localhost\b|0\.0\.0\.0|\[::1\])/i.test(effectiveOrigin)) {
+            const warn = (deps.logger && typeof deps.logger.warn === 'function')
+                ? deps.logger.warn.bind(deps.logger) : console.warn;
+            warn('[storage] NODE_ENV=production with OSS_PROVIDER=local, but LOCAL_OSS_OUTWARD_ORIGIN is unset or points to loopback (' +
+                 (effectiveOrigin || 'default 127.0.0.1') +
+                 '). Asset URLs returned to remote nodes/browsers will be unreachable dead links. Set LOCAL_OSS_OUTWARD_ORIGIN to your public/LAN reverse-proxy origin.');
+            driver._loopbackOriginWarning = true;
+        }
+    }
 
     return driver;
 }

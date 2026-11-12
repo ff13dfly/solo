@@ -287,6 +287,25 @@ else
     note "最吃 CPU 的进程:${_top:-?}"
 fi
 
+# 生产/跨机环境下检查 LOCAL_OSS_OUTWARD_ORIGIN 是否漏配或指向回环地址 (docs/feedback/done/entity-lifecycle-retention-and-oss-loopback-guard.md §二)
+if [ "${OSS_PROVIDER:-local}" = "local" ]; then
+    _non_local_deploy=0
+    [ "${NODE_ENV:-}" = "production" ] && _non_local_deploy=1
+    case "${CORS_ORIGINS:-}${ROUTER_PUBLIC_URL:-}" in
+        *http://127.*|*http://localhost*|"" ) ;;
+        *http* ) _non_local_deploy=1 ;;
+    esac
+    if [ "$_non_local_deploy" = "1" ]; then
+        _outward="${LOCAL_OSS_OUTWARD_ORIGIN:-${LOCAL_OSS_PUBLIC_BASE:-}}"
+        if [ -z "$_outward" ] || printf '%s' "$_outward" | grep -Eq '^https?://(127\.|localhost|0\.0\.0\.0|\[::1\])'; then
+            warn "生产/跨机模式下 OSS_PROVIDER=local,但 LOCAL_OSS_OUTWARD_ORIGIN 未配置或指向回环 (${_outward:-未设置})"
+            hint "storage 返回的附件 URL 会回退为 http://127.0.0.1:.../assets/... 导致跨机节点或浏览器打开死链;请在 .env 配置 LOCAL_OSS_OUTWARD_ORIGIN=https://<外发域名>"
+        else
+            ok "LOCAL_OSS_OUTWARD_ORIGIN = $_outward (非回环外发地址)"
+        fi
+    fi
+fi
+
 # ═══ 汇总 ═══════════════════════════════════════════════════════════════════
 printf "\n${BOLD}结果:${NC} ${GREEN}✓ %d${NC}  ${YELLOW}⚠ %d${NC}  ${RED}✗ %d${NC}\n" "$PASS" "$WARN" "$FAIL"
 [ "$FAIL" -gt 0 ] && exit 1

@@ -319,14 +319,17 @@ cp "$SCRIPT_DIR/run.sh"                "$NEW_DIR/deploy/run.sh"
 cp "$SCRIPT_DIR/precheck.sh"           "$NEW_DIR/deploy/precheck.sh"
 cp "$SCRIPT_DIR/admin-up.sh"           "$NEW_DIR/deploy/admin-up.sh"
 cp "$SCRIPT_DIR/doctor.sh"             "$NEW_DIR/deploy/doctor.sh"
+cp "$SCRIPT_DIR/wal-rotate.sh"         "$NEW_DIR/deploy/wal-rotate.sh"
 cp "$SCRIPT_DIR/seed-registry.js"      "$NEW_DIR/deploy/seed-registry.js"
+cp "$SCRIPT_DIR/bot-permits.js"        "$NEW_DIR/deploy/bot-permits.js"
+cp "$SCRIPT_DIR/seed-bots.js"          "$NEW_DIR/deploy/seed-bots.js"
 # Needed the day a project adds cursor pagination to an EXISTING *.list (docs/authoring/
 # service.md §6.5): entities written before the cursor ZSET existed make list({cursor})
 # throw until this has run once. Shipping it here so nobody has to hand-write it.
 cp "$SCRIPT_DIR/migrate-cursor-index.js" "$NEW_DIR/deploy/migrate-cursor-index.js"
 cp "$SCRIPT_DIR/services.json.example" "$NEW_DIR/deploy/services.json"
 cp "$SCRIPT_DIR/seed.json"             "$NEW_DIR/deploy/seed.json"
-chmod +x "$NEW_DIR/deploy/run.sh" "$NEW_DIR/deploy/precheck.sh" "$NEW_DIR/deploy/admin-up.sh" "$NEW_DIR/deploy/doctor.sh"
+chmod +x "$NEW_DIR/deploy/run.sh" "$NEW_DIR/deploy/precheck.sh" "$NEW_DIR/deploy/admin-up.sh" "$NEW_DIR/deploy/doctor.sh" "$NEW_DIR/deploy/wal-rotate.sh" "$NEW_DIR/deploy/seed-bots.js"
 
 # Scan a contiguous free port range for Solo internal services. Each
 # scaffolded project gets its own range so two projects on the same machine

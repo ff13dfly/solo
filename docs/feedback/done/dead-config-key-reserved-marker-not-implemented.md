@@ -76,6 +76,6 @@ idLengths: {   // RESERVED: 本服务不生成 ID，留给将来的自建实体
 3. 顺带：`api/sample/config.js` 里若能给一个 `// RESERVED:` 的正例，
    作者第一次遇到这条 WARN 时就不用猜写法。
 
-## 处理结论
+## 处理结论（2026-11-12 落地归档）
 
-（待 triage）
+- ✅ 已在 `api/autocheck/static/dead-config-key.js` 实现 `isReservedInConfig(configLines, key)`：在 `config.js` 的 key 声明行或其紧邻的上方注释块中标注 `// RESERVED:` 时，自动跳过死配置告警；新增单测覆盖。

@@ -175,8 +175,7 @@ TS 转译，`.spec.ts` 照跑不误——**当前没有任何实际故障**。`e
   `suites/00-login`，全栈 15 服务启动无一失败，teardown 日志含 `mcp (pid …) stopped.`，套件 2/2 绿。
   （**未跑全量 66 套**——本轮只验证「加 mcp 不破坏整栈启动」这一个风险点。）
 
-### 归属提醒（未执行，待定）
+### 归属与收口结论（2026-11-12 归档）
 
-本篇是**对 solo 自身 e2e 体系的内部代码审计**，而 `docs/feedback/` 的两条通道是「运行时
-`system.report` 收集」与「**派生项目实战**踩出来的反馈」——两条都不是。更贴切的位置是
-`docs/planning/toFix.md`。**未擅自移动**，留待决定；若保留在此，建议文首注明这是内部审计。
+- ✅ §一～§三 已于 `v1.2.15` 落地；
+- ✅ §四 `e2e/ui/package.json` 已补齐 `"typescript": "^5.0.0"` `devDependencies`；`e2e/README.md` 套件计数已由 `deploy/check-doc-drift.js` 纳入自动对账。本篇正式移入 `docs/feedback/done/`。

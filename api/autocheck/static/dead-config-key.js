@@ -50,6 +50,21 @@ function extractKeys(obj, prefix = '') {
     return keys;
 }
 
+function isReservedInConfig(configLines, key) {
+    const keyRe = new RegExp(`^\\s*['"]?${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]?\\s*:`);
+    for (let i = 0; i < configLines.length; i++) {
+        if (!keyRe.test(configLines[i])) continue;
+        if (/\/\/\s*RESERVED\b/i.test(configLines[i])) return true;
+        // Look up through contiguous preceding comment lines
+        for (let j = i - 1; j >= 0; j--) {
+            const prev = configLines[j].trim();
+            if (!prev.startsWith('//') && !prev.startsWith('*') && !prev.startsWith('/*')) break;
+            if (/RESERVED\b/i.test(prev)) return true;
+        }
+    }
+    return false;
+}
+
 function check(servicePath, results) {
     const configPath = path.join(servicePath, 'config.js');
     const logicPath = path.join(servicePath, 'logic');
@@ -58,7 +73,9 @@ function check(servicePath, results) {
     if (!fs.existsSync(configPath)) return;
 
     let config;
+    let configLines = [];
     try {
+        configLines = fs.readFileSync(configPath, 'utf-8').split('\n');
         delete require.cache[require.resolve(configPath)];
         config = require(configPath);
     } catch (e) {
@@ -97,6 +114,8 @@ function check(servicePath, results) {
         if (EXEMPT_KEYS.has(key)) continue;
         // 豁免（框架消费）key 的后代也豁免 —— 如 seeds.categories 在 bootstrap 消费的 seeds 之下。
         if ([...EXEMPT_KEYS].some(ek => full.startsWith(ek + '.'))) continue;
+        // 支持 config.js 中在声明行或紧邻上方注释标注 `// RESERVED:`
+        if (isReservedInConfig(configLines, key) || isReservedInConfig(configLines, full.split('.')[0])) continue;
         // 跳过父 key 的子属性（只要父 key 被引用，子 key 视为已覆盖）
         const parentReferenced = [...PARENT_KEYS].some(pk =>
             full.startsWith(pk + '.') && new RegExp(`\\.${pk.split('.').pop()}\\b`).test(combined)

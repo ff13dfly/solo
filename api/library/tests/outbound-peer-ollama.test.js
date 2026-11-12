@@ -463,4 +463,154 @@ describe('outbound-layering-ollama-agent-and-peer-relay regression suite', () =>
             ).rejects.toMatchObject({ code: -32005 });
         });
     });
+
+    describe('7. Feedback #5–#10 regressions: clock in entity, multi-owner scope, compact cold archive, sealed-envelope, autocheck static rules', () => {
+        test('entity.js respects clock.freeze() and multi-value $owner.values + compact() cold JSONL archive', async () => {
+            process.env.CLOCK_TEST_MODE = 'true';
+            jest.resetModules();
+            const clock = require('../clock');
+            const createEntity = require('../entity');
+            const store = new Map();
+            const sets = new Map();
+            const zsets = new Map();
+            const counters = new Map();
+            const fakeRedis = {
+                get: async (k) => store.get(k) || null,
+                set: async (k, v) => { store.set(k, v); return 'OK'; },
+                del: async (k) => { store.delete(k); sets.delete(k); zsets.delete(k); return 1; },
+                incr: async (k) => { const n = (counters.get(k) || 0) + 1; counters.set(k, n); return n; },
+                mGet: async (keys) => keys.map((k) => store.get(k) || null),
+                sMembers: async (k) => Array.from(sets.get(k) || []),
+                sAdd: async (k, v) => { if (!sets.has(k)) sets.set(k, new Set()); sets.get(k).add(v); },
+                sRem: async (k, v) => { if (sets.has(k)) sets.get(k).delete(v); },
+                zAdd: async (k, item) => { if (!zsets.has(k)) zsets.set(k, new Map()); zsets.get(k).set(item.value, item.score); },
+                zRem: async (k, v) => { if (zsets.has(k)) zsets.get(k).delete(v); },
+                multi: () => {
+                    const ops = [];
+                    const m = {
+                        set: (k, v) => { ops.push(() => store.set(k, v)); return m; },
+                        del: (k) => { ops.push(() => { store.delete(k); sets.delete(k); zsets.delete(k); }); return m; },
+                        sAdd: (k, v) => { ops.push(() => { if (!sets.has(k)) sets.set(k, new Set()); sets.get(k).add(v); }); return m; },
+                        sRem: (k, v) => { ops.push(() => { if (sets.has(k)) sets.get(k).delete(v); }); return m; },
+                        zAdd: (k, item) => { ops.push(() => { if (!zsets.has(k)) zsets.set(k, new Map()); zsets.get(k).set(item.value, item.score); }); return m; },
+                        zRem: (k, v) => { ops.push(() => { if (zsets.has(k)) zsets.get(k).delete(v); }); return m; },
+                        exec: async () => { ops.forEach((fn) => fn()); return ops.map(() => 1); },
+                    };
+                    return m;
+                },
+            };
+
+            const jobEntity = createEntity(fakeRedis, {
+                serviceName: 'steward',
+                entityName: 'job',
+                idPrefix: 'JOB-',
+                ownable: true,
+                retention: {
+                    ttlDays: 30,
+                    terminalStates: ['DONE', 'CANCELLED'],
+                    stateField: 'lifecycleState',
+                    coldArchive: true,
+                },
+            });
+
+            const runAsMultiOwner = (fn) => createEntity.walContext.run(
+                { user: 'u_multi', owner: { field: 'bookId', values: ['B01', 'B02'] } },
+                fn
+            );
+
+            try {
+                // 1) clock.freeze() controls createdAt and updatedAt (#7)
+                clock.freeze(1_700_000_000_000);
+                const j1 = await runAsMultiOwner(() => jobEntity.create({ bookId: 'B01', lifecycleState: 'DONE', title: 'Old done job' }));
+                expect(j1.createdAt).toBe(1_700_000_000_000);
+                expect(j1.updatedAt).toBe(1_700_000_000_000);
+
+                // Multi-value $owner allows creating in B02 and reading both B01 and B02, but blocks B03 (#10 §1.2)
+                clock.freeze(1_705_000_000_000);
+                const j2 = await runAsMultiOwner(() => jobEntity.create({ bookId: 'B02', lifecycleState: 'PENDING', title: 'Recent pending job' }));
+                await expect(
+                    runAsMultiOwner(() => jobEntity.create({ bookId: 'B03', lifecycleState: 'DONE', title: 'Forbidden book' }))
+                ).rejects.toMatchObject({ code: -32005 });
+
+                const listed = await runAsMultiOwner(() => jobEntity.list({}));
+                expect(listed.items.map((x) => x.id).sort()).toEqual([j1.id, j2.id].sort());
+
+                // 2) compact() archives expired terminal records to JSONL before deleting from Redis (#9 §1.2)
+                const tmpArchive = fs.mkdtempSync(path.join(os.tmpdir(), 'solo-compact-'));
+                try {
+                    const res = await jobEntity.compact({ archiveDir: tmpArchive });
+                    expect(res.evicted).toBe(1);
+                    expect(res.archivedFile).toBeTruthy();
+                    const jsonl = fs.readFileSync(res.archivedFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+                    expect(jsonl).toHaveLength(1);
+                    expect(jsonl[0].record.id).toBe(j1.id);
+
+                    // j1 is evicted from Redis; j2 (non-terminal) remains
+                    const afterList = await runAsMultiOwner(() => jobEntity.list({}));
+                    expect(afterList.items.map((x) => x.id)).toEqual([j2.id]);
+                } finally {
+                    fs.rmSync(tmpArchive, { recursive: true, force: true });
+                }
+            } finally {
+                clock.reset();
+            }
+        });
+
+        test('library/sealed-envelope.js seals and opens RSA-OAEP-256+A256GCM envelopes and detects AAD tampering (#10 §1.3)', () => {
+            const {
+                generateEnvelopeKeyPair,
+                sealEnvelope,
+                openEnvelope,
+                isSealedEnvelope,
+            } = require('../sealed-envelope');
+
+            const { publicKeyPem, privateKeyPem, keyId } = generateEnvelopeKeyPair();
+            const aad = { tenantId: 'B01', targetId: 'etax-zhejiang', purpose: 'credential_sync' };
+            const secretPayload = { username: '91330100MA2', password: 'TopSecretPassword!' };
+
+            const env = sealEnvelope(secretPayload, publicKeyPem, { keyId, aad });
+            expect(isSealedEnvelope(env)).toBe(true);
+            expect(JSON.stringify(env)).not.toContain('TopSecretPassword!');
+
+            const opened = openEnvelope(env, privateKeyPem, { expectedAad: aad });
+            expect(opened).toEqual(secretPayload);
+
+            // Tampering with expectedAad fails GCM authentication
+            expect(() => openEnvelope(env, privateKeyPem, {
+                expectedAad: { ...aad, tenantId: 'B02' },
+            })).toThrow(/AAD/);
+        });
+
+        test('autocheck child-process-safety ignores RegExp.exec() and dead-config-key honors // RESERVED: (#5, #6)', () => {
+            const childProcessSafety = require('../../autocheck/static/child-process-safety');
+            const deadConfigKey = require('../../autocheck/static/dead-config-key');
+
+            const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'solo-autocheck-56-'));
+            try {
+                fs.mkdirSync(path.join(tmpDir, 'logic'), { recursive: true });
+                fs.writeFileSync(
+                    path.join(tmpDir, 'logic/parser.js'),
+                    "const m = /foo(\\d+)/.exec(input); const r = regex.exec(str);\n"
+                );
+                fs.writeFileSync(
+                    path.join(tmpDir, 'config.js'),
+                    "module.exports = {\n  usedKey: 1,\n  // RESERVED: future cross-region quorum\n  reservedKey: 2,\n};\n"
+                );
+                fs.writeFileSync(
+                    path.join(tmpDir, 'index.js'),
+                    "const config = require('./config'); console.log(config.usedKey);\n"
+                );
+
+                const cpRes = { passed: [], warnings: [], errors: [] };
+                childProcessSafety.check(tmpDir, cpRes);
+                expect(cpRes.warnings).toHaveLength(0);
+
+                const dcRes = { passed: [], warnings: [], errors: [] };
+                deadConfigKey.check(tmpDir, dcRes);
+                expect(dcRes.warnings).toHaveLength(0);
+            } finally {
+                fs.rmSync(tmpDir, { recursive: true, force: true });
+            }
+        });
+    });
 });

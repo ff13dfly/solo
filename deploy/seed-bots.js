@@ -1,43 +1,61 @@
 #!/usr/bin/env node
 /**
- * deploy/seed-bots.js — dev-only bot token seeder
+ * deploy/seed-bots.js — Relay bot token seeder (Production RPC + Dev fallback)
  *
- * Mirrors what e2e harness setup.js seedBots() does, so the same relay-bot
- * paths that work in e2e full-profile also work in the live dev environment
- * (e.g. ingress TEST button, nexus emit_event, fulfillment state transitions).
+ * Seeds all `system.*` relay bots defined in `deploy/bot-permits.js` (single source
+ * of truth shared with `e2e/harness/setup.js`), ensuring transitive relay dependencies
+ * (such as `system.approval` reading `user.key.public` when `workflow.approve` signs
+ * an approval gate) are never accidentally omitted.
  *
- * Flow:
- *   1. Write a dev-only admin session to Redis (allow_all, no real login needed)
- *   2. Poll the Router until it's accepting requests
- *   3. For each bot: create/update → issue.token → <svc>.token.set
+ * Modes:
+ *   1. Production RPC mode (zero direct Redis access):
+ *      - Pass `ADMIN_TOKEN=<bearer>` (or `SEED_BOT_TOKEN=<bearer>`), OR
+ *      - Pass `ADMIN_PASSWORD=<pwd>` (and optional `ADMIN_USERNAME`, default `admin`)
+ *        to perform Z-Login (`admin.login.request` + `admin.login.verify`) via Router.
+ *      - Calls `user.bot.create` → `user.bot.update` → `user.bot.issue.token` → `<svc>.token.set`
+ *        purely over JSON-RPC.
+ *   2. Dev fallback mode (used by `dev.sh` when no admin credentials are provided):
+ *      - Writes a temporary dev session (`solo-dev-admin`) to Redis, waits for Router,
+ *        issues bot tokens via RPC, and calls `<svc>.token.set` (with Redis fallback).
  *
- * Called by dev.sh in the background; retries until Router is ready.
- * Safe to re-run: bot.create is idempotent (update overwrites permit on 2nd run).
+ * Safe to re-run: `user.bot.create` + `user.bot.update` + `<svc>.token.set` are idempotent.
  */
 const http = require('http');
-const { createClient } = require('../api/node_modules/redis');
+const https = require('https');
+const crypto = require('crypto');
 const { BOT_PERMITS } = require('./bot-permits');
 
-const REDIS_URL  = process.env.REDIS_URL  || 'redis://127.0.0.1:6699';
-const ROUTER_URL = process.env.ROUTER_URL || 'http://127.0.0.1:8600';
-const RPC_URL    = `${ROUTER_URL}/jsonrpc`;
-const DEV_TOKEN  = 'solo-dev-admin';
+const REDIS_URL      = process.env.REDIS_URL      || 'redis://127.0.0.1:6699';
+const ROUTER_URL     = process.env.ROUTER_URL     || 'http://127.0.0.1:8600';
+const RPC_URL        = `${ROUTER_URL.replace(/\/+$/, '')}/jsonrpc`;
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const EXPLICIT_TOKEN = process.env.SEED_BOT_TOKEN || process.env.ADMIN_TOKEN || '';
+const DEV_TOKEN      = 'solo-dev-admin';
 
-// Bots to seed: uid → permit — 单一真源 deploy/bot-permits.js(e2e harness seedBots 共用同一份;
-// 加新 relay bot 只改那一处,不再两处手工同步)。此文件只保留 dev 环境的 seeding 流程。
 const BOTS = BOT_PERMITS;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+function loadRedisCreateClient() {
+    try {
+        return require('redis').createClient;
+    } catch {
+        return require('../api/node_modules/redis').createClient;
+    }
+}
+
 function post(body, token) {
     return new Promise((resolve, reject) => {
         const raw = JSON.stringify(body);
+        const parsed = new URL(RPC_URL);
+        const transport = parsed.protocol === 'https:' ? https : http;
         const headers = {
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(raw),
         };
         if (token) headers['Authorization'] = `Bearer ${token}`;
-        const req = http.request(RPC_URL, { method: 'POST', headers }, (res) => {
+        const req = transport.request(parsed, { method: 'POST', headers }, (res) => {
             let d = '';
             res.on('data', c => (d += c));
             res.on('end', () => {
@@ -53,23 +71,48 @@ function post(body, token) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-async function waitForRouter(maxWaitMs = 60_000) {
-    // "Router answers HTTP" is NOT enough: at boot the Router accepts requests
-    // before the downstream services finish their Z-handshake, so user.bot.* is
-    // not routable yet and every seeding RPC dies with "Method not found" — the
-    // dev.sh boot race that leaves all RELAY:TOKEN:* rows missing. Probe the
-    // actual dependency instead: user.bot.list with the seeder's own session
-    // (seeded in main() step 1, before this runs). Proceed once the reply stops
-    // being "not found" — any other answer proves the user service registered
-    // and the bot methods are routable. (system.capability.list can't be the
-    // probe: its default map is filtered to ai/public methods, which the
-    // admin-only user.bot.* are not.)
+async function loginAdminViaRpc(username, password) {
+    const chRes = await post({
+        jsonrpc: '2.0',
+        method: 'admin.login.request',
+        params: { username },
+        id: 'seed-login-req',
+    });
+    const { challenge, salt, iterations } = (chRes && chRes.result) || {};
+    if (!challenge || !salt || !iterations) {
+        throw new Error(`admin.login.request failed: ${chRes?.error?.message || JSON.stringify(chRes)}`);
+    }
+    const loginHash = crypto.pbkdf2Sync(
+        password + username,
+        Buffer.from(salt, 'hex'),
+        iterations,
+        32,
+        'sha256'
+    ).toString('hex');
+    const response = crypto.createHash('sha256')
+        .update(challenge + loginHash)
+        .digest('hex');
+
+    const vfRes = await post({
+        jsonrpc: '2.0',
+        method: 'admin.login.verify',
+        params: { username, challenge, response },
+        id: 'seed-login-verify',
+    });
+    const token = vfRes?.result?.token;
+    if (!token) {
+        throw new Error(`admin.login.verify failed: ${vfRes?.error?.message || JSON.stringify(vfRes)}`);
+    }
+    return token;
+}
+
+async function waitForRouter(token, maxWaitMs = 60_000) {
     const deadline = Date.now() + maxWaitMs;
     while (Date.now() < deadline) {
         try {
-            const r = await post({ jsonrpc: '2.0', method: 'user.bot.list', params: {}, id: 'seed-probe' }, DEV_TOKEN);
-            if (r.result) return true;
-            const msg = (r.error && r.error.message) || '';
+            const r = await post({ jsonrpc: '2.0', method: 'user.bot.list', params: {}, id: 'seed-probe' }, token);
+            if (r && r.result) return true;
+            const msg = (r && r.error && r.error.message) || '';
             if (msg && !/not found/i.test(msg)) return true;
         } catch (_) {}
         await sleep(2000);
@@ -80,58 +123,89 @@ async function waitForRouter(maxWaitMs = 60_000) {
 // ── main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-    // 1. Seed dev admin session directly in Redis (same pattern as e2e harness).
-    const redis = createClient({ url: REDIS_URL });
-    redis.on('error', () => {});
-    await redis.connect();
-    await redis.set(
-        `session:${DEV_TOKEN}`,
-        JSON.stringify({ uid: 'dev-admin', username: 'dev-admin', role: 'admin', permit: { allow_all: true, services: {} } }),
-        { EX: 24 * 3600 },
-    );
-    await redis.quit();
+    const isProdAuth = Boolean(EXPLICIT_TOKEN || ADMIN_PASSWORD);
+    if (!isProdAuth && process.env.NODE_ENV === 'production') {
+        throw new Error(
+            'Refusing dev-session Redis seeding when NODE_ENV=production. ' +
+            'Pass ADMIN_PASSWORD=<pwd> (or SEED_BOT_TOKEN=<token>) to seed bots via Router RPC.'
+        );
+    }
 
-    // 2. Wait for Router.
-    console.log('  [seed-bots] waiting for Router...');
-    const ready = await waitForRouter(90_000);
+    let adminToken = EXPLICIT_TOKEN;
+
+    if (!isProdAuth) {
+        // Dev fallback: seed temporary admin session in Redis
+        const createClient = loadRedisCreateClient();
+        const redis = createClient({ url: REDIS_URL });
+        redis.on('error', () => {});
+        await redis.connect();
+        await redis.set(
+            `session:${DEV_TOKEN}`,
+            JSON.stringify({ uid: 'dev-admin', username: 'dev-admin', role: 'admin', permit: { allow_all: true, services: {} } }),
+            { EX: 24 * 3600 },
+        );
+        await redis.quit();
+        adminToken = DEV_TOKEN;
+    }
+
+    console.log(`  [seed-bots] waiting for Router (${ROUTER_URL})...`);
+    const ready = await waitForRouter(adminToken || DEV_TOKEN, 90_000);
     if (!ready) {
         console.error('  [seed-bots] Router did not come up within 90 s — skipping bot seeding');
-        process.exit(0);
+        process.exit(isProdAuth ? 1 : 0);
+    }
+
+    if (!adminToken && ADMIN_PASSWORD) {
+        adminToken = await loginAdminViaRpc(ADMIN_USERNAME, ADMIN_PASSWORD);
+        console.log(`  [seed-bots] authenticated as ${ADMIN_USERNAME} via admin.login.verify`);
     }
     console.log('  [seed-bots] Router ready');
 
-    // 3. Create/update each bot, issue token, write relay token directly to Redis.
-    // NOTE: {svc}.token.set via RPC fails when Router's capability map hasn't loaded
-    // the method yet. Writing RELAY:TOKEN:{svc} directly mirrors what
-    // api/core/orchestrator/scripts/seed_bot.js and api/library/relay.js writeState() do.
-    const redis2 = createClient({ url: REDIS_URL });
-    redis2.on('error', () => {});
-    await redis2.connect();
+    let redisFallback = null;
+    if (!isProdAuth) {
+        const createClient = loadRedisCreateClient();
+        redisFallback = createClient({ url: REDIS_URL });
+        redisFallback.on('error', () => {});
+        await redisFallback.connect();
+    }
 
     for (const [uid, services] of Object.entries(BOTS)) {
         const svc = uid.split('.')[1];
         const permit = { allow_all: false, services };
 
-        await post({ jsonrpc: '2.0', method: 'user.bot.create', params: { uid, permit }, id: `bot-${uid}` }, DEV_TOKEN);
-        await post({ jsonrpc: '2.0', method: 'user.bot.update', params: { uid, permit }, id: `botup-${uid}` }, DEV_TOKEN);
+        await post({ jsonrpc: '2.0', method: 'user.bot.create', params: { uid, permit }, id: `bot-${uid}` }, adminToken);
+        await post({ jsonrpc: '2.0', method: 'user.bot.update', params: { uid, permit }, id: `botup-${uid}` }, adminToken);
 
-        const issued = await post({ jsonrpc: '2.0', method: 'user.bot.issue.token', params: { uid }, id: `tok-${uid}` }, DEV_TOKEN);
+        const issued = await post({ jsonrpc: '2.0', method: 'user.bot.issue.token', params: { uid }, id: `tok-${uid}` }, adminToken);
         const { token, expiresAt } = issued.result || {};
         if (!token) {
             console.warn(`  [seed-bots] ${uid}: issue.token failed (${issued.error?.message || '?'})`);
             continue;
         }
 
-        // Write relay state directly — same format as relay.js writeState()
-        const relayState = { token, expiresAt, lastRefreshAt: Date.now(), sub: uid };
-        await redis2.set(`RELAY:TOKEN:${svc}`, JSON.stringify(relayState));
-        console.log(`  [seed-bots] ✓ ${uid} relay token seeded (RELAY:TOKEN:${svc})`);
+        // First try standard RPC `<svc>.token.set` (production path, no Redis needed).
+        const setRes = await post({
+            jsonrpc: '2.0',
+            method: `${svc}.token.set`,
+            params: { token, expiresAt, sub: uid },
+            id: `set-${uid}`,
+        }, adminToken);
+
+        if (setRes && setRes.result) {
+            console.log(`  [seed-bots] ✓ ${uid} relay token seeded via ${svc}.token.set`);
+        } else if (redisFallback) {
+            const relayState = { token, expiresAt, lastRefreshAt: Date.now(), sub: uid };
+            await redisFallback.set(`RELAY:TOKEN:${svc}`, JSON.stringify(relayState));
+            console.log(`  [seed-bots] ✓ ${uid} relay token seeded (RELAY:TOKEN:${svc})`);
+        } else {
+            console.warn(`  [seed-bots] ⚠ ${svc}.token.set skipped/failed (${setRes?.error?.message || 'service not mounted'})`);
+        }
     }
 
-    await redis2.quit();
+    if (redisFallback) await redisFallback.quit();
 }
 
 main().catch(e => {
     console.error('[seed-bots] fatal:', e.message);
-    process.exit(0);  // non-fatal: dev still starts even if bot seeding fails
+    process.exit(process.env.ADMIN_PASSWORD || process.env.SEED_BOT_TOKEN || process.env.ADMIN_TOKEN ? 1 : 0);
 });

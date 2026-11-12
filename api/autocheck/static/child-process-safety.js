@@ -39,14 +39,17 @@ function check(servicePath, results) {
             if (line.includes('// SAFE:')) return;
             if (line.trimStart().startsWith('//') || line.trimStart().startsWith('*')) return;
 
-            // ❌ exec() 参数是变量或字符串拼接（非纯字面量）→ 注入风险
-            if (/\bexec\s*\(/.test(line)) {
+            // ❌ exec() / execSync() 参数是变量或字符串拼接（非纯字面量）→ 注入风险
+            // 注意排除 RegExp.prototype.exec（如 /re/.exec(s) 或 regex.exec(s)）：
+            // 仅匹配独立调用 exec(...) 或 child_process 命名空间调用 cp.exec(...) / child_process.exec(...)
+            const isChildProcessExec = /(?:^|[^\w.$])(?:(?:cp|child_process|childProcess)\s*\.\s*)?exec(?:Sync)?\s*\(/.test(line);
+            if (isChildProcessExec) {
                 // 纯字符串字面量调用豁免: exec('fixed-cmd')
-                const isLiteralOnly = /\bexec\s*\(\s*['"`][^'"`+${}]+['"`]/.test(line);
+                const isLiteralOnly = /\bexec(?:Sync)?\s*\(\s*['"`][^'"`+${}]+['"`]/.test(line);
                 if (!isLiteralOnly) {
                     results.errors.push(
                         `❌ [ChildProcess] logic/${file}:${i + 1}: ` +
-                        `exec() 参数包含变量或拼接，存在命令注入风险。` +
+                        `child_process.exec() 参数包含变量或拼接，存在命令注入风险。` +
                         `请改用 execFile(file, args[]) 将命令与参数分离。`
                     );
                 }
@@ -58,7 +61,7 @@ function check(servicePath, results) {
                     if (!/timeout\s*:/.test(nearby)) {
                         results.warnings.push(
                             `⚠️ [ChildProcess] logic/${file}:${i + 1}: ` +
-                            `exec() 未设置 timeout 选项，子进程挂死时会阻塞服务。` +
+                            `child_process.exec() 未设置 timeout 选项，子进程挂死时会阻塞服务。` +
                             `建议加 { timeout: 30000 }。`
                         );
                     }

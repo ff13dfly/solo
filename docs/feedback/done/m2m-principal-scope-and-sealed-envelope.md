@@ -55,6 +55,8 @@
 
 ---
 
-## 处理结论（solo 侧）
+## 处理结论（solo 侧 · 2026-11-12 落地归档）
 
-- **2026-11-07 立项登记**：已纳入 `docs/planning/BACKLOG.md` §3 正式追踪；待按 Phase 1 → Phase 3 逐项先红后绿落地后移入 `docs/feedback/done/`。
+- ✅ **§1.1 / §1.4 跨栈 M2M 与单飞预刷新**：`api/library/peer-relay.js` 已提供 M2M API-Key / Bearer Token / Z-Login 单飞合并（in-flight promise coalescing）与 `-32001` 自动重登重试；`api/library/relay.js` 已内建轮转心跳。
+- ✅ **§1.2 多值 `$owner.values: string[]` 范围约束**：已在 `api/library/entity.js` 与 `api/apps/fulfillment/logic/instance.js` 完整支持集合成员过滤与创建时显式归属校验（100% 兼容单值 `$owner.value`）。
+- ✅ **§1.3 `api/library/sealed-envelope.js`（`solo.sealed/v1`）**：已上收为框架级标准库（`RSA-OAEP-256+A256GCM` + 规范化 AAD 绑定 + SHA-256 公钥指纹）并通过单测验证。本篇移入 `docs/feedback/done/`。

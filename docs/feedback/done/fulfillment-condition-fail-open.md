@@ -200,7 +200,7 @@ fulfillment 的转移事件是 fire-and-forget（`relay.call` 不阻塞 transiti
   `profile` 新增声明式 `stateTtls: { STATE: { ttlMs, event, reason? } }`（纳入 `lint.js` 规则 8 与 `execDigest` 版本摘要），
   `instance` 新增 `fulfillment.instance.reap`（支持 `dryRun` / `profileId` / `limit`，通过 `expectedTransitionId` ABA 护栏触发超时转移并产出 `_tasks`）
   与 `instance.list` `stateChangedBefore` 过滤，且 `apps/fulfillment/index.js` 支持 `FULFILLMENT_REAP_INTERVAL_MS` 进程内可选定时扫描。
-- ⏸ **§二 `meta_fields[].source` 服务端自动取数器**：仍待做，本篇继续留顶层跟踪该项。
+- ✅ **§二 `meta_fields[].source` 服务端自动取数器**（2026-11-12 落地）：`api/apps/fulfillment/logic/instance.js` 在 `advance()` 求值转移条件前，通过 `fetchMissingSourcedMeta` 自动检查 `profile.meta_fields[].source`；若 `instance.meta` 与本次 `metaUpdate` 均未提供该字段，则自动经 `relay.call("<service>.<method>", resolvedParams)` 拉取并按 `pick` 点分路径提取写入 `effectiveMetaUpdate`，彻底闭合声明式 `source` 契约。本篇全部事项结案，移入 `docs/feedback/done/`。
 
 `下游 action`（随下一 tag 的 CHANGELOG 一起发）：用 JsonLogic 数值比较做闸门、且依赖「字段没喂就放行」
 的 profile（应该没有——那正是本文报的事故）现在会被拦；要缺省值就写 `{var: [path, default]}`。

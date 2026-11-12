@@ -54,7 +54,12 @@
   ② 用 `nexus.schedule` 建 30 分钟递归的 `emit_event` 心跳（stream 落 `EVENT:SENTINEL:*`，内置白名单免登记）。
   （colony 2026-08-14/16 两次实测踩到：持仓静默 9.5h 盖住轮转窗口 → token 静默过期 → 之后
   `event.emit`/`agent.decide` 全部 -32001，详见 solo 仓 `docs/feedback/done/nexus-relay-lazy-rotation-sparse-callers.md`。）
-- 全新 scaffold 出来的栈，Solo 自带的 nexus / orchestrator 这两个服务同样没有 token（它们的 `event.emit`/调度事件功能因此不可用），需要同样手工走一遍这四步——这条尚无自动化，见 `docs/feedback/done/relay-provisioning-and-event-registry.md`。**v1.1.17 起 `nexus.sentinel.create`/`enable` 会在 nexus relay 无可用 token 时在返回体里带 `warning` 预警**（不阻止创建，token 可后配）；此前版本没有预警，第一个事件到达时才在 nexus 日志里看到 `NO_TOKEN`。
+- 全新 scaffold 出来的栈，Solo 自带的 nexus / orchestrator / fulfillment / approval 等服务同样默认没有 token（它们的 `event.emit` / 跨服务 relay 调用因此不可用）。
+  - **推荐整份播种（防漏传递依赖）**：不要按"我这条链表面调了哪几个服务"手工挑着发 token——这必然漏掉**传递依赖**（例如 `workflow.approve` 经 relay 调 `approval.gate.sign`，而 `approval` 自己还要再经 relay 去 `user` 读 `user.key.public` 验签；给某个服务发 token 时，必须连它「为了完成这次调用还要再打给谁」一起看）。直接使用随脚手架下发的生产播种脚本一次性配齐 `deploy/bot-permits.js` 里的全部内置 bot（纯走 Router RPC，不碰 Redis）：
+    ```bash
+    ADMIN_PASSWORD='<管理员密码>' ROUTER_URL='http://127.0.0.1:8600' node deploy/seed-bots.js
+    ```
+  - **v1.1.17 起 `nexus.sentinel.create`/`enable` 会在 nexus relay 无可用 token 时在返回体里带 `warning` 预警**（不阻止创建，token 可后配）；此前版本没有预警，第一个事件到达时才在 nexus 日志里看到 `NO_TOKEN`。
 
 ## 1. `_event` 信封：你给什么 vs Router 盖什么
 

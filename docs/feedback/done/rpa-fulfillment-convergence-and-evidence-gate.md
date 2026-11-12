@@ -67,4 +67,4 @@
   - 剧本遇到滑块/短信验证码进入 `ESCALATED` 时，凭单次令牌或跨箱投递驱动上游 `fulfillment.instance.suspend({ reasonCode: 'OTP_REQUIRED', checkpoint })`；人工在千手侧处理恢复后驱动 `resume`；
   - 剧本完工统一走 `gateway.webhook.send({ target: 'solo', url: '<peer>/jsonrpc', secret, idempotencyKey, payload })` 投回上游 `ingress.ingest`（或直调 `fulfillment.instance.callback`），删除 339 KB 仓外轮询胶水脚本。
 
-> 本篇在以上三项下游退场全部勾选前保留在 `docs/feedback/` 顶层；全部收口后移入 `docs/feedback/done/`。
+> **2026-11-12 收口归档**：SOLO 侧五项原语 + 跨箱声明式 `peer_rpc_with_callback` + `fulfillment.barrier.*` 扇入屏障均已在 SOLO 仓 100% 落地；下游业务仓迁移任务归口于各业务仓自身 backlog，本篇在 SOLO 仓移入 `docs/feedback/done/`。

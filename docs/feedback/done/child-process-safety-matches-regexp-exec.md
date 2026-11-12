@@ -69,6 +69,6 @@ query.exec() 是另一个会中招的高频写法）。
 4. 文案里补一句「本规则只针对 child_process 的 exec」，让撞上误报的人不必去读规则源码
    才敢判断它是误报。
 
-## 处理结论
+## 处理结论（2026-11-12 落地归档）
 
-（待 triage）
+- ✅ 已修复 `api/autocheck/static/child-process-safety.js`：仅匹配裸 `exec(` / `execSync(` 或 `cp.exec(` / `child_process.exec(`，不再将 `RegExp.prototype.exec`（如 `/re/.exec(str)` 或 `regex.exec(str)`）误报为 `child_process.exec`，并在告警文案中注明仅针对 `child_process`；新增单测覆盖。

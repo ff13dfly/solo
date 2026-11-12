@@ -1142,4 +1142,66 @@ describe('peer_rpc_with_callback & fulfillment.barrier', () => {
         expect(afterInst.meta.barrier.status).toBe('EXPIRED');
         expect(afterInst.meta.barrier.timedOut).toBe(true);
     });
+
+    test('fulfillment.instance.transition — auto-fetches missing meta_fields[].source via relay.call (#11 §二) and supports multi-value $owner.values (#10 §1.2)', async () => {
+        const sourcedProfile = {
+            ...SM_PROFILE,
+            id: 'sm-sourced-meta',
+            meta_fields: [
+                {
+                    key: 'paymentStatus',
+                    source: {
+                        service: 'collection',
+                        method: 'payment.get',
+                        params: { orderId: { var: 'instance.sourceId' } },
+                        pick: 'payment.status',
+                    },
+                },
+            ],
+            transitions: [
+                {
+                    from: 'DRAFT',
+                    to: 'PROCESSING',
+                    event: 'start_if_paid',
+                    condition: { '===': [{ var: 'meta.paymentStatus' }, 'PAID'] },
+                },
+            ],
+        };
+        await redis.set(`${config.redis.profilePrefix}sm-sourced-meta`, JSON.stringify(sourcedProfile));
+
+        const relayCalls = [];
+        const customLogic = createLogic(redis, config, {
+            relay: {
+                async call(method, params) {
+                    relayCalls.push({ method, params });
+                    if (method === 'collection.payment.get') {
+                        return { payment: { id: 'PAY-1', orderId: params.orderId, status: 'PAID' } };
+                    }
+                    return { ok: true };
+                },
+            },
+        });
+
+        const multiBookReq = {
+            user: 'system.steward',
+            isAdmin: false,
+            $owner: { field: 'ownerId', values: ['B01', 'B02'] },
+        };
+        const inst = await customLogic.instance.create({
+            sourceId: 'ORD-SOURCED-1',
+            profileId: 'sm-sourced-meta',
+            ownerId: 'B02',
+        }, multiBookReq);
+        expect(inst.ownerId).toBe('B02');
+
+        // Without passing meta.paymentStatus in transition params, advance() auto-fetches it from collection.payment.get
+        const transitioned = await customLogic.instance.transition({
+            id: inst.id,
+            event: 'start_if_paid',
+        }, multiBookReq);
+
+        expect(transitioned.state).toBe('PROCESSING');
+        expect(transitioned.meta.paymentStatus).toBe('PAID');
+        expect(relayCalls[0]).toEqual({ method: 'collection.payment.get', params: { orderId: 'ORD-SOURCED-1' } });
+    });
 });

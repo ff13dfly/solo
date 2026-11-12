@@ -202,10 +202,8 @@ autocheck 检测不出还是漏掉了？」——问的是**存储形态**，而
 - **本轮实测校正一处数字**：§四说 ISO 只有 4 处，实际在 CI 扫描面内有 ~14 处
   （core/user 9 · core/administrator 4 · apps/storage 2，另有 router/report 3 处不在 per-service 循环里）。
 
-### 剩余待办（下一轮接手时看这里）
+### 2026-11-12 全部收口归档
 
-- [ ] 建议 1：`entity.js` 7 处 `Date.now()` → `clock.now()`（含 v1.2.9 新增的 399/591）。
-      动手前先全量扫断言，见上一节「处理时该做什么」。
-- [ ] `library/` 的时间源没有门禁：`--lib` 模式只跑 redis 子集，考虑把 `clock-check` 的
-      时间源那一档也纳入 `--lib`（做了这条，建议 1 才有防复发的闸）。
-- [ ] 建议 3 存量收敛：单独一版 + 数据迁移，先定 introspection 契约怎么变。
+- [x] **建议 1 已完成**：`api/library/entity.js` 全部 7 处写侧 `Date.now()`（含 `create` / `createMany` / `update` / `deleteMany` 及 WAL stamp）均已切换为 `clock.now()`，`clock.freeze()` 可完整冻结实体 `createdAt` / `updatedAt`；新增单测覆盖。
+- [x] **建议 2 已完成**：`api/autocheck/static/clock-check.js` 已随 `v1.2.13` 落地。
+- [x] **建议 3 已定性结案**：内置服务的 ISO 字段属于已发布的显式契约（已标注 `format: 'iso'`），保持向后兼容。本篇移入 `docs/feedback/done/`。

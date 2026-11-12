@@ -61,6 +61,9 @@
 
 ---
 
-## 三、处理结论
+## 三、处理结论（2026-11-12 落地归档）
 
-（待 triage）
+1. ✅ **`deploy/seed-bots.js` 升级为生产 RPC + Dev 双模并随脚手架下发**：
+   - 传入 `ADMIN_PASSWORD`（自动走 `admin.login.request` + `admin.login.verify` Z-Login）或 `SEED_BOT_TOKEN` / `ADMIN_TOKEN` 时，全程纯走 Router JSON-RPC（`user.bot.create` → `user.bot.update` → `user.bot.issue.token` → `<svc>.token.set`），**零直连 Redis、不写 dev session**；且在 `NODE_ENV=production` 下未传凭据时直接拒绝直写 Redis。
+   - `deploy/seed-bots.js` 与 `deploy/bot-permits.js` 已同步纳入 `deploy/scaffold/{init,upgrade}.sh` 及 `deploy/check-upgrade-path.sh` 下发清单。
+2. ✅ **`deploy/scaffold/docs/authoring/events.md §0.5` 补齐传递依赖判据与一键播种命令**。

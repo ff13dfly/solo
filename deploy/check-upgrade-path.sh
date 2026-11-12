@@ -139,7 +139,7 @@ assert_grep "# probe-customized" "$PROJ/deploy/run.sh" "customized deploy/run.sh
 assert_file "$PROJ/deploy/run.sh.solo-v$VER.new"
 assert_same "$PROJ/deploy/run.sh.solo-v$VER.new" "$SOLO_DIR/deploy/scaffold/run.sh" "staged stock run.sh matches upstream"
 assert_grep "DIVERGED" "$WORK/up.log" "upgrade report flags the divergence"
-for s in precheck.sh admin-up.sh doctor.sh seed-registry.js migrate-cursor-index.js; do
+for s in precheck.sh admin-up.sh doctor.sh wal-rotate.sh seed-registry.js bot-permits.js seed-bots.js migrate-cursor-index.js; do
     assert_same "$PROJ/deploy/$s" "$SOLO_DIR/deploy/scaffold/$s" "deploy/$s == stock (unchanged)"
     assert_absent "$PROJ/deploy/$s.solo-v$VER.new"
 done

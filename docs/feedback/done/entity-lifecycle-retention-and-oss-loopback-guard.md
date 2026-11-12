@@ -48,6 +48,7 @@ retention: {
 
 ---
 
-## 处理结论（solo 侧）
+## 处理结论（solo 侧 · 2026-11-12 落地归档）
 
-- **2026-11-07 立项登记**：消费侧 `fulfillment` 证据回环 URL 拦截已随 `rpa-fulfillment-convergence-and-evidence-gate.md` 先行落地 ✅；源头侧 `Entity retention` 与 `doctor.sh` 外发域名门禁已登记入 `docs/planning/BACKLOG.md` §3，待逐项落地后移入 `docs/feedback/done/`。
+- ✅ **§一 `Entity retention` 与 `entity.compact()` 已落地**：`api/library/entity.js` 支持声明式 `retention: { ttlDays, terminalStates, stateField, coldArchive }` 与显式 `entity.compact({ dryRun, batchSize, archiveDir })`，先追加写入按月 JSONL 冷归档并 `fsyncSync`，再在单次 `MULTI` 中原子驱逐主数据键、SET 索引与 ZSET 游标索引。
+- ✅ **§二 `LOCAL_OSS_OUTWARD_ORIGIN` 生产回环护栏已落地**：`deploy/scaffold/doctor.sh` 与 `api/apps/storage/oss/index.js` 均已补齐生产环境 `OSS_PROVIDER=local` 下 `LOCAL_OSS_OUTWARD_ORIGIN` 缺失或指向 loopback 的显式告警。本篇移入 `docs/feedback/done/`。

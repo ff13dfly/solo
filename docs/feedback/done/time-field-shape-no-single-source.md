@@ -195,6 +195,7 @@ v1.2.13 把那个缺口补上了，两篇的「建议 2 / 建议 3」因此同�
 那篇的**建议 1（`entity.js` 7 处 `Date.now()` → `clock.now()`）仍未做**，
 ⚠️ 本版给 `entity.js` 加的那行 `require('./clock')` 是读侧归一，别读成那件事已完成。
 
-### 本篇状态
+### 本篇状态（2026-11-12 收口归档）
 
-留在 `docs/feedback/` 顶层（未进 `done/`）：建议 4 还没做完。
+- ✅ 建议 1～3 已在 `v1.2.13` 落地；姊妹篇 `entity-factory-bypasses-clock.md` 的建议 1（`entity.js` 写侧 7 处 `Date.now()` → `clock.now()`）亦已于 2026-11-12 全部收口。
+- ✅ 建议 4（内置服务的已发布 ISO 字段契约）已在 `entities.js` 显式标注 `format: 'iso'` 并纳入 `clock-check` 白名单，作为向后兼容的正式协议保留，不破坏存量数据。本篇正式移入 `docs/feedback/done/`。
