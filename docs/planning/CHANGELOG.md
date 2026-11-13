@@ -13,6 +13,32 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
+## [v1.3.5] — 2026-11-14
+
+### 🟢 统一出站底座、原生 Ollama / 跨箱 Peer 算力路由、履约跨栈回调与扇入屏障、密封信封及 `run-2` 对抗性安全深审收口（`../feedback/done/outbound-layering-ollama-agent-and-peer-relay.md`、`../feedback/done/2026-11-13-storage-asset-id-length-and-163-imap-followup.md`、`../security/V1_3_4_RUN2_AUDIT_REPORT.md`）
+
+- **`api/library/` 统一出站网络底座、跨箱 Peer Relay 与端到端密封信封**：
+  - 新增 `library/outbound.js`：统一封装 SSRF 校验（拦截 Loopback、RFC1918、CGNAT `100.64.0.0/10`、云元数据 `169.254.169.254` / `100.100.100.200`、IPv6 全形态规范化与 DNS 重绑定域名）、自定义 `lookup` 套接字级 IP 绑定、`trustedPeers` 显式白名单、逐跳重定向重验（跨域 302 自动剥离 `Authorization` / `Cookie` / `X-Ingress-Key` 等敏感头）及响应体字节上限。
+  - 新增 `library/peer-relay.js`：封装跨 SOLO 实例 `/jsonrpc` 互调，支持 `ApiKey`、`Bearer Token` 及单飞防惊群挑战-响应登录（兼容 `{ name, challenge, response }` 与 `{ username, signature }`）、`401`/`-32001` 自动重登与 `_meta.hop` 环路熔断。
+  - 新增 `library/sealed-envelope.js`：基于 Node 原生 `crypto` 实现 ECDH P-256 + HKDF-SHA256 + AES-256-GCM 密封信封（`sealEnvelope` / `openEnvelope`），强制校验证书公钥曲线、GCM 16 字节认证标签与 `kid`/`alg`/`aad` 绑定，保障跨箱派单凭据全链路零明文落盘。
+  - `library/entity.js` `EntityFactory` 增强：全量切换 `clock.now()`；支持 `retention: { ttlDays, terminalStates }` 冷热分层归档（`compact()` 仅限无 `$owner` 约束的管理/服务上下文且校验归档路径边界）；支持数组型多归属字段（如 `storeIds: ['B01', 'B02']`）行级隔离并在局部 `update` 中锁定归属字段防越权篡改。
+  - `library/generator.js` 与 `apps/storage/config.js` 双保险：`idLengths.asset` 走 `intFromEnv('ASSET_ID_LENGTH', 8)`，`generateId(length)` 与 `validateId(id, length)` 强制执行 `Math.trunc(Number(length))` 转型，彻底消除 `.env` 字符串参数引发的 `ERR_INVALID_ARG_TYPE`。
+- **`core/agent` 原生 `OllamaProvider` 与跨箱 `SoloPeerProvider` 算力网关（`api/core/agent/`）**：
+  - `ProviderFactory` 支持 `ollama/<model>`、`solo-peer/<model>`、`openai/<model>`、`qwen/<model>`、`gemini/<model>` 显式前缀路由，并在生产环境拦截非 `mock` 配置下由调用方传入 `model: "mock"` 的降级绕过。
+  - 新增 `providers/ollama.js`：直连 Ollama 原生 `/api/chat`（强制 `think: false`、`keep_alive: '30m'`、不传 `response_format` 防 MLX 引擎 500 崩溃，并对调用方 `options` 执行白名单与 `num_ctx`/`num_predict` 上限钳制）。
+  - 新增 `providers/solo-peer.js`：无本地 GPU 的节点可将 `agent.*` 请求透明委托给远端算力节点（如 `catalog-mini`），并拦截递归 `solo-peer/solo-peer/...` 路由。
+- **`apps/fulfillment` 跨栈回调、批量扇入屏障与声明式衍生元数据（`api/apps/fulfillment/`）**：
+  - 新增 `_tasks` 动作类型 `peer_rpc_with_callback`：自动签发一次性 `flcb_` 回调令牌并经 `peer-relay` 派发跨栈任务，严格禁止在自定义 `endpoint` 上附带命名节点密钥。
+  - 新增 `fulfillment.barrier.{create,report,get,list}`：支持 N 子任务扇入屏障（`WATCH/MULTI/EXEC` 原子计数，全部到达终态后仅单次触发 `onSettled` 回调，并校验 `expectedInstanceId` 防止跨实例伪造唤醒）。
+  - Profile `meta_fields` 支持声明式 `source: { service, method, params, pick }` 按需拉取跨服务只读元数据，静态 Lint 与运行时双层拦截高权服务（`user`/`admin`/`setting`）与非只读方法，并校验返回文档 `$owner` 归属一致性。
+- **`core/user`、`core/gateway` 与 `autocheck` 增强**：
+  - `core/user`：为 `user.token.revoke` 开放与 `user.password.reset` 对称的受控服务 Bot 委派门禁（禁止对管理员或 `POWER=operator` 账号操作，并在 `user.role.assign` / `user.account.update` 中校验既有管理员权限防降级）；`deploy/seed-bots.js` 支持生产零 Redis 直连的 RPC Z-Login 播种模式。
+  - `core/gateway`：`gateway.imap.{test,poll}` 在 `LOGIN` 后、`EXAMINE`/`SELECT` 前自动发送 RFC 2971 `ID` 握手帧（支持 `clientId` 自定义），彻底打通网易系邮局（`163.com` / `126.com` / `yeah.net`）。
+
+下游 action：无。全部改动向后兼容；`steward`、`finance`、`catalog`、`procurement` 等消费方直接执行 `bash ../solo/deploy/scaffold/upgrade.sh .` 升至 `v1.3.5` 即可。
+
+---
+
 ## [v1.3.4] — 2026-11-09
 
 ### 🟢 下游自建原语回流收敛（`user` / `storage` / `nexus` / `gateway`）、存储按资产可见性签名与 `v1.3.3` 安全反馈闭环（`../feedback/done/steward-remaining-bypasses-convergence.md`、`../feedback/done/storage-visibility-logger-redaction-and-entity-ownable.md`、`../feedback/done/solo-v1.3.3-security-feedback.md`）
