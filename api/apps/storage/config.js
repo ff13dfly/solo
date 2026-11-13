@@ -2,6 +2,7 @@ require('dotenv').config();
 const pkg = require('./package.json');
 const path = require('path');
 const { portFor, bindAddr } = require('../../library/ports');
+const { intFromEnv } = require('../../library/env');
 
 // --- local OSS backend: resolved BEFORE module.exports so the endpoint can be
 // derived from this service's own port. @why The default provider is `local`,
@@ -129,7 +130,7 @@ module.exports = {
 
   // ID Lengths
   idLengths: {
-    asset: process.env.ASSET_ID_LENGTH || 8
+    asset: intFromEnv('ASSET_ID_LENGTH', 8)
   },
 
   // Asset Serving

@@ -79477,10 +79477,11 @@ var require_generator = __commonJS({
     var BASE58_CHARS = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     var BASE58_LEN = BASE58_CHARS.length;
     function generateId(length = 8) {
-      if (length <= 0) return "";
-      const bytes = crypto.randomBytes(length);
+      const n = Math.trunc(Number(length));
+      if (!Number.isFinite(n) || n <= 0) return "";
+      const bytes = crypto.randomBytes(n);
       let id = "";
-      for (let i = 0; i < length; i++) {
+      for (let i = 0; i < n; i++) {
         const index = bytes[i] % BASE58_LEN;
         id += BASE58_CHARS[index];
       }
@@ -79488,7 +79489,10 @@ var require_generator = __commonJS({
     }
     function validateId(id, length) {
       if (!id || typeof id !== "string") return false;
-      if (length && id.length !== length) return false;
+      if (length !== void 0 && length !== null && length !== "") {
+        const n = Math.trunc(Number(length));
+        if (Number.isFinite(n) && n > 0 && id.length !== n) return false;
+      }
       const base58Regex = /^[1-9A-HJKLMNP-Za-km-z]+$/;
       return base58Regex.test(id);
     }
@@ -79943,7 +79947,7 @@ var require_user = __commonJS({
          *   3. Generate 16-byte random challenge and store in Redis with TTL.
          */
         async loginRequest(params) {
-          const name = normalizeName(params.name);
+          const name = normalizeName(params.name || params.username);
           if (!name) throw jsonrpc.MISSING_PARAM("name");
           try {
             const uid = await redisClient.get(`${config.redis.userNamePrefix}${name}`);
@@ -79988,8 +79992,9 @@ var require_user = __commonJS({
          *   request mints its own challenge key.
          */
         async loginVerify(params) {
-          const { challenge, response, deviceId } = params;
-          const name = normalizeName(params.name);
+          const { challenge, deviceId } = params;
+          const response = params.response || params.signature;
+          const name = normalizeName(params.name || params.username);
           if (!name || !challenge || !response) throw jsonrpc.INVALID_PARAMS("Missing params");
           try {
             if (!CHALLENGE_RE.test(challenge)) throw jsonrpc.INVALID_CHALLENGE();
@@ -85171,14 +85176,17 @@ var require_peer_relay = __commonJS({
               err.code = "PEER_AUTH_EXPIRED";
               throw err;
             }
-            const ch = await rawPost("user.login.request", { username: user });
+            const ch = await rawPost("user.login.request", { name: user, username: user });
             if (!ch || !ch.challenge || !ch.salt) {
               throw new Error("peer-relay: user.login.request returned incomplete challenge");
             }
             const passwordHash = sha256(password + ch.salt);
             const signature = sha256(ch.challenge + passwordHash);
             const verified = await rawPost("user.login.verify", {
+              name: user,
               username: user,
+              challenge: ch.challenge,
+              response: signature,
               signature,
               deviceId
             });
@@ -109379,13 +109387,13 @@ var require_introspection6 = __commonJS({
       { name: "gateway.smtp.delete", params: ["id"], returns: ["success"], returns_schema: DELETE_RETURN, description: "Delete SMTP account", ai: false },
       { name: "gateway.smtp.test", params: ["id"], returns: ["success", "message"], returns_schema: [{ name: "success", type: "boolean", required: true }, { name: "message", type: "string", required: true }], description: "Verify SMTP connection for an account", ai: false },
       // --- IMAP Account Management & Inbound Polling ---
-      { name: "gateway.imap.create", params: ["name", "host", "port", "secure", "user", "pass", "mailbox", "options"], returns: ["id", "status", "createdAt"], returns_schema: IMAP_RETURN, description: "Create IMAP account for inbound email polling (pass encrypted at rest; TLS port 993 enforced by default)", ai: false },
+      { name: "gateway.imap.create", params: ["name", "host", "port", "secure", "user", "pass", "mailbox", "options", "clientId"], returns: ["id", "status", "createdAt"], returns_schema: IMAP_RETURN, description: "Create IMAP account for inbound email polling (pass encrypted at rest; TLS port 993 enforced by default)", ai: false },
       { name: "gateway.imap.get", params: ["id"], returns: ["id", "status"], returns_schema: IMAP_RETURN, description: "Get IMAP account by ID (pass omitted)", ai: false },
       { name: "gateway.imap.list", params: [], returns: ["items", "total"], returns_schema: LIST_RETURN, description: "List IMAP accounts (pass omitted)", ai: false },
       { name: "gateway.imap.update", params: ["id"], returns: ["id", "status", "updatedAt"], returns_schema: IMAP_RETURN, description: "Update IMAP account fields", ai: false },
       { name: "gateway.imap.delete", params: ["id"], returns: ["success"], returns_schema: DELETE_RETURN, description: "Delete IMAP account", ai: false },
       { name: "gateway.imap.test", params: ["id"], returns: ["success", "message", "mailbox"], returns_schema: [{ name: "success", type: "boolean", required: true }, { name: "message", type: "string", required: true }, { name: "mailbox", type: "string", required: true }], description: "Verify IMAP connection and mailbox selection for an account", ai: false },
-      { name: "gateway.imap.poll", params: ["imapId", "mailbox", "sinceMs", "fromContains", "subjectContains", "unseenOnly", "markSeen", "limit", "extractOtp", "includeBody", "saveAttachmentsToStorage"], returns: ["items", "total", "mailbox"], returns_schema: [{ name: "items", type: "array", required: true }, { name: "total", type: "number", required: true }, { name: "mailbox", type: "string", required: true }], description: "Poll an IMAP mailbox for recent messages and optionally extract OTP codes or save attachments to storage", ai: true },
+      { name: "gateway.imap.poll", params: ["imapId", "mailbox", "sinceMs", "fromContains", "subjectContains", "unseenOnly", "markSeen", "limit", "extractOtp", "includeBody", "saveAttachmentsToStorage", "clientId"], returns: ["items", "total", "mailbox"], returns_schema: [{ name: "items", type: "array", required: true }, { name: "total", type: "number", required: true }, { name: "mailbox", type: "string", required: true }], description: "Poll an IMAP mailbox for recent messages and optionally extract OTP codes or save attachments to storage", ai: true },
       // --- Email Template Management ---
       { name: "gateway.email.template.create", params: ["name", "subject", "html", "text", "variables"], returns: ["id", "status", "createdAt"], returns_schema: EMAIL_TEMPLATE_RETURN, description: "Create email template (name/subject/html required; text = optional plain-text part)", ai: false },
       { name: "gateway.email.template.get", params: ["id"], returns: ["id", "status"], returns_schema: EMAIL_TEMPLATE_RETURN, description: "Get email template by ID", ai: false },
@@ -123903,13 +123911,32 @@ ${textBody || ""}`.slice(0, 16384);
       }
       return fetchResp;
     }
-    async function testImapConnection(cfg) {
+    function buildImapIdCommand(clientId) {
+      if (clientId === false) return null;
+      const base = {
+        name: "SOLO-Gateway",
+        version: "1.0.0",
+        vendor: "SOLO"
+      };
+      const merged = clientId && typeof clientId === "object" && !Array.isArray(clientId) ? { ...base, ...clientId } : typeof clientId === "string" && clientId.trim() ? { ...base, name: clientId.trim() } : base;
+      const pairs = [];
+      for (const [k, v] of Object.entries(merged)) {
+        if (v === void 0 || v === null || v === "") continue;
+        pairs.push(`${imapQuote(k)} ${imapQuote(String(v))}`);
+      }
+      return pairs.length ? `ID (${pairs.join(" ")})` : null;
+    }
+    async function testImapConnection(cfg, opts = {}) {
       validateImapConfig(cfg, { isUpdate: false });
-      const session = await createImapSession(cfg);
+      const sessionFactory = opts.sessionFactory || createImapSession;
+      const session = await sessionFactory(cfg);
       try {
         await session.command(`LOGIN ${imapQuote(cfg.user)} ${imapQuote(cfg.pass)}`);
-        await session.command('ID ("name" "SOLO-Gateway" "version" "1.0.0" "vendor" "SOLO")').catch(() => {
-        });
+        const idCmd = buildImapIdCommand(opts.clientId ?? cfg.clientId ?? cfg.options?.clientId);
+        if (idCmd) {
+          await session.command(idCmd).catch(() => {
+          });
+        }
         const mailbox = cfg.mailbox || "INBOX";
         await session.command(`EXAMINE ${imapQuote(mailbox)}`);
         await session.command("LOGOUT").catch(() => {
@@ -123937,7 +123964,7 @@ ${textBody || ""}`.slice(0, 16384);
         }
       }
     }
-    async function pollImapAccount({ redis, imapEntity, relay = null }, params = {}) {
+    async function pollImapAccount({ redis, imapEntity, relay = null, sessionFactory = createImapSession }, params = {}) {
       const {
         imapId,
         mailbox: reqMailbox,
@@ -123949,7 +123976,8 @@ ${textBody || ""}`.slice(0, 16384);
         limit = 10,
         extractOtp = false,
         includeBody = false,
-        saveAttachmentsToStorage = false
+        saveAttachmentsToStorage = false,
+        clientId
       } = params;
       if (!imapId) throw jsonrpc.MISSING_PARAM("imapId");
       const cfg = await imapEntity.getDecrypted(imapId);
@@ -123957,11 +123985,14 @@ ${textBody || ""}`.slice(0, 16384);
       const mailbox = reqMailbox || cfg.mailbox || "INBOX";
       const maxItems = Math.max(1, Math.min(Number(limit) || 10, 50));
       return withImapLock(redis, imapId, async () => {
-        const session = await createImapSession(cfg);
+        const session = await sessionFactory(cfg);
         try {
           await session.command(`LOGIN ${imapQuote(cfg.user)} ${imapQuote(cfg.pass)}`);
-          await session.command('ID ("name" "SOLO-Gateway" "version" "1.0.0" "vendor" "SOLO")').catch(() => {
-          });
+          const idCmd = buildImapIdCommand(clientId ?? cfg.clientId ?? cfg.options?.clientId);
+          if (idCmd) {
+            await session.command(idCmd).catch(() => {
+            });
+          }
           await session.command(`${markSeen ? "SELECT" : "EXAMINE"} ${imapQuote(mailbox)}`);
           const criteria = [];
           if (unseenOnly) criteria.push("UNSEEN");
@@ -124044,7 +124075,8 @@ ${textBody || ""}`.slice(0, 16384);
       testImapConnection,
       pollImapAccount,
       parseRawEmail,
-      extractOtpFromText
+      extractOtpFromText,
+      buildImapIdCommand
     };
   }
 });
@@ -130201,6 +130233,7 @@ var require_config12 = __commonJS({
     var pkg = require_package11();
     var path = require("path");
     var { portFor, bindAddr } = require_ports();
+    var { intFromEnv } = require_env();
     var STORAGE_PORT = portFor("storage", 8750);
     var DEV_OSS_SECRET = "solo-local-oss-dev-secret";
     var LOCAL_OSS_MOUNT = process.env.LOCAL_OSS_MOUNT_PATH || "/_oss";
@@ -130303,7 +130336,7 @@ var require_config12 = __commonJS({
       bodyLimit: process.env.BODY_LIMIT || "50mb",
       // ID Lengths
       idLengths: {
-        asset: process.env.ASSET_ID_LENGTH || 8
+        asset: intFromEnv("ASSET_ID_LENGTH", 8)
       },
       // Asset Serving
       assetsPublicPath: process.env.ASSETS_PUBLIC_PATH || "/assets",

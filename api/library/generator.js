@@ -12,13 +12,14 @@ const BASE58_LEN = BASE58_CHARS.length; // 58
  * @returns {string} - The generated ID
  */
 function generateId(length = 8) {
-    if (length <= 0) return '';
+    const n = Math.trunc(Number(length));
+    if (!Number.isFinite(n) || n <= 0) return '';
     
     // Get random bytes (one per character)
-    const bytes = crypto.randomBytes(length);
+    const bytes = crypto.randomBytes(n);
     let id = '';
     
-    for (let i = 0; i < length; i++) {
+    for (let i = 0; i < n; i++) {
         // Modulo bias is negligible for 58 vs 256
         const index = bytes[i] % BASE58_LEN;
         id += BASE58_CHARS[index];
@@ -30,12 +31,15 @@ function generateId(length = 8) {
 /**
  * Validate a Base58 ID
  * @param {string} id - The ID to validate
- * @param {number} length - Expected length
+ * @param {number|string} length - Expected length
  * @returns {boolean}
  */
 function validateId(id, length) {
     if (!id || typeof id !== 'string') return false;
-    if (length && id.length !== length) return false;
+    if (length !== undefined && length !== null && length !== '') {
+        const n = Math.trunc(Number(length));
+        if (Number.isFinite(n) && n > 0 && id.length !== n) return false;
+    }
     // Regex for Base58 (alphanumeric except 0, O, I, l)
     const base58Regex = /^[1-9A-HJKLMNP-Za-km-z]+$/;
     return base58Regex.test(id);

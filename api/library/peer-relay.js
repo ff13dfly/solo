@@ -254,14 +254,17 @@ function createPeerRelay(options = {}) {
                     throw err;
                 }
 
-                const ch = await rawPost('user.login.request', { username: user });
+                const ch = await rawPost('user.login.request', { name: user, username: user });
                 if (!ch || !ch.challenge || !ch.salt) {
                     throw new Error('peer-relay: user.login.request returned incomplete challenge');
                 }
                 const passwordHash = sha256(password + ch.salt);
                 const signature = sha256(ch.challenge + passwordHash);
                 const verified = await rawPost('user.login.verify', {
+                    name: user,
                     username: user,
+                    challenge: ch.challenge,
+                    response: signature,
                     signature,
                     deviceId,
                 });

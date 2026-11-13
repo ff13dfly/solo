@@ -483,14 +483,36 @@ function extractLiteralFromFetch(fetchResp) {
     return fetchResp;
 }
 
-async function testImapConnection(cfg) {
+function buildImapIdCommand(clientId) {
+    if (clientId === false) return null;
+    const base = {
+        name: 'SOLO-Gateway',
+        version: '1.0.0',
+        vendor: 'SOLO',
+    };
+    const merged = (clientId && typeof clientId === 'object' && !Array.isArray(clientId))
+        ? { ...base, ...clientId }
+        : (typeof clientId === 'string' && clientId.trim() ? { ...base, name: clientId.trim() } : base);
+    const pairs = [];
+    for (const [k, v] of Object.entries(merged)) {
+        if (v === undefined || v === null || v === '') continue;
+        pairs.push(`${imapQuote(k)} ${imapQuote(String(v))}`);
+    }
+    return pairs.length ? `ID (${pairs.join(' ')})` : null;
+}
+
+async function testImapConnection(cfg, opts = {}) {
     validateImapConfig(cfg, { isUpdate: false });
-    const session = await createImapSession(cfg);
+    const sessionFactory = opts.sessionFactory || createImapSession;
+    const session = await sessionFactory(cfg);
     try {
         await session.command(`LOGIN ${imapQuote(cfg.user)} ${imapQuote(cfg.pass)}`);
         // RFC 2971 ID extension required by NetEase (163.com / 126.com / yeah.net / qiye.163.com)
         // before SELECT/EXAMINE to avoid "NO SELECT Unsafe Login"; ignored if server returns BAD/NO.
-        await session.command('ID ("name" "SOLO-Gateway" "version" "1.0.0" "vendor" "SOLO")').catch(() => {});
+        const idCmd = buildImapIdCommand(opts.clientId ?? cfg.clientId ?? cfg.options?.clientId);
+        if (idCmd) {
+            await session.command(idCmd).catch(() => {});
+        }
         const mailbox = cfg.mailbox || 'INBOX';
         await session.command(`EXAMINE ${imapQuote(mailbox)}`);
         await session.command('LOGOUT').catch(() => {});
@@ -518,7 +540,7 @@ async function withImapLock(redis, imapId, fn) {
     }
 }
 
-async function pollImapAccount({ redis, imapEntity, relay = null }, params = {}) {
+async function pollImapAccount({ redis, imapEntity, relay = null, sessionFactory = createImapSession }, params = {}) {
     const {
         imapId,
         mailbox: reqMailbox,
@@ -531,6 +553,7 @@ async function pollImapAccount({ redis, imapEntity, relay = null }, params = {})
         extractOtp = false,
         includeBody = false,
         saveAttachmentsToStorage = false,
+        clientId,
     } = params;
 
     if (!imapId) throw jsonrpc.MISSING_PARAM('imapId');
@@ -540,10 +563,13 @@ async function pollImapAccount({ redis, imapEntity, relay = null }, params = {})
     const maxItems = Math.max(1, Math.min(Number(limit) || 10, 50));
 
     return withImapLock(redis, imapId, async () => {
-        const session = await createImapSession(cfg);
+        const session = await sessionFactory(cfg);
         try {
             await session.command(`LOGIN ${imapQuote(cfg.user)} ${imapQuote(cfg.pass)}`);
-            await session.command('ID ("name" "SOLO-Gateway" "version" "1.0.0" "vendor" "SOLO")').catch(() => {});
+            const idCmd = buildImapIdCommand(clientId ?? cfg.clientId ?? cfg.options?.clientId);
+            if (idCmd) {
+                await session.command(idCmd).catch(() => {});
+            }
             await session.command(`${markSeen ? 'SELECT' : 'EXAMINE'} ${imapQuote(mailbox)}`);
 
             const criteria = [];
@@ -645,4 +671,5 @@ module.exports = {
     pollImapAccount,
     parseRawEmail,
     extractOtpFromText,
+    buildImapIdCommand,
 };

@@ -184,6 +184,7 @@ describe('outbound-layering-ollama-agent-and-peer-relay regression suite', () =>
 
                 if (body.method === 'user.login.request') {
                     loginRequestCount += 1;
+                    expect(body.params.name).toBe('operator');
                     await new Promise((r) => setTimeout(r, 20));
                     return {
                         ok: true,
@@ -199,7 +200,7 @@ describe('outbound-layering-ollama-agent-and-peer-relay regression suite', () =>
                 if (body.method === 'user.login.verify') {
                     loginVerifyCount += 1;
                     const expectedSig = sha256('ch-123' + sha256('secret-pass' + 'salt-abc'));
-                    if (body.params.signature !== expectedSig) {
+                    if (body.params.name !== 'operator' || body.params.challenge !== 'ch-123' || body.params.response !== expectedSig) {
                         return {
                             ok: false,
                             status: 401,

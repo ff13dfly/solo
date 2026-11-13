@@ -19,9 +19,18 @@ describe('generator — generateId length', () => {
         expect(G.generateId(16)).toHaveLength(16);
         expect(G.generateId(64)).toHaveLength(64);
     });
-    test('length <= 0 yields empty string', () => {
+    test('coerces numeric string length (e.g. ASSET_ID_LENGTH="16" from process.env)', () => {
+        const id = G.generateId('16');
+        expect(id).toHaveLength(16);
+        expect(G.validateId(id, '16')).toBe(true);
+        expect(G.validateId(id, 16)).toBe(true);
+        expect(G.validateId(id, '8')).toBe(false);
+    });
+    test('length <= 0 or non-numeric yields empty string', () => {
         expect(G.generateId(0)).toBe('');
         expect(G.generateId(-5)).toBe('');
+        expect(G.generateId('0')).toBe('');
+        expect(G.generateId('not-a-number')).toBe('');
     });
 });
 

@@ -150,7 +150,7 @@ module.exports = (redisClient, config) => {
      *   3. Generate 16-byte random challenge and store in Redis with TTL.
      */
     async loginRequest(params) {
-        const name = normalizeName(params.name);
+        const name = normalizeName(params.name || params.username);
         if (!name) throw jsonrpc.MISSING_PARAM('name');
 
         try {
@@ -213,8 +213,9 @@ module.exports = (redisClient, config) => {
      *   request mints its own challenge key.
      */
     async loginVerify(params) {
-        const { challenge, response, deviceId } = params;
-        const name = normalizeName(params.name);
+        const { challenge, deviceId } = params;
+        const response = params.response || params.signature;
+        const name = normalizeName(params.name || params.username);
         if (!name || !challenge || !response) throw jsonrpc.INVALID_PARAMS('Missing params');
 
         try {
