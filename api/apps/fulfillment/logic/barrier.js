@@ -54,22 +54,79 @@ module.exports = (redis, config, { relay = null, instanceLogic = null } = {}) =>
     }
 
     function resolveOwner(req) {
-        return walContext.getStore()?.owner || req?.constraints?.$owner || null;
+        return walContext.getStore()?.owner || req?.constraints?.$owner || req?.$owner || null;
+    }
+
+    function matchesOwner(owner, doc) {
+        if (!owner) return true;
+        if (!owner.field || !doc) return false;
+        const docVal = doc[owner.field] !== undefined ? doc[owner.field] : doc.meta?.[owner.field];
+        if (Array.isArray(owner.values)) {
+            const clean = owner.values.filter((v) => v !== undefined && v !== null && v !== '');
+            if (clean.length === 0) return false;
+            return clean.includes(docVal);
+        }
+        if (owner.value === undefined || owner.value === null || owner.value === '') return false;
+        return docVal === owner.value;
+    }
+
+    function resolveOwnerValueForCreate(owner, params = {}, meta = {}) {
+        if (!owner || !owner.field) return undefined;
+        if (Array.isArray(owner.values)) {
+            const clean = owner.values.filter((v) => v !== undefined && v !== null && v !== '');
+            if (clean.length === 0) {
+                throw jsonrpc.FORBIDDEN('Invalid $owner.values row-isolation constraint (empty set)');
+            }
+            if (clean.length === 1) return clean[0];
+            const supplied = params[owner.field] !== undefined
+                ? params[owner.field]
+                : (meta && meta[owner.field]);
+            if (supplied === undefined || supplied === null || supplied === '') {
+                throw jsonrpc.INVALID_PARAM(`Missing required scope field "${owner.field}" in params or meta (permitted values: ${clean.join(', ')})`);
+            }
+            if (!clean.includes(supplied)) {
+                throw jsonrpc.FORBIDDEN(`Value "${supplied}" for "${owner.field}" is outside caller's permitted scope`);
+            }
+            return supplied;
+        }
+        if (owner.value === undefined || owner.value === null || owner.value === '') {
+            throw jsonrpc.FORBIDDEN('Invalid $owner row-isolation constraint');
+        }
+        return owner.value;
     }
 
     function assertOwner(doc, req) {
         const owner = resolveOwner(req);
-        if (owner && owner.field && doc[owner.field] !== owner.value) {
+        if (!matchesOwner(owner, doc)) {
             throw jsonrpc.NOT_FOUND(`Barrier ${doc.barrierKey}`);
         }
     }
 
-    function validateBarrierKey(barrierKey) {
+    function validateBarrierKey(barrierKey, scopedPrefix = '') {
         if (!barrierKey) throw jsonrpc.MISSING_PARAM('barrierKey');
         if (typeof barrierKey !== 'string' || barrierKey.length > 128 || /[\s*?\x00-\x1f]/.test(barrierKey)) {
             throw jsonrpc.INVALID_PARAM('barrierKey must be a non-empty string (<= 128 chars) without whitespace or wildcards');
         }
-        return `${BARRIER_PREFIX}${barrierKey}`;
+        return scopedPrefix
+            ? `${BARRIER_PREFIX}${scopedPrefix}:${barrierKey}`
+            : `${BARRIER_PREFIX}${barrierKey}`;
+    }
+
+    async function resolveExistingBarrierKey(barrierKey, req) {
+        validateBarrierKey(barrierKey);
+        const owner = resolveOwner(req);
+        if (owner && owner.field) {
+            const candidates = Array.isArray(owner.values)
+                ? owner.values.filter((v) => v !== undefined && v !== null && v !== '')
+                : (owner.value !== undefined && owner.value !== null && owner.value !== '' ? [owner.value] : []);
+            for (const val of candidates) {
+                const scopedKey = validateBarrierKey(barrierKey, `${owner.field}=${val}`);
+                if (await redis.get(scopedKey)) {
+                    return scopedKey;
+                }
+            }
+        }
+        return validateBarrierKey(barrierKey);
     }
 
     function summarizeItems(itemsMap = {}) {
@@ -167,19 +224,23 @@ module.exports = (redis, config, { relay = null, instanceLogic = null } = {}) =>
 
         if (targetType === 'peer') {
             const peerName = String(onSettled.peer || '').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
-            const endpoint = onSettled.endpoint
+            const peerCfg = (config.peers && onSettled.peer && config.peers[onSettled.peer]) || {};
+            const configuredEndpoint = peerCfg.endpoint
+                || peerCfg.rpcUrl
                 || (peerName && process.env[`SOLO_PEER_${peerName}_URL`])
                 || process.env.SOLO_PEER_URL
                 || '';
+            const endpoint = onSettled.endpoint || configuredEndpoint;
+            const canUseConfiguredCreds = !onSettled.endpoint || (configuredEndpoint && onSettled.endpoint === configuredEndpoint);
             const apiKey = onSettled.apiKey
-                || (peerName && process.env[`SOLO_PEER_${peerName}_API_KEY`])
+                || (canUseConfiguredCreds ? (peerCfg.apiKey || (peerName && process.env[`SOLO_PEER_${peerName}_API_KEY`])) : '')
                 || '';
             const token = onSettled.callbackToken
                 || onSettled.token
-                || (peerName && process.env[`SOLO_PEER_${peerName}_TOKEN`])
+                || (canUseConfiguredCreds ? (peerCfg.token || (peerName && process.env[`SOLO_PEER_${peerName}_TOKEN`])) : '')
                 || '';
-            const user = onSettled.user || (peerName && process.env[`SOLO_PEER_${peerName}_USER`]) || '';
-            const password = onSettled.password || (peerName && process.env[`SOLO_PEER_${peerName}_PASSWORD`]) || '';
+            const user = onSettled.user || (canUseConfiguredCreds ? (peerCfg.user || (peerName && process.env[`SOLO_PEER_${peerName}_USER`])) : '') || '';
+            const password = onSettled.password || (canUseConfiguredCreds ? (peerCfg.password || (peerName && process.env[`SOLO_PEER_${peerName}_PASSWORD`])) : '') || '';
 
             if (endpoint) {
                 const peerClient = createPeerRelay({
@@ -237,14 +298,31 @@ module.exports = (redis, config, { relay = null, instanceLogic = null } = {}) =>
         /**
          * fulfillment.barrier.create — register or idempotently fetch a fan-in batch barrier.
          */
-        async create({ barrierKey, expectedCount, ttlMs = DEFAULT_BARRIER_TTL_MS, onSettled = null, meta = {} } = {}, req) {
-            const key = validateBarrierKey(barrierKey);
+        async create(params = {}, req) {
+            const { barrierKey, expectedCount, ttlMs = DEFAULT_BARRIER_TTL_MS, onSettled = null, meta = {} } = params;
+            validateBarrierKey(barrierKey);
             const count = Number(expectedCount);
             if (!Number.isInteger(count) || count < 1 || count > MAX_EXPECTED_COUNT) {
                 throw jsonrpc.INVALID_PARAM(`expectedCount must be an integer between 1 and ${MAX_EXPECTED_COUNT}`);
             }
             const safeTtl = Math.max(1000, Math.min(Number(ttlMs) || DEFAULT_BARRIER_TTL_MS, MAX_BARRIER_TTL_MS));
             const owner = resolveOwner(req);
+            const ownerVal = resolveOwnerValueForCreate(owner, params, meta);
+            const isCallerAdmin = !req || req.permit === 'admin' || (typeof req.user === 'string' && req.user.startsWith('system.') && !owner);
+
+            if (onSettled && typeof onSettled === 'object') {
+                const targetType = onSettled.target || (onSettled.instanceId ? 'fulfillment' : (onSettled.endpoint || onSettled.peer ? 'peer' : 'local'));
+                if (targetType === 'local' && !isCallerAdmin) {
+                    throw jsonrpc.FORBIDDEN('Non-admin caller cannot register local RPC _tasks in barrier.onSettled');
+                }
+                if (targetType === 'fulfillment' && onSettled.instanceId && instanceLogic && typeof instanceLogic.get === 'function') {
+                    await instanceLogic.get({ id: onSettled.instanceId }, req);
+                }
+            }
+
+            const scopedPrefix = (owner && owner.field && ownerVal !== undefined) ? `${owner.field}=${ownerVal}` : '';
+            const indexMember = scopedPrefix ? `${scopedPrefix}:${barrierKey}` : barrierKey;
+            const key = validateBarrierKey(barrierKey, scopedPrefix);
 
             return withBarrierLock(key, async () => {
                 const existingRaw = await redis.get(key);
@@ -256,15 +334,20 @@ module.exports = (redis, config, { relay = null, instanceLogic = null } = {}) =>
 
                 const now = clock.now();
                 const expiresAt = now + safeTtl;
+                const safeMeta = (meta && typeof meta === 'object' && !Array.isArray(meta)) ? { ...meta } : {};
+                if (owner && owner.field && ownerVal !== undefined) {
+                    safeMeta[owner.field] = ownerVal;
+                }
                 const doc = {
                     barrierKey,
+                    indexKey:      indexMember,
                     status:        'PENDING',
                     expectedCount: count,
                     items:         {},
                     onSettled:     (onSettled && typeof onSettled === 'object') ? onSettled : null,
-                    meta:          (meta && typeof meta === 'object' && !Array.isArray(meta)) ? meta : {},
+                    meta:          safeMeta,
                     createdBy:     req?.user || null,
-                    ...(owner && owner.field ? { [owner.field]: owner.value, _ownerScope: { field: owner.field, value: owner.value } } : {}),
+                    ...(owner && owner.field ? { [owner.field]: ownerVal, _ownerScope: { field: owner.field, value: ownerVal } } : {}),
                     createdAt:     now,
                     expiresAt,
                     settledAt:     null,
@@ -272,7 +355,7 @@ module.exports = (redis, config, { relay = null, instanceLogic = null } = {}) =>
                 };
 
                 await redis.set(key, JSON.stringify(doc), { EX: Math.ceil(safeTtl / 1000) + 86400 });
-                await redis.sAdd(BARRIER_INDEX, barrierKey);
+                await redis.sAdd(BARRIER_INDEX, indexMember);
                 return formatBarrierResponse(doc, { deduplicated: false });
             });
         },
@@ -282,7 +365,7 @@ module.exports = (redis, config, { relay = null, instanceLogic = null } = {}) =>
          * Atomically settles the barrier once `completedCount === expectedCount`.
          */
         async checkin({ barrierKey, itemId, outcome = 'DONE', result = null } = {}, req) {
-            const key = validateBarrierKey(barrierKey);
+            const key = await resolveExistingBarrierKey(barrierKey, req);
             if (!itemId || typeof itemId !== 'string') {
                 throw jsonrpc.MISSING_PARAM('itemId');
             }
@@ -298,6 +381,7 @@ module.exports = (redis, config, { relay = null, instanceLogic = null } = {}) =>
                 let justSettled = false;
 
                 const updated = await optimisticUpdate(redis, key, (current) => {
+                    justSettled = false;
                     assertOwner(current, req);
                     if (current.status !== 'PENDING') {
                         return current;
@@ -314,11 +398,7 @@ module.exports = (redis, config, { relay = null, instanceLogic = null } = {}) =>
 
                     const completedCount = Object.keys(nextItems).length;
                     const reached = completedCount >= current.expectedCount;
-                    if (reached) {
-                        justSettled = true;
-                    } else {
-                        justSettled = false;
-                    }
+                    justSettled = reached;
 
                     return {
                         ...current,
@@ -347,7 +427,7 @@ module.exports = (redis, config, { relay = null, instanceLogic = null } = {}) =>
          * fulfillment.barrier.get — inspect a barrier's current progress and child results.
          */
         async get({ barrierKey } = {}, req) {
-            const key = validateBarrierKey(barrierKey);
+            const key = await resolveExistingBarrierKey(barrierKey, req);
             const raw = await redis.get(key);
             if (!raw) throw jsonrpc.NOT_FOUND(`Barrier ${barrierKey}`);
             const doc = JSON.parse(raw);
@@ -374,11 +454,18 @@ module.exports = (redis, config, { relay = null, instanceLogic = null } = {}) =>
             const reaped = [];
             const allTasks = [];
 
-            for (const raw of rows) {
-                if (!raw) continue;
+            for (let idx = 0; idx < rows.length; idx++) {
+                const raw = rows[idx];
+                const idxKey = keys[idx];
+                if (!raw) {
+                    if (!dryRun && typeof redis.sRem === 'function') {
+                        await redis.sRem(BARRIER_INDEX, idxKey).catch(() => {});
+                    }
+                    continue;
+                }
                 let doc;
                 try { doc = JSON.parse(raw); } catch (_) { continue; }
-                if (owner && owner.field && doc[owner.field] !== owner.value) continue;
+                if (!matchesOwner(owner, doc)) continue;
                 scanned += 1;
                 if (doc.status !== 'PENDING') continue;
                 if (!doc.expiresAt || now < doc.expiresAt) continue;
@@ -388,17 +475,18 @@ module.exports = (redis, config, { relay = null, instanceLogic = null } = {}) =>
 
                 if (dryRun) {
                     reaped.push({
-                        barrierKey:    doc.barrierKey,
-                        expectedCount: doc.expectedCount,
+                        barrierKey:     doc.barrierKey,
+                        expectedCount:  doc.expectedCount,
                         completedCount: Object.keys(doc.items || {}).length,
                     });
                     continue;
                 }
 
-                const bKey = `${BARRIER_PREFIX}${doc.barrierKey}`;
+                const bKey = `${BARRIER_PREFIX}${idxKey}`;
                 await withBarrierLock(bKey, async () => {
                     let settledNow = false;
                     const updated = await optimisticUpdate(redis, bKey, (cur) => {
+                        settledNow = false;
                         if (!cur || cur.status !== 'PENDING') return cur;
                         settledNow = true;
                         return {

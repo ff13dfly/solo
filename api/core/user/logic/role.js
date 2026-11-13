@@ -90,7 +90,7 @@ module.exports = (redisClient, config) => {
     // NOTE: this is the RBAC axis — it sets `user.role` (the assigned role) + `user.permit`.
     // It deliberately does NOT touch `categories.POWER` — that is the separate TIER axis
     // (admin/operator/normal) that gates portal access (portal/operator login) + session policy.
-    const HIGH_PRIV_USER_RE = /^(\*|user\.(?:permit|bot)\..*|user\.role\.set|user\.account\.destroy|user\.token\.revoke)$/;
+    const HIGH_PRIV_USER_RE = /^(\*|user\.(?:permit|bot)\..*|user\.role\.(?:set|assign|remove)|user\.account\.destroy|user\.token\.revoke|user\.password\.reset)$/;
 
     function isHighPrivilegeRoleDoc(roleDoc) {
         const svcMap = (roleDoc && roleDoc.services) || {};
@@ -101,19 +101,28 @@ module.exports = (redisClient, config) => {
         return false;
     }
 
+    function isProtectedUserAccount(u) {
+        if (!u || typeof u !== 'object') return false;
+        if (u.permit === 'admin' || (u.permit && u.permit.allow_all === true)) return true;
+        if (u.role === 'admin' || u.role === 'operator') return true;
+        if (u.categories && (u.categories.POWER === 'admin' || u.categories.POWER === 'operator')) return true;
+        if (u.permit && typeof u.permit === 'object' && isHighPrivilegeRoleDoc(u.permit)) return true;
+        return false;
+    }
+
     async function assign({ uid, role } = {}, callerCtx = {}) {
         if (!uid || !role) throw jsonrpc.MISSING_PARAM('uid/role');
         const isDelegatedNonAdmin = callerCtx && callerCtx.isAdmin === false;
         const roleDoc = await get({ role });
-        if (isDelegatedNonAdmin && isHighPrivilegeRoleDoc(roleDoc)) {
+        if (isDelegatedNonAdmin && (role === 'admin' || role === 'operator' || isHighPrivilegeRoleDoc(roleDoc))) {
             throw jsonrpc.FORBIDDEN('Non-admin caller cannot assign a role containing administrative or privilege-escalation permissions');
         }
         const permit = await resolve(role, uid);   // ownerField (if any) scoped to the user
         const { optimisticUpdate } = require('../../../library/optimistic');
         const updated = await optimisticUpdate(redisClient, userKey(uid), (u) => {
             if (u.status === 'DELETED') throw jsonrpc.FORBIDDEN('Cannot assign role to deleted account');
-            if (isDelegatedNonAdmin && (u.permit === 'admin' || u.permit?.allow_all || u.role === 'admin' || u.categories?.POWER === 'admin')) {
-                throw jsonrpc.FORBIDDEN('Non-admin caller cannot modify an admin account role');
+            if (isDelegatedNonAdmin && isProtectedUserAccount(u)) {
+                throw jsonrpc.FORBIDDEN('Non-admin caller cannot modify an admin or operator account role');
             }
             u.permit = permit;
             u.role = role;
@@ -123,5 +132,22 @@ module.exports = (redisClient, config) => {
         return { uid, role };
     }
 
-    return { get, list, set, remove, resolve, assign };
+    return { get, list, set, remove, resolve, assign, isHighPrivilegeRoleDoc, isProtectedUserAccount };
+};
+module.exports.HIGH_PRIV_USER_RE = /^(\*|user\.(?:permit|bot)\..*|user\.role\.(?:set|assign|remove)|user\.account\.destroy|user\.token\.revoke|user\.password\.reset)$/;
+module.exports.isHighPrivilegeRoleDoc = function isHighPrivilegeRoleDoc(roleDoc) {
+    const svcMap = (roleDoc && roleDoc.services) || {};
+    if (svcMap['*'] || svcMap.setting || svcMap.administrator || svcMap.admin) return true;
+    if (Array.isArray(svcMap.user) && svcMap.user.some((m) => module.exports.HIGH_PRIV_USER_RE.test(String(m)))) {
+        return true;
+    }
+    return false;
+};
+module.exports.isProtectedUserAccount = function isProtectedUserAccount(u) {
+    if (!u || typeof u !== 'object') return false;
+    if (u.permit === 'admin' || (u.permit && u.permit.allow_all === true)) return true;
+    if (u.role === 'admin' || u.role === 'operator') return true;
+    if (u.categories && (u.categories.POWER === 'admin' || u.categories.POWER === 'operator')) return true;
+    if (u.permit && typeof u.permit === 'object' && module.exports.isHighPrivilegeRoleDoc(u.permit)) return true;
+    return false;
 };

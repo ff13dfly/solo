@@ -61,8 +61,6 @@ function isForbiddenHostname(hostname) {
 function isPrivateOrReservedIp(ip, { allowLoopback = false } = {}) {
     const clean = normalizeHostname(ip);
     if (!clean) return true;
-    const v4Mapped = clean.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-    if (v4Mapped) return isPrivateOrReservedIp(v4Mapped[1], { allowLoopback });
     if (!net.isIP(clean)) return true;
     return isInternalOrReservedHost(clean, { allowLoopback });
 }
@@ -430,20 +428,47 @@ async function outboundRequest(urlInput, {
                 throw err;
             }
             const nextUrl = new URL(res.headers.location, currentUrl);
-            // Strip sensitive headers when crossing origins on redirect
+            if (currentUrl.protocol === 'https:' && nextUrl.protocol === 'http:') {
+                const err = new Error('outbound: refusing HTTPS to HTTP scheme downgrade on redirect');
+                err.code = 'SSRF_BLOCKED';
+                throw err;
+            }
+            // Strip sensitive headers and drop request body when crossing origins on redirect
             if (nextUrl.origin !== currentUrl.origin) {
-                delete currentHeaders.authorization;
-                delete currentHeaders.Authorization;
-                delete currentHeaders.cookie;
-                delete currentHeaders.Cookie;
+                for (const hk of Object.keys(currentHeaders)) {
+                    const low = hk.toLowerCase();
+                    if (
+                        low === 'authorization' ||
+                        low === 'proxy-authorization' ||
+                        low === 'cookie' ||
+                        low === 'x-api-key' ||
+                        low === 'x-auth-token' ||
+                        low === 'x-solo-signature' ||
+                        low === 'x-router-token'
+                    ) {
+                        delete currentHeaders[hk];
+                    }
+                }
+                if (reqBody !== undefined && reqBody !== null) {
+                    currentMethod = 'GET';
+                    reqBody = undefined;
+                    for (const hk of Object.keys(currentHeaders)) {
+                        const low = hk.toLowerCase();
+                        if (low === 'content-length' || low === 'content-type') {
+                            delete currentHeaders[hk];
+                        }
+                    }
+                }
             }
             if (res.status === 303 || ((res.status === 301 || res.status === 302) && currentMethod === 'POST')) {
                 currentMethod = 'GET';
                 reqBody = undefined;
-                delete currentHeaders['content-length'];
-                delete currentHeaders['Content-Length'];
-                delete currentHeaders['content-type'];
-                delete currentHeaders['Content-Type'];
+                for (const hk of Object.keys(currentHeaders)) {
+                    const low = hk.toLowerCase();
+                    if (low === 'content-length' || low === 'content-type') {
+                        delete currentHeaders[hk];
+                    }
+                }
             }
             currentUrl = nextUrl;
             redirectsFollowed += 1;

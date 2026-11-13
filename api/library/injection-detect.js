@@ -26,7 +26,7 @@ const PATTERNS = [
     // explicit safety/guardrail bypass language
     { name: 'guardrail-override', re: /\b(disregard|override)\b[^.\n]{0,30}\b(system|safety|guardrails?)\b/i },
     // prompt section delimiter spoofing (e.g. === POLICY ===, === INSTRUCTION ===, </context>, [SYSTEM])
-    { name: 'delimiter-spoofing', re: /(?:(?:^|\n)\s*===\s*(?:POLICY|RULES|ALLOWED ACTIONS|CONTEXT|INSTRUCTION)\s*===|<\/?(?:context|system|instruction|policy|rules)\s*>|\[(?:SYSTEM|\/?INST)\])/i },
+    { name: 'delimiter-spoofing', re: /(?:===\s*(?:POLICY|RULES|ALLOWED ACTIONS|CONTEXT|INSTRUCTION)\s*===|<\/?(?:context|system|instruction|policy|rules)\s*>|\[(?:SYSTEM|\/?INST)\])/i },
     // Chinese instruction override phrasing
     { name: 'cn-ignore-instructions', re: /(?:忽略|无视|忘记)[^\n。]{0,15}(?:之前|以上|所有|系统)[^\n。]{0,10}(?:指令|提示|规则)/ },
 ];
@@ -80,7 +80,14 @@ const MAX_SCAN_DEPTH = 16;
  * Returns an array of { path, hits, pattern }.
  */
 function scanValue(val, path = '', seen = new WeakSet(), depth = 0) {
-    if (depth > MAX_SCAN_DEPTH) return [];
+    if (depth > MAX_SCAN_DEPTH) {
+        try {
+            const hits = scanString(JSON.stringify(val));
+            return hits.length ? [{ path: path || 'root', hits, pattern: hits[0] }] : [];
+        } catch (_) {
+            return [];
+        }
+    }
     if (typeof val === 'string') {
         const hits = scanString(val);
         return hits.length ? [{ path: path || 'root', hits, pattern: hits[0] }] : [];

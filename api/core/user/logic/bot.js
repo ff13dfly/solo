@@ -3,6 +3,8 @@ const jsonrpc = require('../handlers/jsonrpc');
 const logger = require('../../../library/logger');
 const { walContext } = require('../../../library/entity');
 const createSessions = require('./sessions');
+const { isReservedAnchorSyntax } = require('./anchors');
+const { isProtectedUserAccount } = require('./role');
 
 const BOT_UID_PREFIX = 'system.';
 const BOT_TOKEN_TTL_SEC = 24 * 60 * 60; // 24 hours
@@ -185,42 +187,48 @@ module.exports = (redisClient, config) => {
          * session:{token}, then clears the index. Any later request with those tokens
          * resolves to guest at the Router (session key gone) → rejected immediately.
          */
-        async revoke({ uid }, callerCtx = {}) {
-            if (!uid) throw jsonrpc.MISSING_PARAM('uid');
+        async revoke({ uid } = {}, callerCtx = {}) {
+            if (uid === undefined || uid === null || uid === '') throw jsonrpc.MISSING_PARAM('uid');
+            if (typeof uid !== 'string' || !uid.trim() || /[\s*?\x00-\x1f]/.test(uid)) {
+                throw jsonrpc.INVALID_PARAMS('uid must be a non-empty string without whitespace or wildcards');
+            }
+            const cleanUid = uid.trim();
             const isDelegatedNonAdmin = callerCtx && callerCtx.isAdmin === false;
             if (isDelegatedNonAdmin) {
-                if (typeof uid === 'string' && uid.startsWith('system.')) {
-                    throw jsonrpc.FORBIDDEN('Non-admin caller cannot revoke tokens of a system bot');
+                if (cleanUid.startsWith('system.') || isReservedAnchorSyntax(cleanUid)) {
+                    throw jsonrpc.FORBIDDEN('Non-admin caller cannot revoke tokens of a system or reserved principal');
                 }
                 const userPrefix = config.redis?.userPrefix || 'user:';
-                const rawUser = await redisClient.get(`${userPrefix}${uid}`);
+                const passportPrefix = config.redis?.passport?.prefix || 'USER:PASSPORT:';
+                const [rawUser, rawPassport] = await Promise.all([
+                    redisClient.get(`${userPrefix}${cleanUid}`),
+                    redisClient.get(`${passportPrefix}${cleanUid}`),
+                ]);
+                if (!rawUser && !rawPassport) {
+                    throw jsonrpc.FORBIDDEN('Non-admin caller cannot revoke tokens of an unverified or administrative account');
+                }
                 if (rawUser) {
                     let userData = null;
-                    try { userData = JSON.parse(rawUser); } catch (_) { }
-                    if (userData) {
-                        const isProtected =
-                            userData.role === 'admin' ||
-                            userData.permit === 'admin' ||
-                            userData.permit?.allow_all === true ||
-                            userData.categories?.POWER === 'admin' ||
-                            userData.categories?.POWER === 'operator';
-                        if (isProtected && callerCtx.user !== uid) {
-                            throw jsonrpc.FORBIDDEN('Non-admin caller cannot revoke tokens of an admin or operator account');
-                        }
+                    try { userData = JSON.parse(rawUser); } catch (_) { userData = null; }
+                    if (!userData || typeof userData !== 'object') {
+                        throw jsonrpc.FORBIDDEN('Cannot verify target account privileges for non-admin token revocation');
+                    }
+                    if (isProtectedUserAccount(userData) && callerCtx.user !== cleanUid) {
+                        throw jsonrpc.FORBIDDEN('Non-admin caller cannot revoke tokens of an admin or operator account');
                     }
                 }
             }
-            const revoked = await killSessions(uid);
+            const revoked = await killSessions(cleanUid);
 
             const issuer = walContext.getStore()?.uid || callerCtx?.user || null;
             try {
-                logger.insert(`BOT:REVOKE_TOKEN:${uid}`, {
-                    op: 'token.revoke', target: uid, issuer, revoked, stamp: Date.now(),
+                logger.insert(`BOT:REVOKE_TOKEN:${cleanUid}`, {
+                    op: 'token.revoke', target: cleanUid, issuer, revoked, stamp: Date.now(),
                 });
             } catch (e) {
-                console.error(`[bot.audit] Failed to log token revoke for ${uid}: ${e.message}`);
+                console.error(`[bot.audit] Failed to log token revoke for ${cleanUid}: ${e.message}`);
             }
-            return { uid, revoked };
+            return { uid: cleanUid, revoked };
         },
 
         // ── REVERSIBLE SUSPENSION ────────────────────────────────────────────

@@ -31,7 +31,7 @@ const RPC_URL        = `${ROUTER_URL.replace(/\/+$/, '')}/jsonrpc`;
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const EXPLICIT_TOKEN = process.env.SEED_BOT_TOKEN || process.env.ADMIN_TOKEN || '';
-const DEV_TOKEN      = 'solo-dev-admin';
+const DEV_TOKEN      = `solo-dev-admin-${crypto.randomBytes(16).toString('hex')}`;
 
 const BOTS = BOT_PERMITS;
 
@@ -142,7 +142,7 @@ async function main() {
         await redis.set(
             `session:${DEV_TOKEN}`,
             JSON.stringify({ uid: 'dev-admin', username: 'dev-admin', role: 'admin', permit: { allow_all: true, services: {} } }),
-            { EX: 24 * 3600 },
+            { EX: 300 },
         );
         await redis.quit();
         adminToken = DEV_TOKEN;
@@ -202,7 +202,10 @@ async function main() {
         }
     }
 
-    if (redisFallback) await redisFallback.quit();
+    if (redisFallback) {
+        await redisFallback.del(`session:${DEV_TOKEN}`).catch(() => {});
+        await redisFallback.quit();
+    }
 }
 
 main().catch(e => {

@@ -18,7 +18,38 @@ const PromptBuilder = require('../logic/prompt');
 const tokenLogger = require('../lib/tokenLogger');
 const { createLogger } = require('../../../library/logger');
 
-const logger = createLogger('agent');
+const MAX_OLLAMA_NUM_CTX = 32768;
+const MAX_OLLAMA_NUM_PREDICT = 8192;
+
+function sanitizeOllamaOptions(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+    const out = {};
+    if (typeof raw.temperature === 'number' && Number.isFinite(raw.temperature)) {
+        out.temperature = Math.max(0, Math.min(raw.temperature, 2));
+    }
+    if (typeof raw.top_p === 'number' && Number.isFinite(raw.top_p)) {
+        out.top_p = Math.max(0, Math.min(raw.top_p, 1));
+    }
+    if (typeof raw.top_k === 'number' && Number.isFinite(raw.top_k)) {
+        out.top_k = Math.max(1, Math.min(Math.floor(raw.top_k), 200));
+    }
+    if (typeof raw.repeat_penalty === 'number' && Number.isFinite(raw.repeat_penalty)) {
+        out.repeat_penalty = Math.max(0.5, Math.min(raw.repeat_penalty, 2));
+    }
+    if (typeof raw.seed === 'number' && Number.isInteger(raw.seed)) {
+        out.seed = raw.seed;
+    }
+    if (typeof raw.num_ctx === 'number' && Number.isFinite(raw.num_ctx) && raw.num_ctx > 0) {
+        out.num_ctx = Math.min(Math.floor(raw.num_ctx), MAX_OLLAMA_NUM_CTX);
+    }
+    if (typeof raw.num_predict === 'number' && Number.isFinite(raw.num_predict) && raw.num_predict > 0) {
+        out.num_predict = Math.min(Math.floor(raw.num_predict), MAX_OLLAMA_NUM_PREDICT);
+    }
+    if (Array.isArray(raw.stop)) {
+        out.stop = raw.stop.filter((s) => typeof s === 'string').slice(0, 8);
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+}
 
 function stripOllamaPrefix(model, fallback = 'qwen3.5:9b') {
     const raw = String(model || '').trim();
@@ -94,8 +125,9 @@ class OllamaProvider {
             keep_alive: keepAlive || this.keepAlive,
             think: useThink,
         };
-        if (options && typeof options === 'object') {
-            payload.options = options;
+        const safeOptions = sanitizeOllamaOptions(options);
+        if (safeOptions) {
+            payload.options = safeOptions;
         }
 
         const controller = new AbortController();
@@ -143,7 +175,9 @@ class OllamaProvider {
     async chat(params = {}) {
         const { text, model, think, options } = params;
         const lang = this.config.language || 'zh';
-        const prompt = PromptBuilder.buildChat(text, this.config, lang);
+        const prompt = (this.config && this.config.systemPrompts && this.config.chatConfig)
+            ? PromptBuilder.buildChat(text, this.config, lang)
+            : String(text || '');
         const { targetModel, content, usage } = await this._callChat({
             method: 'agent.chat',
             model,

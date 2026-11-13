@@ -308,7 +308,8 @@ function createPeerRelay(options = {}) {
         if (callOpts.idempotencyKey && !payloadParams.idempotencyKey) {
             payloadParams.idempotencyKey = callOpts.idempotencyKey;
         }
-        if (callOpts.propagateHop) {
+        const hasIncomingHop = callOpts.hop !== undefined || callOpts.meta?.hop !== undefined || params?._meta?.hop !== undefined;
+        if (callOpts.propagateHop === true || (callOpts.propagateHop !== false && hasIncomingHop)) {
             payloadParams._meta = {
                 ...(payloadParams._meta || {}),
                 hop: incomingHop + 1,

@@ -37,7 +37,20 @@ const { checkPickPath } = require('../../../library/contract');
 
 const META_VAR_PREFIX = 'instance.meta.';
 const ALLOWED_EVIDENCE_KEYS = new Set(['requiredFields', 'rejectMasked', 'rejectLoopbackUrls', 'minRows', 'minBytes']);
+const READ_ONLY_SOURCE_SUFFIXES = new Set(['get', 'list', 'query', 'search', 'count', 'resolve', 'info']);
+const FORBIDDEN_SOURCE_SERVICES = new Set(['user', 'admin', 'administrator', 'setting', 'system']);
 const hasOwn = (obj, k) => Boolean(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, k));
+
+function isSafeMetaSourceMethod(fullMethod) {
+    if (typeof fullMethod !== 'string' || !fullMethod.trim()) return false;
+    const parts = fullMethod.trim().split('.');
+    if (parts.length < 2 || parts.length > 4) return false;
+    const svc = parts[0].toLowerCase();
+    const action = parts[parts.length - 1].toLowerCase();
+    if (FORBIDDEN_SOURCE_SERVICES.has(svc)) return false;
+    if (!READ_ONLY_SOURCE_SUFFIXES.has(action)) return false;
+    return true;
+}
 
 /** Build { 'service.method': methodDecl } from an array of introspection arrays. */
 function buildMethodIndex(introspectionArrays = []) {
@@ -125,13 +138,20 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
         }
         const s = f.source;
         if (!s.service || !s.method) {
-            warnings.push(`${pname}: meta_field '${f.key}' has an incomplete source (missing service/method) — skipped by the runtime fetcher`);
+            errors.push(`${pname}: meta_field '${f.key}' has an incomplete source (missing service/method)`);
             continue;
         }
         const methodName = `${s.service}.${s.method}`;
         const method = hasOwn(methodIndex, methodName) ? methodIndex[methodName] : null;
         if (!method) {
             errors.push(`${pname}: meta_field '${f.key}' source method '${methodName}' is not a registered API method`);
+            continue;
+        }
+        if (!isSafeMetaSourceMethod(methodName)) {
+            errors.push(
+                `${pname}: meta_field '${f.key}' source method '${methodName}' is forbidden or not a read-only query method ` +
+                `(allowed suffixes: ${Array.from(READ_ONLY_SOURCE_SUFFIXES).join(', ')}; forbidden services: ${Array.from(FORBIDDEN_SOURCE_SERVICES).join(', ')})`
+            );
             continue;
         }
         // Response path: runtime reads `pick` with `field` as a legacy alias (InstanceDetailModal).
@@ -416,4 +436,11 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
     return { errors, warnings };
 }
 
-module.exports = { lintProfile, buildMethodIndex, metaVarsInCondition };
+module.exports = {
+    lintProfile,
+    buildMethodIndex,
+    metaVarsInCondition,
+    isSafeMetaSourceMethod,
+    READ_ONLY_SOURCE_SUFFIXES,
+    FORBIDDEN_SOURCE_SERVICES,
+};

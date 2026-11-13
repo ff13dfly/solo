@@ -5,6 +5,7 @@ const { createLogger } = require('../../../library/logger');
 const { walContext } = require('../../../library/entity');
 const { optimisticUpdate } = require('../../../library/optimistic');
 const { createPeerRelay } = require('../../../library/peer-relay');
+const { isSafeMetaSourceMethod } = require('./lint');
 const clock = require('../../../library/clock');
 
 const logger = createLogger('fulfillment:instance');
@@ -73,12 +74,16 @@ module.exports = (redis, config, relay = null) => {
     }
 
     function matchesOwner(owner, record) {
-        if (!owner || !owner.field) return true;
-        if (!record) return false;
+        if (!owner) return true;
+        if (!owner.field || !record) return false;
+        const recVal = record[owner.field] !== undefined ? record[owner.field] : record.meta?.[owner.field];
         if (Array.isArray(owner.values)) {
-            return owner.values.includes(record[owner.field]);
+            const clean = owner.values.filter((v) => v !== undefined && v !== null && v !== '');
+            if (clean.length === 0) return false;
+            return clean.includes(recVal);
         }
-        return record[owner.field] === owner.value;
+        if (owner.value === undefined || owner.value === null || owner.value === '') return false;
+        return recVal === owner.value;
     }
 
     function sourceIndexKey(owner, profileId, sourceId, explicitOwnerVal = undefined) {
@@ -144,6 +149,7 @@ module.exports = (redis, config, relay = null) => {
 
         const fetched = {};
         const baseMeta = { ...(instance.meta || {}), ...callerMetaUpdate };
+        const effectiveOwner = resolveOwner(req) || (instance._ownerScope && instance._ownerScope.field ? instance._ownerScope : null);
 
         for (const mf of metaFields) {
             if (!mf || typeof mf.key !== 'string' || !mf.key || PROTO_KEYS.has(mf.key)) continue;
@@ -152,11 +158,16 @@ module.exports = (redis, config, relay = null) => {
             if (baseMeta[mf.key] !== undefined && baseMeta[mf.key] !== null && baseMeta[mf.key] !== '') continue;
 
             const s = mf.source;
+            const rawService = typeof s.service === 'string' ? s.service.trim() : '';
             const rawMethod = typeof s.method === 'string' ? s.method.trim() : '';
-            if (!rawMethod) continue;
-            const fullMethod = (s.service && !rawMethod.startsWith(`${s.service}.`))
-                ? `${s.service}.${rawMethod}`
+            if (!rawService || !rawMethod) continue;
+            const fullMethod = !rawMethod.startsWith(`${rawService}.`)
+                ? `${rawService}.${rawMethod}`
                 : rawMethod;
+            if (!isSafeMetaSourceMethod(fullMethod)) {
+                logger.warn(`Blocked unsafe meta_field '${mf.key}' source method '${fullMethod}' on instance ${instance.id}`);
+                continue;
+            }
             const pickPath = typeof s.pick === 'string' && s.pick
                 ? s.pick
                 : (typeof s.field === 'string' && s.field ? s.field : null);
@@ -168,6 +179,13 @@ module.exports = (redis, config, relay = null) => {
                     ? rules.resolveParams(s.params, logicCtx)
                     : { id: instance.sourceId };
                 const res = await relay.call(fullMethod, resolvedParams);
+                if (effectiveOwner && effectiveOwner.field && res && typeof res === 'object') {
+                    const hasOwnerProp = res[effectiveOwner.field] !== undefined || (res.meta && res.meta[effectiveOwner.field] !== undefined);
+                    if (hasOwnerProp && !matchesOwner(effectiveOwner, res)) {
+                        logger.warn(`Blocked cross-owner meta_field '${mf.key}' from ${fullMethod} on instance ${instance.id}`);
+                        continue;
+                    }
+                }
                 const pickedVal = pickByDotPath(res, pickPath);
                 if (pickedVal !== undefined) {
                     fetched[mf.key] = pickedVal;
@@ -461,19 +479,20 @@ module.exports = (redis, config, relay = null) => {
 
                 const peerKey = String(action.peer || '').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
                 const peerCfg = (config.peers && action.peer && config.peers[action.peer]) || {};
-                const endpoint = action.endpoint
-                    || peerCfg.endpoint
+                const configuredEndpoint = peerCfg.endpoint
                     || peerCfg.rpcUrl
                     || (peerKey && process.env[`SOLO_PEER_${peerKey}_URL`])
                     || process.env.SOLO_PEER_URL
                     || '';
+                const endpoint = action.endpoint || configuredEndpoint;
+                const canUseConfiguredCreds = !action.endpoint || (configuredEndpoint && action.endpoint === configuredEndpoint);
                 if (endpoint && action.method) {
                     const peerOpts = {
                         endpoint,
-                        apiKey:   action.apiKey   || peerCfg.apiKey   || (peerKey && process.env[`SOLO_PEER_${peerKey}_API_KEY`])   || '',
-                        token:    action.token    || peerCfg.token    || (peerKey && process.env[`SOLO_PEER_${peerKey}_TOKEN`])     || '',
-                        user:     action.user     || peerCfg.user     || peerCfg.username || (peerKey && process.env[`SOLO_PEER_${peerKey}_USER`]) || '',
-                        password: action.password || peerCfg.password || (peerKey && process.env[`SOLO_PEER_${peerKey}_PASSWORD`])  || '',
+                        apiKey:   action.apiKey   || (canUseConfiguredCreds ? (peerCfg.apiKey   || (peerKey && process.env[`SOLO_PEER_${peerKey}_API_KEY`]))   : '') || '',
+                        token:    action.token    || (canUseConfiguredCreds ? (peerCfg.token    || (peerKey && process.env[`SOLO_PEER_${peerKey}_TOKEN`]))     : '') || '',
+                        user:     action.user     || (canUseConfiguredCreds ? (peerCfg.user     || peerCfg.username || (peerKey && process.env[`SOLO_PEER_${peerKey}_USER`])) : '') || '',
+                        password: action.password || (canUseConfiguredCreds ? (peerCfg.password || (peerKey && process.env[`SOLO_PEER_${peerKey}_PASSWORD`]))  : '') || '',
                         fetchFn:  config.fetchFn,
                     };
                     const peerClient = typeof config.peerRelayFactory === 'function'
@@ -549,7 +568,14 @@ module.exports = (redis, config, relay = null) => {
                         const match = rows
                             .filter(Boolean)
                             .map((r) => JSON.parse(r))
-                            .find((i) => i.profileId === profileId && i.sourceId === sourceId && matchesOwner(owner, i));
+                            .find((i) => {
+                                if (i.profileId !== profileId || i.sourceId !== sourceId) return false;
+                                if (owner && owner.field) {
+                                    const recVal = i[owner.field] !== undefined ? i[owner.field] : i.meta?.[owner.field];
+                                    return recVal === ownerVal;
+                                }
+                                return matchesOwner(owner, i);
+                            });
                         if (match) {
                             await redis.set(srcKey, match.id);
                             return { ...match, deduplicated: true };
@@ -944,7 +970,7 @@ module.exports = (redis, config, relay = null) => {
             const rows = await redis.mGet(ids.map((x) => `${PREFIX}${x}`));
             let items = rows.filter(Boolean).map((r) => JSON.parse(r));
             const owner = resolveOwner(req);
-            if (owner && owner.field) items = items.filter((i) => i[owner.field] === owner.value);
+            if (owner && owner.field) items = items.filter((i) => matchesOwner(owner, i));
             if (profileId) items = items.filter((i) => i.profileId === profileId);
 
             const scanned = items.length;

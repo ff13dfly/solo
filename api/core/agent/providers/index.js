@@ -35,15 +35,22 @@ class ProviderFactory {
         const defaultType = String(config.provider || 'gemini').toLowerCase();
         if (defaultType === 'mock') return 'mock';
 
+        const assertNotProductionMock = (candidate) => {
+            if (candidate === 'mock' && process.env.NODE_ENV === 'production' && config.allowMockProvider !== true) {
+                throw new Error('Mock provider is not allowed in production when config.provider is not mock');
+            }
+            return candidate;
+        };
+
         const rawModel = String(model || '').trim();
         if (rawModel) {
             const prefixMatch = rawModel.match(/^(solo-peer|ollama|openai|qwen|gemini|bitexing|mock)[/:](.+)$/i);
             if (prefixMatch) {
-                return prefixMatch[1].toLowerCase();
+                return assertNotProductionMock(prefixMatch[1].toLowerCase());
             }
             const exactProvider = rawModel.toLowerCase();
             if (['solo-peer', 'ollama', 'openai', 'qwen', 'gemini', 'bitexing', 'mock'].includes(exactProvider)) {
-                return exactProvider;
+                return assertNotProductionMock(exactProvider);
             }
         }
 
@@ -62,7 +69,7 @@ class ProviderFactory {
             if (rawModel.includes('gemini')) return 'gemini';
             if (rawModel.startsWith('gpt') || rawModel.includes('openai')) return 'openai';
             if (rawModel === 'bitexing') return 'bitexing';
-            if (rawModel.startsWith('mock')) return 'mock';
+            if (rawModel.startsWith('mock')) return assertNotProductionMock('mock');
         }
 
         return defaultType;

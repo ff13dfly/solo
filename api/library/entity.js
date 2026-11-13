@@ -162,11 +162,18 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
     const stampOrValidateOwner = (targetObj, existingVal = undefined) => {
         const o = ownerScope();
         if (!o) return;
+        if (existingVal !== undefined) {
+            if (targetObj[o.field] !== undefined && targetObj[o.field] !== existingVal) {
+                throw jsonrpc.FORBIDDEN(`Cannot reassign scope field "${o.field}" from "${existingVal}" to "${targetObj[o.field]}"`);
+            }
+            targetObj[o.field] = existingVal;
+            return;
+        }
         if (o.values.length === 1) {
             targetObj[o.field] = o.values[0];
             return;
         }
-        const candidate = targetObj[o.field] !== undefined ? targetObj[o.field] : existingVal;
+        const candidate = targetObj[o.field];
         if (candidate === undefined || candidate === null || candidate === '') {
             throw jsonrpc.INVALID_PARAM(`Missing required scope field "${o.field}" (permitted values: ${o.values.join(', ')})`);
         }
@@ -550,8 +557,14 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             // 只随最终成功的 EXEC 落地 → 账本链(本条 before === 上条 after)严格成立。
             let before = null;
             const updated = await optimisticUpdate(redis, key, (existing) => {
+                assertOwned(existing);
                 before = existing;
-                return { ...existing, ...updates, updatedAt: clock.now() };
+                return {
+                    ...existing,
+                    ...updates,
+                    ...(_owner ? { [_owner.field]: existing[_owner.field] } : {}),
+                    updatedAt: clock.now()
+                };
             }, canAtomicWal
                 ? { onMulti: (multi, { before: b, next }) => walMulti(multi, 'update', key, b, next) }
                 : {});
@@ -1074,6 +1087,15 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
             stateField = undefined,
             coldArchive = undefined,
         } = {}) {
+            const owner = ownerScope();
+            if (owner) {
+                throw jsonrpc.FORBIDDEN('compact() is a maintenance operation and cannot be invoked by row-scoped ($owner) callers');
+            }
+            if (archiveDir !== null && archiveDir !== undefined) {
+                if (typeof archiveDir !== 'string' || !archiveDir.trim() || archiveDir.includes('\0') || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(archiveDir)) {
+                    throw jsonrpc.INVALID_PARAM('Invalid archiveDir: path traversal ("..") and null bytes are forbidden');
+                }
+            }
             const retCfg = retention || {};
             const effectiveTtlDays = ttlDays !== undefined ? Number(ttlDays) : (retCfg.ttlDays !== undefined ? Number(retCfg.ttlDays) : 30);
             if (!Number.isFinite(effectiveTtlDays) || effectiveTtlDays < 0) {
@@ -1091,7 +1113,6 @@ module.exports = (redis, { serviceName, entityName, idPrefix = '', idLength = 16
 
             const indexKey = getIndexKey();
             const cursorIndexKey = getCursorIndexKey();
-            const owner = ownerScope();
             const ids = await redis.sMembers(indexKey); // SAFE: explicit off-peak maintenance method
 
             if (!ids || ids.length === 0) {

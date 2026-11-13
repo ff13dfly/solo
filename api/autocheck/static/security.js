@@ -53,7 +53,19 @@ function check(servicePath, results) {
     // 检查是否引入了禁用的加密库 (强制使用 library/crypto)
     const logicPath = path.join(servicePath, 'logic');
     if (fs.existsSync(logicPath)) {
-        const files = fs.readdirSync(logicPath).filter(f => f.endsWith('.js'));
+        const collectJsFiles = (dir, prefix = '') => {
+            const out = [];
+            for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+                const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+                if (ent.isDirectory()) {
+                    out.push(...collectJsFiles(path.join(dir, ent.name), rel));
+                } else if (ent.isFile() && ent.name.endsWith('.js')) {
+                    out.push(rel);
+                }
+            }
+            return out;
+        };
+        const files = collectJsFiles(logicPath);
         const forbiddenPats = [
             { name: 'bcrypt', pat: /require\(['"]bcrypt['"]\)/ },
             { name: 'crypto-js', pat: /require\(['"]crypto-js['"]\)/ },

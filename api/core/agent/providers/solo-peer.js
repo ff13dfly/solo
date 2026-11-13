@@ -24,6 +24,9 @@ function stripSoloPeerPrefix(model, fallback = 'ollama/qwen3.5:9b') {
     const raw = String(model || '').trim();
     if (!raw || raw.toLowerCase() === 'solo-peer') return fallback;
     const stripped = raw.replace(/^solo-peer[/:]/i, '').trim();
+    if (/^solo-peer(?:$|[/:])/i.test(stripped)) {
+        throw new Error(`SoloPeerProvider: recursive solo-peer model routing is not allowed ("${raw}")`);
+    }
     return stripped || fallback;
 }
 

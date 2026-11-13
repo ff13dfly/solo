@@ -21,7 +21,7 @@ const ROUTER_USER_PREFIX = 'user:';
 const ADMIN_USER_PREFIX = 'administrator:user:';
 const DESTROYED_UIDS_SET = 'user:destroyed:ids';
 const RESERVED_ANCHORS = new Set([
-    'admin', 'anonymous', 'guest', 'system', 'router', 'administrator',
+    '__admin__', 'admin', 'operator', 'anonymous', 'guest', 'system', 'router', 'administrator',
     'user', 'agent', 'nexus', 'orchestrator', 'gateway', 'ingress',
     'notification', 'storage', 'fulfillment', 'approval', 'planner', 'mcp',
 ]);

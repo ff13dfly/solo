@@ -17,11 +17,18 @@ const crypto = require('crypto');
 
 const ENVELOPE_SCHEMA = 'solo.sealed/v1';
 const ENVELOPE_ALG    = 'RSA-OAEP-256+A256GCM';
+const GCM_IV_BYTES    = 12;
+const GCM_TAG_BYTES   = 16;
+const DEK_BYTES       = 32;
+const PROTO_KEYS      = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
  * Generate a 2048-bit (or custom modulus) RSA-OAEP keypair for a worker/execution node.
  */
 function generateEnvelopeKeyPair({ modulusLength = 2048 } = {}) {
+    if (!Number.isInteger(modulusLength) || modulusLength < 2048) {
+        throw new Error('modulusLength must be an integer >= 2048');
+    }
     const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
         modulusLength,
         publicKeyEncoding:  { type: 'spki',  format: 'pem' },
@@ -38,25 +45,37 @@ function generateEnvelopeKeyPair({ modulusLength = 2048 } = {}) {
 }
 
 /**
- * Compute a deterministic `kid` (`sha256:<16-hex>`) from an SPKI PEM public key.
+ * Compute a deterministic `kid` (`sha256:<24-hex>`) from an SPKI public key PEM (or private key PEM).
  */
-function computeKeyFingerprint(publicKeyPem) {
-    if (!publicKeyPem || typeof publicKeyPem !== 'string') {
+function computeKeyFingerprint(keyPem) {
+    if (!keyPem || typeof keyPem !== 'string') {
         throw new Error('publicKeyPem must be a non-empty PEM string');
     }
-    const pubObj = crypto.createPublicKey(publicKeyPem);
+    const pubObj = crypto.createPublicKey(keyPem);
     const der = pubObj.export({ type: 'spki', format: 'der' });
     const hex = crypto.createHash('sha256').update(der).digest('hex').slice(0, 24);
     return `sha256:${hex}`;
 }
 
+function canonicalizeAadValue(val) {
+    if (Array.isArray(val)) {
+        return val.map(canonicalizeAadValue);
+    }
+    if (val && typeof val === 'object') {
+        const sortedKeys = Object.keys(val).filter((k) => !PROTO_KEYS.has(k)).sort();
+        const out = {};
+        for (const k of sortedKeys) {
+            out[k] = canonicalizeAadValue(val[k]);
+        }
+        return out;
+    }
+    return val;
+}
+
 function serializeAad(aad) {
     if (aad === undefined || aad === null || aad === '') return '';
     if (typeof aad === 'object') {
-        const sortedKeys = Object.keys(aad).sort();
-        const canonical = {};
-        for (const k of sortedKeys) canonical[k] = aad[k];
-        return JSON.stringify(canonical);
+        return JSON.stringify(canonicalizeAadValue(aad));
     }
     return String(aad);
 }
@@ -120,15 +139,28 @@ function sealEnvelope(payload, publicKeyPem, { aad = '', keyId = null } = {}) {
  */
 function isSealedEnvelope(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
-    return (
-        obj.$schema === ENVELOPE_SCHEMA &&
-        obj.alg === ENVELOPE_ALG &&
-        typeof obj.keyId === 'string' && obj.keyId.length > 0 &&
-        typeof obj.iv === 'string' && obj.iv.length > 0 &&
-        typeof obj.wrappedKey === 'string' && obj.wrappedKey.length > 0 &&
-        typeof obj.ciphertext === 'string' && obj.ciphertext.length > 0 &&
-        typeof obj.tag === 'string' && obj.tag.length > 0
-    );
+    if (
+        obj.$schema !== ENVELOPE_SCHEMA ||
+        obj.alg !== ENVELOPE_ALG ||
+        typeof obj.keyId !== 'string' || obj.keyId.length === 0 ||
+        typeof obj.iv !== 'string' || obj.iv.length === 0 ||
+        typeof obj.wrappedKey !== 'string' || obj.wrappedKey.length === 0 ||
+        typeof obj.ciphertext !== 'string' || obj.ciphertext.length === 0 ||
+        typeof obj.tag !== 'string' || obj.tag.length === 0
+    ) {
+        return false;
+    }
+    try {
+        const ivBuf = Buffer.from(obj.iv, 'base64');
+        const tagBuf = Buffer.from(obj.tag, 'base64');
+        const wrappedBuf = Buffer.from(obj.wrappedKey, 'base64');
+        if (ivBuf.length !== GCM_IV_BYTES) return false;
+        if (tagBuf.length !== GCM_TAG_BYTES) return false;
+        if (wrappedBuf.length < 256) return false;
+        return true;
+    } catch (_) {
+        return false;
+    }
 }
 
 /**
@@ -136,7 +168,7 @@ function isSealedEnvelope(obj) {
  */
 function assertValidEnvelope(obj) {
     if (!isSealedEnvelope(obj)) {
-        throw new Error(`Invalid sealed envelope: expected schema "${ENVELOPE_SCHEMA}" with alg "${ENVELOPE_ALG}"`);
+        throw new Error(`Invalid sealed envelope: expected schema "${ENVELOPE_SCHEMA}" with alg "${ENVELOPE_ALG}" (12-byte IV, 16-byte GCM tag)`);
     }
     return true;
 }
@@ -147,7 +179,7 @@ function assertValidEnvelope(obj) {
  * @param {object} envelope - The `solo.sealed/v1` envelope
  * @param {string} privateKeyPem - Recipient's PKCS#8 PEM private key
  * @param {object} [options]
- * @param {string} [options.expectedAad] - If provided, enforces that envelope.aad matches expectedAad
+ * @param {string|object} [options.expectedAad] - If provided, enforces that envelope.aad matches expectedAad
  * @param {boolean} [options.rawBuffer=false] - Return raw Buffer instead of JSON.parse
  */
 function openEnvelope(envelope, privateKeyPem, { expectedAad = undefined, rawBuffer = false } = {}) {
@@ -155,9 +187,24 @@ function openEnvelope(envelope, privateKeyPem, { expectedAad = undefined, rawBuf
     if (!privateKeyPem || typeof privateKeyPem !== 'string') {
         throw new Error('privateKeyPem must be a non-empty PEM string');
     }
+    if (typeof envelope.keyId === 'string' && envelope.keyId.startsWith('sha256:')) {
+        const actualKeyId = computeKeyFingerprint(privateKeyPem);
+        if (envelope.keyId !== actualKeyId) {
+            throw new Error(`Envelope keyId mismatch: expected "${actualKeyId}", got "${envelope.keyId}"`);
+        }
+    }
     const expectedAadStr = expectedAad !== undefined ? serializeAad(expectedAad) : undefined;
     if (expectedAadStr !== undefined && String(envelope.aad || '') !== expectedAadStr) {
         throw new Error(`Envelope AAD mismatch: expected "${expectedAadStr}", got "${envelope.aad || ''}"`);
+    }
+
+    const ivBuf = Buffer.from(envelope.iv, 'base64');
+    const tagBuf = Buffer.from(envelope.tag, 'base64');
+    if (ivBuf.length !== GCM_IV_BYTES) {
+        throw new Error(`Invalid sealed envelope IV length: expected ${GCM_IV_BYTES} bytes, got ${ivBuf.length}`);
+    }
+    if (tagBuf.length !== GCM_TAG_BYTES) {
+        throw new Error(`Invalid sealed envelope GCM tag length: expected ${GCM_TAG_BYTES} bytes, got ${tagBuf.length}`);
     }
 
     const dek = crypto.privateDecrypt(
@@ -170,20 +217,25 @@ function openEnvelope(envelope, privateKeyPem, { expectedAad = undefined, rawBuf
     );
 
     try {
+        if (dek.length !== DEK_BYTES) {
+            throw new Error(`Invalid unwrapped DEK length: expected ${DEK_BYTES} bytes, got ${dek.length}`);
+        }
         const decipher = crypto.createDecipheriv(
             'aes-256-gcm',
             dek,
-            Buffer.from(envelope.iv, 'base64')
+            ivBuf,
+            { authTagLength: GCM_TAG_BYTES }
         );
         if (envelope.aad) {
             decipher.setAAD(Buffer.from(String(envelope.aad), 'utf8'));
         }
-        decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
+        decipher.setAuthTag(tagBuf);
         const plainBuf = Buffer.concat([
             decipher.update(Buffer.from(envelope.ciphertext, 'base64')),
             decipher.final(),
         ]);
-        return rawBuffer ? plainBuf : JSON.parse(plainBuf.toString('utf8'));
+        if (rawBuffer) return plainBuf;
+        return JSON.parse(plainBuf.toString('utf8'), (k, v) => (PROTO_KEYS.has(k) ? undefined : v));
     } finally {
         dek.fill(0);
     }

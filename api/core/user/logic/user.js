@@ -6,6 +6,7 @@ const { STATUS } = require('../../../library/constants');
 const { resolvePaging } = require('../../../library/pagination');
 const { optimisticUpdate } = require('../../../library/optimistic');
 const createSessions = require('./sessions');
+const { isProtectedUserAccount } = require('./role');
 
 /**
  * User Business Logic
@@ -20,11 +21,7 @@ module.exports = (redisClient, config) => {
     const { persistSession, killSessions, logoutSession } = createSessions(redisClient, config);
 
     function isAdminAccount(u) {
-        if (!u || typeof u !== 'object') return false;
-        if (u.permit === 'admin' || (u.permit && u.permit.allow_all === true)) return true;
-        if (u.role === 'admin') return true;
-        if (u.categories && u.categories.POWER === 'admin') return true;
-        return false;
+        return isProtectedUserAccount(u);
     }
 
     // Login handles are case/space-insensitive. ONE normaliser for register / loginRequest /
@@ -622,8 +619,8 @@ module.exports = (redisClient, config) => {
         if (!validateId(uid, config.idLengths?.user || 16)) throw jsonrpc.INVALID_PARAMS('Invalid ID format');
 
         const isDelegatedNonAdmin = callerCtx && callerCtx.isAdmin === false;
-        if (isDelegatedNonAdmin && categories && categories.POWER === 'admin') {
-            throw jsonrpc.FORBIDDEN('Non-admin caller cannot grant POWER=admin');
+        if (isDelegatedNonAdmin && categories && (categories.POWER === 'admin' || categories.POWER === 'operator')) {
+            throw jsonrpc.FORBIDDEN('Non-admin caller cannot grant POWER=admin or POWER=operator');
         }
 
         try {
