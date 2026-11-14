@@ -2,7 +2,7 @@
 #
 # doctor.sh — 按需体检:检查这套 SOLO 栈自己的不变量,不做通用监控。
 #
-# 用法:  bash deploy/doctor.sh        (只读,不改任何状态,无常驻进程,跑完即走)
+# 用法:  bash deploy/doctor.sh [--json]  (只读,不改任何状态,无常驻进程,跑完即走)
 # 时机:  部署后 / 排查时 / 派生项目自己的循环定期调
 # 退出码: 0 = 无 ✗;1 = 至少一个 ✗(⚠ 不影响退出码)
 #
@@ -14,18 +14,38 @@
 #
 set -u
 
+JSON_MODE=0
+for _arg in "$@"; do
+    case "$_arg" in
+        --json) JSON_MODE=1 ;;
+        -h|--help)
+            printf "用法: bash deploy/doctor.sh [--json]\n"
+            exit 0
+            ;;
+        *)
+            printf "未知参数: %s\n用法: bash deploy/doctor.sh [--json]\n" "$_arg" >&2
+            exit 2
+            ;;
+    esac
+done
+
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 ROOT_DIR="$( dirname "$SCRIPT_DIR" )"
 VERSION_FILE="$ROOT_DIR/.solo-version"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
 PASS=0; WARN=0; FAIL=0
-ok()      { printf "${GREEN}  ✓ %s${NC}\n" "$1"; PASS=$((PASS+1)); }
-warn()    { printf "${YELLOW}  ⚠ %s${NC}\n" "$1"; WARN=$((WARN+1)); }
-bad()     { printf "${RED}  ✗ %s${NC}\n" "$1"; FAIL=$((FAIL+1)); }
-note()    { printf "  · %s\n" "$1"; }
-hint()    { printf "      %s\n" "$1"; }
-section() { printf "\n${BOLD}%s${NC}\n" "$1"; }
+CHECKS_LOG=""
+_append_check() {
+    CHECKS_LOG="${CHECKS_LOG}${1}|${2}
+"
+}
+ok()      { PASS=$((PASS+1)); _append_check "ok" "$1"; [ "$JSON_MODE" = "0" ] && printf "${GREEN}  ✓ %s${NC}\n" "$1" || true; }
+warn()    { WARN=$((WARN+1)); _append_check "warn" "$1"; [ "$JSON_MODE" = "0" ] && printf "${YELLOW}  ⚠ %s${NC}\n" "$1" || true; }
+bad()     { FAIL=$((FAIL+1)); _append_check "bad" "$1"; [ "$JSON_MODE" = "0" ] && printf "${RED}  ✗ %s${NC}\n" "$1" || true; }
+note()    { [ "$JSON_MODE" = "0" ] && printf "  · %s\n" "$1" || true; }
+hint()    { [ "$JSON_MODE" = "0" ] && printf "      %s\n" "$1" || true; }
+section() { [ "$JSON_MODE" = "0" ] && printf "\n${BOLD}%s${NC}\n" "$1" || true; }
 
 # ── 端口探测统一入口(lsof / ss 二选一;与 run.sh 同款,原因见那边注释)──────
 PORT_TOOL=""
@@ -58,14 +78,14 @@ if [ -f "$ROOT_DIR/.env" ]; then
     set +o allexport
 fi
 
-printf "${BOLD}SOLO doctor — %s${NC}\n" "$ROOT_DIR"
+[ "$JSON_MODE" = "0" ] && printf "${BOLD}SOLO doctor — %s${NC}\n" "$ROOT_DIR" || true
 
 # ═══ 1/5 版本对齐 ═══════════════════════════════════════════════════════════
 # 事故原型:tag / package.json / 线上进程三处不对齐反复发生;「发了没重启」「升了
 # 一半」的落差在 bundle 文件名 vs 运行中进程的 cmdline 里当场可见。
 section "[1/5] 版本对齐"
 
-SOLO_VERSION=""; STACK_UP=0; OUR_ROOT_COUNT=0
+SOLO_VERSION=""; NEWEST=""; STACK_UP=0; OUR_ROOT_COUNT=0
 if [ -f "$VERSION_FILE" ]; then
     SOLO_VERSION=$(tr -d '[:space:]' < "$VERSION_FILE")
     if [ -f "$ROOT_DIR/api/publish/solo.${SOLO_VERSION}.js" ]; then
@@ -149,6 +169,12 @@ Object.keys(env).filter(k=>/^FRONTEND_[A-Z0-9_]+_PORT$/.test(k))
 out.forEach(([n,p])=>console.log(n+"|"+p));
 ' "$SCRIPT_DIR/solo-services.json" "$SCRIPT_DIR/services.json" 2>/dev/null)
 
+SERVICES_LOG=""
+_append_service() {
+    SERVICES_LOG="${SERVICES_LOG}${1}|${2}|${3}|${4}
+"
+}
+
 if [ -z "$PORTS_LIST" ]; then
     warn "没有任何端口声明(solo-services.json / services.json / .env 前端口都空)"
 else
@@ -158,10 +184,13 @@ else
         if [ -z "$pids" ]; then
             if port_in_use "$port"; then
                 warn "$name:$port 有监听但拿不到 pid(权限不够)——无法核对归属,换 root/sudo 再跑"
+                _append_service "$name" "$port" "unknown_pid" ""
             elif [ "$STACK_UP" = "1" ]; then
                 bad "$name:$port 无人监听——栈在跑,这个服务却没起来(看 api/debug/ 下它的日志)"
+                _append_service "$name" "$port" "down" ""
             else
                 note "$name:$port 未监听(栈未运行)"
+                _append_service "$name" "$port" "stopped" ""
             fi
             continue
         fi
@@ -170,11 +199,14 @@ else
             cmd=$(ps -o command= -p "$p" 2>/dev/null || true)
             case "$cmd" in *"$ROOT_DIR"*) ;; *) foreign="$p" ;; esac
         done
+        _pids_csv=$(printf '%s' "$pids" | tr '\n' ',' | sed 's/,$//')
         if [ -z "$foreign" ]; then
-            ok "$name:$port ← pid $(printf '%s' "$pids" | tr '\n' ',' | sed 's/,$//')(本栈)"
+            ok "$name:$port ← pid ${_pids_csv}(本栈)"
+            _append_service "$name" "$port" "ok" "$_pids_csv"
         else
             bad "$name:$port 被外来进程占用:$(ps -o pid=,command= -p "$foreign" 2>/dev/null | head -1 | cut -c1-120)"
             hint "它不在 $ROOT_DIR 下。先确认它是谁的(孤儿?别的栈?),再决定停谁、或改本栈端口。"
+            _append_service "$name" "$port" "unowned" "$_pids_csv"
         fi
     done <<EOF
 $PORTS_LIST
@@ -288,7 +320,32 @@ else
 fi
 
 # 生产/跨机环境下检查 LOCAL_OSS_OUTWARD_ORIGIN 是否漏配或指向回环地址 (docs/feedback/done/entity-lifecycle-retention-and-oss-loopback-guard.md §二)
-if [ "${OSS_PROVIDER:-local}" = "local" ]; then
+_asset_id_len="${ASSET_ID_LENGTH:-8}"
+_asset_id_explicit=0
+[ -n "${ASSET_ID_LENGTH:-}" ] && _asset_id_explicit=1
+if [ "$_asset_id_explicit" = "1" ]; then
+    note "ASSET_ID_LENGTH = $_asset_id_len (显式配置)"
+else
+    note "ASSET_ID_LENGTH = $_asset_id_len (默认值;跨箱联调建议在 .env 显式对齐)"
+fi
+
+_storage_provider="${STORAGE_PROVIDER:-${OSS_PROVIDER:-local}}"
+_storage_access="${STORAGE_ACCESS:-public}"
+_storage_bucket="${LOCAL_OSS_BUCKET:-solo}"
+_storage_public_read="false"
+if [ -n "${LOCAL_OSS_PUBLIC_READ:-}" ]; then
+    case "$(printf '%s' "$LOCAL_OSS_PUBLIC_READ" | tr '[:upper:]' '[:lower:]')" in
+        false|0|no) _storage_public_read="false" ;;
+        *) _storage_public_read="true" ;;
+    esac
+elif [ "$_storage_access" = "public" ]; then
+    _storage_public_read="true"
+fi
+
+_outward="${LOCAL_OSS_OUTWARD_ORIGIN:-${LOCAL_OSS_PUBLIC_BASE:-}}"
+_outward_safe=$(printf '%s' "$_outward" | sed -E 's|(https?://)[^/@]+@|\1|')
+OUTWARD_PROBE_JSON="null"
+if [ "$_storage_provider" = "local" ]; then
     _non_local_deploy=0
     [ "${NODE_ENV:-}" = "production" ] && _non_local_deploy=1
     case "${CORS_ORIGINS:-}${ROUTER_PUBLIC_URL:-}" in
@@ -296,17 +353,284 @@ if [ "${OSS_PROVIDER:-local}" = "local" ]; then
         *http* ) _non_local_deploy=1 ;;
     esac
     if [ "$_non_local_deploy" = "1" ]; then
-        _outward="${LOCAL_OSS_OUTWARD_ORIGIN:-${LOCAL_OSS_PUBLIC_BASE:-}}"
         if [ -z "$_outward" ] || printf '%s' "$_outward" | grep -Eq '^https?://(127\.|localhost|0\.0\.0\.0|\[::1\])'; then
-            warn "生产/跨机模式下 OSS_PROVIDER=local,但 LOCAL_OSS_OUTWARD_ORIGIN 未配置或指向回环 (${_outward:-未设置})"
-            hint "storage 返回的附件 URL 会回退为 http://127.0.0.1:.../assets/... 导致跨机节点或浏览器打开死链;请在 .env 配置 LOCAL_OSS_OUTWARD_ORIGIN=https://<外发域名>"
+            warn "生产/跨机模式下 STORAGE_PROVIDER=local,但 LOCAL_OSS_OUTWARD_ORIGIN 未配置或指向回环 (${_outward_safe:-未设置})"
+            hint "storage 返回的附件 URL 会回退为 http://127.0.0.1:.../assets/... 导致跨机节点或浏览器打开死链;请在 .env 配置 LOCAL_OSS_OUTWARD_ORIGIN=https://<外发域名>/_oss"
         else
-            ok "LOCAL_OSS_OUTWARD_ORIGIN = $_outward (非回环外发地址)"
+            ok "LOCAL_OSS_OUTWARD_ORIGIN = $_outward_safe (非回环外发地址)"
+            if [ "$STACK_UP" = "1" ] || [ "${DOCTOR_PROBE_OUTWARD:-0}" = "1" ]; then
+                OUTWARD_PROBE_JSON=$(node -e '
+const base = String(process.argv[1] || "").replace(/\/+$/, "");
+const bucket = process.argv[2] || "solo";
+const access = process.argv[3] || "public";
+(async () => {
+  const out = { url: base + "/" + bucket + "/__doctor_probe__", ok: false, status: null, kind: "unknown", detail: "" };
+  try {
+    const rRoot = await fetch(base + "/", { method: "GET", signal: AbortSignal.timeout(3000) });
+    const tRoot = (await rRoot.text()).trim();
+    if (rRoot.status === 200 && tRoot === "local-oss") {
+      const rProbe = await fetch(out.url, { method: "GET", signal: AbortSignal.timeout(3000) });
+      out.status = rProbe.status;
+      const bodyText = await rProbe.text();
+      let json = null;
+      try { json = JSON.parse(bodyText); } catch (_) {}
+      if (access === "private" && rProbe.status === 403 && json && json.code === "AccessDenied") {
+        out.ok = true; out.kind = "ok"; out.detail = "private 签名拦截正常 (403 AccessDenied)";
+      } else if (access !== "private" && rProbe.status === 404 && json && json.code === "NoSuchKey") {
+        out.ok = true; out.kind = "ok"; out.detail = "public 路由可达 (404 NoSuchKey)";
+      } else if (json && json.code === "NoSuchBucket") {
+        out.kind = "bad"; out.detail = "返回 NoSuchBucket — 反代可能未剥离 /_oss 前缀 (请使用 handle_path /_oss/*)";
+      } else {
+        out.kind = "warn"; out.detail = "根路径正常但探针返回 HTTP " + rProbe.status;
+      }
+    } else {
+      const rProbe = await fetch(out.url, { method: "GET", signal: AbortSignal.timeout(3000) });
+      out.status = rProbe.status;
+      const bodyText = await rProbe.text();
+      let json = null;
+      try { json = JSON.parse(bodyText); } catch (_) {}
+      if (json && json.code === "NoSuchBucket") {
+        out.kind = "bad"; out.detail = "返回 NoSuchBucket — 反代未剥离 /_oss 前缀 (请使用 handle_path /_oss/*)";
+      } else if (access === "private" && rProbe.status === 403 && json && json.code === "AccessDenied") {
+        out.ok = true; out.kind = "ok"; out.detail = "private 签名拦截正常 (403 AccessDenied)";
+      } else if (access !== "private" && rProbe.status === 404 && json && json.code === "NoSuchKey") {
+        out.ok = true; out.kind = "ok"; out.detail = "public 路由可达 (404 NoSuchKey)";
+      } else if (rProbe.status === 502 || rProbe.status === 503 || /<!doctype|<html/i.test(bodyText)) {
+        out.kind = "bad"; out.detail = "外发网关返回 HTTP " + rProbe.status + " (反代未配置或上游不可达)";
+      } else {
+        out.kind = "warn"; out.detail = "外发探针返回非预期响应 HTTP " + rProbe.status;
+      }
+    }
+  } catch (e) {
+    out.kind = "warn";
+    out.detail = "外发探测未能连通 (" + (e && e.message ? e.message : "timeout") + ")";
+  }
+  process.stdout.write(JSON.stringify(out));
+})();
+' "$_outward" "$_storage_bucket" "$_storage_access" 2>/dev/null || printf 'null')
+                _op_kind=$(node -e 'try{const o=JSON.parse(process.argv[1]);process.stdout.write(o&&o.kind||"")}catch(e){}' "$OUTWARD_PROBE_JSON")
+                _op_detail=$(node -e 'try{const o=JSON.parse(process.argv[1]);process.stdout.write(o&&o.detail||"")}catch(e){}' "$OUTWARD_PROBE_JSON")
+                case "$_op_kind" in
+                    ok)   ok "/_oss/* 外发网关探活: $_op_detail" ;;
+                    bad)  bad "/_oss/* 外发网关异常: $_op_detail" ;;
+                    warn) warn "/_oss/* 外发网关未确认: $_op_detail" ;;
+                esac
+            fi
         fi
     fi
 fi
 
+# ═══ AI / Ollama 保活与跨箱 Peer Agent 巡检 ═══════════════════════════════════
+_ai_provider="${AI_PROVIDER:-qwen}"
+_ollama_url="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
+_ollama_model="${OLLAMA_MODEL:-qwen3.5:9b}"
+_ollama_keep_alive="${OLLAMA_KEEP_ALIVE:-}"
+_ollama_timeout="${OLLAMA_TIMEOUT_MS:-60000}"
+_peer_agent_url="${SOLO_AGENT_PEER_URL:-}"
+_peer_agent_timeout="${SOLO_AGENT_PEER_TIMEOUT_MS:-60000}"
+_ollama_proc=$(ps axo command= 2>/dev/null | grep -E '(^|/)ollama([[:space:]]|$)' | grep -v grep | head -1 || true)
+
+OLLAMA_PROBE_JSON="null"
+PEER_PROBE_JSON="null"
+if [ "$_ai_provider" = "ollama" ] || [ -n "${OLLAMA_BASE_URL:-}" ] || [ -n "${OLLAMA_MODEL:-}" ] || [ -n "$_ollama_proc" ]; then
+    if [ "$_ollama_keep_alive" = "-1" ]; then
+        ok "OLLAMA_KEEP_ALIVE = -1 (常驻显存,避免冷加载超时)"
+    else
+        warn "OLLAMA_KEEP_ALIVE = ${_ollama_keep_alive:-30m (默认)} —— 生产节点建议设为 -1,避免大模型冷加载撞破 90s RPC 超时"
+        hint "请在 .env 与 Ollama 服务环境变量中配置 OLLAMA_KEEP_ALIVE=-1 (当前 OLLAMA_TIMEOUT_MS=${_ollama_timeout})"
+    fi
+    if [ "$STACK_UP" = "1" ] || [ -n "$_ollama_proc" ] || [ "${DOCTOR_PROBE_AGENT:-0}" = "1" ]; then
+        OLLAMA_PROBE_JSON=$(node -e '
+const base = String(process.argv[1] || "http://127.0.0.1:11434").replace(/\/+$/, "");
+(async () => {
+  const out = { url: base + "/api/tags", ok: false, models: 0, detail: "" };
+  try {
+    const r = await fetch(out.url, { method: "GET", signal: AbortSignal.timeout(2500) });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && Array.isArray(j.models)) {
+        out.ok = true; out.models = j.models.length; out.detail = "Ollama 可达 (" + out.models + " 个模型)";
+      } else {
+        out.detail = "Ollama /api/tags 返回非预期结构";
+      }
+    } else {
+      out.detail = "Ollama /api/tags 返回 HTTP " + r.status;
+    }
+  } catch (e) {
+    out.detail = "Ollama 未连通 (" + (e && e.message ? e.message : "timeout") + ")";
+  }
+  process.stdout.write(JSON.stringify(out));
+})();
+' "$_ollama_url" 2>/dev/null || printf 'null')
+        _ol_ok=$(node -e 'try{const o=JSON.parse(process.argv[1]);process.stdout.write(o&&o.ok?"1":"0")}catch(e){}' "$OLLAMA_PROBE_JSON")
+        _ol_detail=$(node -e 'try{const o=JSON.parse(process.argv[1]);process.stdout.write(o&&o.detail||"")}catch(e){}' "$OLLAMA_PROBE_JSON")
+        if [ "$_ol_ok" = "1" ]; then
+            ok "$_ol_detail"
+        else
+            warn "$_ol_detail"
+        fi
+    fi
+fi
+
+if [ -n "$_peer_agent_url" ]; then
+    if [ "$STACK_UP" = "1" ] || [ "${DOCTOR_PROBE_AGENT:-0}" = "1" ]; then
+        PEER_PROBE_JSON=$(node -e '
+const url = String(process.argv[1] || "");
+(async () => {
+  const out = { ok: false, status: null, detail: "" };
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "system.ping", params: {} }),
+      signal: AbortSignal.timeout(3000)
+    });
+    out.status = r.status;
+    if (r.ok) {
+      const j = await r.json().catch(() => null);
+      if (j && (j.result !== undefined || j.jsonrpc === "2.0")) {
+        out.ok = true; out.detail = "SOLO_AGENT_PEER_URL 连通正常 (HTTP " + r.status + ")";
+      } else {
+        out.detail = "SOLO_AGENT_PEER_URL 返回非 JSON-RPC 响应";
+      }
+    } else {
+      out.detail = "SOLO_AGENT_PEER_URL 探活返回 HTTP " + r.status;
+    }
+  } catch (e) {
+    out.detail = "SOLO_AGENT_PEER_URL 未连通 (" + (e && e.message ? e.message : "timeout") + ")";
+  }
+  process.stdout.write(JSON.stringify(out));
+})();
+' "$_peer_agent_url" 2>/dev/null || printf 'null')
+        _pr_ok=$(node -e 'try{const o=JSON.parse(process.argv[1]);process.stdout.write(o&&o.ok?"1":"0")}catch(e){}' "$PEER_PROBE_JSON")
+        _pr_detail=$(node -e 'try{const o=JSON.parse(process.argv[1]);process.stdout.write(o&&o.detail||"")}catch(e){}' "$PEER_PROBE_JSON")
+        if [ "$_pr_ok" = "1" ]; then
+            ok "$_pr_detail"
+        else
+            warn "$_pr_detail"
+        fi
+    else
+        note "SOLO_AGENT_PEER_URL 已配置 (栈未运行,跳过连通探活)"
+    fi
+fi
+
 # ═══ 汇总 ═══════════════════════════════════════════════════════════════════
-printf "\n${BOLD}结果:${NC} ${GREEN}✓ %d${NC}  ${YELLOW}⚠ %d${NC}  ${RED}✗ %d${NC}\n" "$PASS" "$WARN" "$FAIL"
+if [ "$JSON_MODE" = "1" ]; then
+    node -e '
+const stripUrlAuth = (raw) => {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    u.username = "";
+    u.password = "";
+    return u.toString().replace(/\/$/, raw.endsWith("/") ? "/" : "");
+  } catch (_) {
+    return String(raw).replace(/\/\/[^/@]+@/, "//***@");
+  }
+};
+const parseLines = (raw) => String(raw || "").split("\n").filter(Boolean);
+const services = parseLines(process.argv[10]).map((line) => {
+  const [name, port, status, pids] = line.split("|");
+  return {
+    name,
+    port: port ? Number(port) : null,
+    status: status || "unknown",
+    pids: pids ? pids.split(",").filter(Boolean).map(Number) : []
+  };
+});
+const redactText = (s) => String(s || "").replace(/(https?:\/\/)[^/@\s]+@/g, "$1");
+const checks = parseLines(process.argv[11]).map((line) => {
+  const idx = line.indexOf("|");
+  return idx === -1
+    ? { level: "note", message: redactText(line) }
+    : { level: line.slice(0, idx), message: redactText(line.slice(idx + 1)) };
+});
+let outwardProbe = null;
+try { outwardProbe = JSON.parse(process.argv[12]); } catch (_) {}
+if (outwardProbe && outwardProbe.url) outwardProbe.url = stripUrlAuth(outwardProbe.url);
+let ollamaProbe = null;
+try { ollamaProbe = JSON.parse(process.argv[13]); } catch (_) {}
+if (ollamaProbe && ollamaProbe.url) ollamaProbe.url = stripUrlAuth(ollamaProbe.url);
+let peerProbe = null;
+try { peerProbe = JSON.parse(process.argv[14]); } catch (_) {}
+
+const expectedVer = process.argv[2] || null;
+const runningVer = process.argv[3] || null;
+const stackUp = process.argv[4] === "1";
+const newestBundle = process.argv[5] || null;
+
+const payload = {
+  root: process.argv[1],
+  soloVersion: {
+    expected: expectedVer,
+    running: runningVer,
+    newestBundle,
+    stackUp,
+    aligned: stackUp ? Boolean(expectedVer && runningVer && expectedVer === runningVer) : Boolean(expectedVer)
+  },
+  assetIdLength: {
+    value: Number(process.argv[6]) || 8,
+    explicit: process.argv[7] === "1"
+  },
+  storage: {
+    provider: process.argv[8] || "local",
+    access: process.argv[9] || "public",
+    localPublicRead: process.argv[15] === "1",
+    bucket: process.argv[16] || "solo",
+    outwardOrigin: stripUrlAuth(process.argv[17]),
+    outwardProbe
+  },
+  agent: {
+    provider: process.argv[18] || "qwen",
+    ollamaBaseUrl: stripUrlAuth(process.argv[19]),
+    ollamaModel: process.argv[20] || "qwen3.5:9b",
+    ollamaKeepAlive: process.argv[21] || "30m",
+    ollamaKeepAliveExplicit: Boolean(process.argv[21]),
+    ollamaTimeoutMs: Number(process.argv[22]) || 60000,
+    ollamaProbe,
+    peerAgentUrl: stripUrlAuth(process.argv[23]),
+    peerAgentTimeoutMs: Number(process.argv[24]) || 60000,
+    peerProbe
+  },
+  services,
+  summary: {
+    pass: Number(process.argv[25]) || 0,
+    warn: Number(process.argv[26]) || 0,
+    fail: Number(process.argv[27]) || 0
+  },
+  checks
+};
+process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+' \
+    "$ROOT_DIR" \
+    "$SOLO_VERSION" \
+    "$RUNNING_VER" \
+    "$STACK_UP" \
+    "$NEWEST" \
+    "$_asset_id_len" \
+    "$_asset_id_explicit" \
+    "$_storage_provider" \
+    "$_storage_access" \
+    "$SERVICES_LOG" \
+    "$CHECKS_LOG" \
+    "$OUTWARD_PROBE_JSON" \
+    "$OLLAMA_PROBE_JSON" \
+    "$PEER_PROBE_JSON" \
+    "$( [ "$_storage_public_read" = "true" ] && printf 1 || printf 0 )" \
+    "$_storage_bucket" \
+    "$_outward" \
+    "$_ai_provider" \
+    "$_ollama_url" \
+    "$_ollama_model" \
+    "$_ollama_keep_alive" \
+    "$_ollama_timeout" \
+    "$_peer_agent_url" \
+    "$_peer_agent_timeout" \
+    "$PASS" \
+    "$WARN" \
+    "$FAIL"
+else
+    printf "\n${BOLD}结果:${NC} ${GREEN}✓ %d${NC}  ${YELLOW}⚠ %d${NC}  ${RED}✗ %d${NC}\n" "$PASS" "$WARN" "$FAIL"
+fi
 [ "$FAIL" -gt 0 ] && exit 1
 exit 0
