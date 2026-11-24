@@ -47,8 +47,14 @@ async function forwardRequest({
         meta: {
             ...(sessionUser.meta || {}),
             // Chain correlation (handlers/trace.js): services read req.meta.trace /
-            // req.meta.depth and thread them through walContext → WAL rows, relay calls.
-            ...(traceCtx ? { trace: traceCtx.trace, depth: traceCtx.depth } : {})
+            // req.meta.depth (and optional fulfillmentId / profileId) and thread them
+            // through walContext → WAL rows, relay calls, and AI usage ledgers.
+            ...(traceCtx ? {
+                trace: traceCtx.trace,
+                depth: traceCtx.depth,
+                ...(traceCtx.fulfillmentId ? { fulfillmentId: traceCtx.fulfillmentId } : {}),
+                ...(traceCtx.profileId ? { profileId: traceCtx.profileId } : {}),
+            } : {})
         }
     };
 

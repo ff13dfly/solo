@@ -227,6 +227,49 @@ const methods = [
     { name: 'agent.stats.hourly', params: [{ name: 'date', type: 'string', maxLength: 64 }], returns: [], description: 'Hourly usage breakdown for a specific date', ai: false },
     // tokenLogger.range returns a BARE top-level ARRAY (one entry per step bucket). Bare array.
     { name: 'agent.stats.range', params: [{ name: 'start', type: 'number' }, { name: 'end', type: 'number' }, { name: 'step', type: 'number', optional: true }], returns: [], description: 'AI usage statistics for a given time range', ai: false },
+    {
+        name: 'agent.stats.fulfillment',
+        params: [
+            { name: 'id', type: 'string', optional: true, maxLength: 64 },
+            { name: 'ids', type: 'array', optional: true },
+            { name: 'profile', type: 'string', optional: true, maxLength: 64 },
+            { name: 'days', type: 'number', optional: true },
+        ],
+        returns: ['items', 'item'],
+        returns_schema: [
+            { name: 'items', type: 'array', required: true },
+            { name: 'item' },
+            { name: 'profile', type: 'object' },
+        ],
+        description: 'Per-fulfillment-instance and per-profile layered AI usage ledger (local / cloud / peer / rpa)',
+        ai: false
+    },
+    {
+        name: 'agent.stats.record',
+        params: [
+            { name: 'provider', type: 'string', maxLength: 64 },
+            { name: 'model', type: 'string', optional: true, maxLength: 128 },
+            { name: 'tier', type: 'string', optional: true, maxLength: 32 },
+            { name: 'method', type: 'string', optional: true, maxLength: 128 },
+            { name: 'calls', type: 'number', optional: true },
+            { name: 'inputTokens', type: 'number', optional: true },
+            { name: 'outputTokens', type: 'number', optional: true },
+            { name: 'images', type: 'number', optional: true },
+            { name: 'costUsd', type: 'number', optional: true },
+            { name: 'fulfillmentId', type: 'string', optional: true, maxLength: 64 },
+            { name: 'profileId', type: 'string', optional: true, maxLength: 64 },
+            { name: 'idempotencyKey', type: 'string', optional: true, maxLength: 128 },
+        ],
+        returns: ['recorded', 'duplicate', 'tier', 'costUsd'],
+        returns_schema: [
+            { name: 'recorded', type: 'boolean', required: true },
+            { name: 'duplicate', type: 'boolean', required: true },
+            { name: 'tier', type: 'string', required: true },
+            { name: 'costUsd', type: 'number', required: true },
+        ],
+        description: 'Idempotently record external/heterogeneous AI or RPA session usage into the unified agent ledger (admin or internal bot only)',
+        ai: false
+    },
 
     // System
     { name: 'methods', params: [], returns: ['methods', 'description'], description: 'Introspection registry', ai: false },

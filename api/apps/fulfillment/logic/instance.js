@@ -439,6 +439,8 @@ module.exports = (redis, config, relay = null) => {
                         service:       action.service || (action.method || '').split('.')[0],
                         method:        action.method,
                         transition_id: transitionId,
+                        fulfillmentId: id,
+                        profileId:     instance.profileId,
                         params: { ...resolvedParams, idempotency_key: `${transitionId}:A${idx}` }
                     });
                 });
@@ -499,7 +501,11 @@ module.exports = (redis, config, relay = null) => {
                         ? config.peerRelayFactory(peerOpts)
                         : createPeerRelay(peerOpts);
                     try {
-                        await peerClient.call(action.method, dispatchPayload, { idempotencyKey });
+                        await peerClient.call(action.method, dispatchPayload, {
+                            idempotencyKey,
+                            fulfillmentId: id,
+                            profileId: instance.profileId,
+                        });
                     } catch (err) {
                         logger.warn(`Instance ${id} peer_rpc_with_callback (${action.method} -> ${endpoint}) failed: ${err.message}`);
                     }

@@ -124,6 +124,11 @@ app.post('/jsonrpc', async (req, res) => {
                     logger.info(`[Stats] Range request: ${p.start} to ${p.end} (step: ${p.step})`);
                     return tokenLogger.range(redisClient, p);
                 },
+                'agent.stats.fulfillment': (p) => tokenLogger.fulfillmentStats(redisClient, p || {}),
+                'agent.stats.record': (p) => {
+                    tokenLogger.assertStatsRecordAuthorized(req);
+                    return tokenLogger.record(redisClient, p || {});
+                },
                 'agent.providers': () => {
                     const providers = [];
                     if (config.qwenApiKey)    providers.push({ id: 'qwen',    name: '千问 (Qwen)',  vision: true });

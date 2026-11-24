@@ -17,6 +17,7 @@
 
 const { createPeerRelay } = require('../../../library/peer-relay');
 const { createLogger } = require('../../../library/logger');
+const tokenLogger = require('../lib/tokenLogger');
 
 const logger = createLogger('agent');
 
@@ -49,7 +50,25 @@ class SoloPeerProvider {
         return stripSoloPeerPrefix(model, this.defaultDownstreamModel);
     }
 
-    _decorateMetadata(res, downstreamModel) {
+    _logPeerUsage(method, downstreamModel, res) {
+        const usage = res && res.metadata && res.metadata.usage;
+        const inputTokens = Number((usage && (usage.inputTokens ?? usage.prompt_tokens ?? usage.promptTokenCount)) || 0);
+        const outputTokens = Number((usage && (usage.outputTokens ?? usage.completion_tokens ?? usage.candidatesTokenCount)) || 0);
+        tokenLogger.log({
+            method,
+            model: downstreamModel,
+            provider: 'solo-peer',
+            tier: 'peer',
+            inputTokens,
+            outputTokens,
+            costUsd: 0,
+        });
+    }
+
+    _decorateMetadata(res, downstreamModel, method) {
+        if (method) {
+            this._logPeerUsage(method, downstreamModel, res);
+        }
         if (!res || typeof res !== 'object') return res;
         return {
             ...res,
@@ -68,7 +87,7 @@ class SoloPeerProvider {
             ...params,
             model: downstreamModel,
         });
-        return this._decorateMetadata(res, downstreamModel);
+        return this._decorateMetadata(res, downstreamModel, 'agent.chat');
     }
 
     async parseText(params = {}) {
@@ -77,7 +96,7 @@ class SoloPeerProvider {
             ...params,
             model: downstreamModel,
         });
-        return this._decorateMetadata(res, downstreamModel);
+        return this._decorateMetadata(res, downstreamModel, 'agent.text.parse');
     }
 
     async translateText(params = {}) {
@@ -86,7 +105,7 @@ class SoloPeerProvider {
             ...params,
             model: downstreamModel,
         });
-        return this._decorateMetadata(res, downstreamModel);
+        return this._decorateMetadata(res, downstreamModel, 'agent.text.translate');
     }
 
     async parseImage(params = {}) {
@@ -95,7 +114,7 @@ class SoloPeerProvider {
             ...params,
             model: downstreamModel,
         });
-        return this._decorateMetadata(res, downstreamModel);
+        return this._decorateMetadata(res, downstreamModel, 'agent.image.parse');
     }
 
     async extractProductInfo(params = {}) {
@@ -105,7 +124,7 @@ class SoloPeerProvider {
             mode: 'product',
             model: downstreamModel,
         });
-        return this._decorateMetadata(res, downstreamModel);
+        return this._decorateMetadata(res, downstreamModel, 'agent.image.parse');
     }
 
     async classifyImage(params = {}) {
@@ -114,15 +133,17 @@ class SoloPeerProvider {
             ...params,
             model: downstreamModel,
         });
-        return this._decorateMetadata(res, downstreamModel);
+        return this._decorateMetadata(res, downstreamModel, 'agent.image.classify');
     }
 
     async scanLabel(params = {}) {
         const downstreamModel = this.resolveDownstreamModel(params.model);
-        return await this.peerRelay.call('agent.label.scan', {
+        const res = await this.peerRelay.call('agent.label.scan', {
             ...params,
             model: downstreamModel,
         });
+        this._logPeerUsage('agent.label.scan', downstreamModel, res);
+        return res;
     }
 
     /**
@@ -147,6 +168,7 @@ class SoloPeerProvider {
                     metadata: { provider: 'solo-peer', model: downstreamModel },
                 };
             }
+            this._logPeerUsage('agent.decide', downstreamModel, res);
             if (res.escalate && res.decision === null) {
                 return {
                     success: false,
@@ -197,7 +219,7 @@ class SoloPeerProvider {
             missing_fields: missingFields,
             model: downstreamModel,
         });
-        return this._decorateMetadata(res, downstreamModel);
+        return this._decorateMetadata(res, downstreamModel, 'agent.focus');
     }
 }
 

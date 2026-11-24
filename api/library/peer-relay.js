@@ -23,6 +23,11 @@
  */
 
 const crypto = require('crypto');
+const { walContext } = require('./entity');
+
+const TRACE_ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
+const FULFILLMENT_ID_RE = /^[A-Za-z0-9_:-]{1,64}$/;
+const FULFILLMENT_PROFILE_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_TRIES = 3;
@@ -113,7 +118,7 @@ function createPeerRelay(options = {}) {
         return Date.now() >= state.expiresAt - 5000;
     }
 
-    async function rawPost(method, params, { authHeader = null, id = null, callTimeoutMs = timeoutMs } = {}) {
+    async function rawPost(method, params, { authHeader = null, id = null, callTimeoutMs = timeoutMs, extraHeaders = null } = {}) {
         if (!endpoint) {
             const err = new Error('peer-relay: endpoint URL is not configured');
             err.code = 'PEER_ENDPOINT_MISSING';
@@ -126,6 +131,7 @@ function createPeerRelay(options = {}) {
         const headers = {
             'Content-Type': 'application/json',
             'Connection': 'close',
+            ...(extraHeaders && typeof extraHeaders === 'object' ? extraHeaders : {}),
         };
         if (authHeader) {
             headers['Authorization'] = authHeader;
@@ -319,12 +325,32 @@ function createPeerRelay(options = {}) {
             };
         }
 
+        const store = walContext.getStore();
+        const extraHeaders = {};
+        const effTrace = callOpts.trace || (store && store.trace) || null;
+        if (typeof effTrace === 'string' && TRACE_ID_RE.test(effTrace)) {
+            const effDepth = Number.isFinite(callOpts.depth)
+                ? callOpts.depth
+                : (store && Number.isFinite(store.depth) ? store.depth : 0);
+            extraHeaders['X-Trace-Id'] = effTrace;
+            extraHeaders['X-Trace-Depth'] = String(effDepth);
+        }
+        const effFulfillmentId = callOpts.fulfillmentId || (store && store.fulfillmentId) || null;
+        if (typeof effFulfillmentId === 'string' && FULFILLMENT_ID_RE.test(effFulfillmentId)) {
+            extraHeaders['X-Fulfillment-Id'] = effFulfillmentId;
+        }
+        const effProfileId = callOpts.profileId || (store && store.profileId) || null;
+        if (typeof effProfileId === 'string' && FULFILLMENT_PROFILE_RE.test(effProfileId)) {
+            extraHeaders['X-Fulfillment-Profile'] = effProfileId;
+        }
+
         const authHeader = await ensureAuth({ forceLogin: false });
         try {
             return await rawPost(method, payloadParams, {
                 authHeader,
                 id: callOpts.id,
                 callTimeoutMs: callOpts.timeoutMs || timeoutMs,
+                extraHeaders,
             });
         } catch (err) {
             if (!apiKey && user && password && isAuthFailure(err)) {
@@ -333,6 +359,7 @@ function createPeerRelay(options = {}) {
                     authHeader: `Bearer ${state.token}`,
                     id: callOpts.id,
                     callTimeoutMs: callOpts.timeoutMs || timeoutMs,
+                    extraHeaders,
                 });
             }
             throw err;

@@ -45,14 +45,40 @@ module.exports = (redis, config, { sentinelLogic, relay, assembler, identity, co
         return Math.min(C.retryBaseMs * (2 ** Math.max(0, count - 1)), C.retryMaxMs);
     }
 
+    const FULFILLMENT_ID_RE = /^[A-Za-z0-9_:-]{1,64}$/;
+    const FULFILLMENT_PROFILE_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+
+    function extractFulfillmentAttribution(stream, env) {
+        let parsed = env && env.payload;
+        if (typeof parsed === 'string') {
+            try { parsed = JSON.parse(parsed); } catch (_) { parsed = null; }
+        }
+        if (!parsed || typeof parsed !== 'object') return {};
+        const isFulfillmentStream = typeof stream === 'string' && stream.startsWith('EVENT:FULFILLMENT:');
+        const rawFid = parsed.fulfillmentId
+            || parsed.instanceId
+            || ((isFulfillmentStream || parsed.profileId) ? parsed.id : null);
+        const rawProf = parsed.profileId || parsed.profile || null;
+        const out = {};
+        if (typeof rawFid === 'string' && FULFILLMENT_ID_RE.test(rawFid)) {
+            out.fulfillmentId = rawFid;
+        }
+        if (typeof rawProf === 'string' && FULFILLMENT_PROFILE_RE.test(rawProf)) {
+            out.profileId = rawProf;
+        }
+        return out;
+    }
+
     // Deliver one assembled event to one agent. Returns { ok, reason?, step?, skipped? }.
     // Wrapped in walContext so every relay call inside (agent.decide / event.emit /
-    // notification.send) carries the triggering envelope's trace+depth — the chain
-    // survives the async hop, and the Sentinel's own emit gets depth+1 at the Router.
+    // notification.send) carries the triggering envelope's trace+depth (plus fulfillment
+    // attribution when triggered by a fulfillment lifecycle event) — the chain survives
+    // the async hop, and the Sentinel's own emit gets depth+1 at the Router.
     async function deliverEvent(args) {
         const env = args.event || {};
+        const ffAttr = extractFulfillmentAttribution(args.stream, env);
         return walContext.run(
-            { uid: null, trace: env.trace_id || null, depth: parseInt(env.depth, 10) || 0 },
+            { uid: null, trace: env.trace_id || null, depth: parseInt(env.depth, 10) || 0, ...ffAttr },
             () => deliverEventInner(args)
         );
     }
@@ -419,5 +445,5 @@ module.exports = (redis, config, { sentinelLogic, relay, assembler, identity, co
         stopRequested = true;
     }
 
-    return { start, stop, discoverStreams, consumeOnce };
+    return { start, stop, discoverStreams, consumeOnce, deliverEvent };
 };

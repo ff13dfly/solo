@@ -41,6 +41,7 @@ async function getWhitelist(redisClient) {
 }
 
 const validator = require('./validator');
+const { FULFILLMENT_ID_RE, FULFILLMENT_PROFILE_RE } = require('./trace');
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -227,6 +228,20 @@ async function processTasks(tasks, username, isAdmin, SERVICES, keypair, redisCl
 
             // --- EXECUTION ---
             // Generate "Task Context" Authorization
+            const effFulfillmentId = (typeof task.fulfillmentId === 'string' && FULFILLMENT_ID_RE.test(task.fulfillmentId))
+                ? task.fulfillmentId
+                : (traceCtx && traceCtx.fulfillmentId) || null;
+            const effProfileId = (typeof task.profileId === 'string' && FULFILLMENT_PROFILE_RE.test(task.profileId))
+                ? task.profileId
+                : (traceCtx && traceCtx.profileId) || null;
+            const taskMeta = {};
+            if (traceCtx) {
+                taskMeta.trace = traceCtx.trace;
+                taskMeta.depth = traceCtx.depth;
+            }
+            if (effFulfillmentId) taskMeta.fulfillmentId = effFulfillmentId;
+            if (effProfileId) taskMeta.profileId = effProfileId;
+
             const authPayload = {
                 iss: 'router',
                 iat: Date.now(),
@@ -235,8 +250,8 @@ async function processTasks(tasks, username, isAdmin, SERVICES, keypair, redisCl
                 context: 'task',
                 ...(constraints && typeof constraints === 'object' && Object.keys(constraints).length ? { constraints } : {}),
                 // Chain correlation: the async task belongs to the request's chain —
-                // same trace, same depth (a _task is an RPC hop, not an event hop).
-                ...(traceCtx ? { meta: { trace: traceCtx.trace, depth: traceCtx.depth } } : {})
+                // same trace, same depth (a _task is an RPC hop, not an event hop), plus optional fulfillment attribution.
+                ...(Object.keys(taskMeta).length ? { meta: taskMeta } : {})
             };
 
             const payloadStr = JSON.stringify(authPayload);

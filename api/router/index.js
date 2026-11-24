@@ -149,8 +149,12 @@ const updateCapabilityMap = async () => await handlers.capability.updateCapabili
             const isAdmin = handlers.auth.isAdmin(sessionUser);
 
             // Chain correlation: inherit X-Trace-Id/X-Trace-Depth or mint (chain start).
+            // Optional X-Fulfillment-Id / X-Fulfillment-Profile are accepted only from authenticated principals.
             // Threaded into the forward token (meta), _tasks dispatch, and event envelopes.
-            const traceCtx = handlers.trace.resolve(req.headers);
+            const isAuthenticatedCaller = Boolean(
+                isAdmin || (sessionUser && (sessionUser.uid || sessionUser.username) && sessionUser.uid !== 'anonymous' && sessionUser.username !== 'anonymous')
+            );
+            const traceCtx = handlers.trace.resolve(req.headers, { authenticated: isAuthenticatedCaller });
 
             // --- PHASE 1.5: GLOBAL SANITY CHECK ---
             const globalValidationError = handlers.validator.validateGlobalConstraints(params);

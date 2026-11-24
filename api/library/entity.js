@@ -1237,6 +1237,8 @@ module.exports.requestContext = (req) => ({
     trace: req?.meta?.trace || null,
     depth: req?.meta?.depth ?? 0,
     owner: (req?.constraints && req.constraints.$owner) || null,
+    ...(req?.meta?.fulfillmentId ? { fulfillmentId: req.meta.fulfillmentId } : {}),
+    ...(req?.meta?.profileId ? { profileId: req.meta.profileId } : {}),
 });
 
 /**

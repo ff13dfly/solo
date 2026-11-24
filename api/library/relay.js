@@ -232,7 +232,10 @@ function createRelay(options) {
 
     // ── ROUTER RPC ───────────────────────────────────────────────────────────
 
-    function rpcViaRouter(method, params, token) {
+    const FULFILLMENT_ID_RE = /^[A-Za-z0-9_:-]{1,64}$/;
+    const FULFILLMENT_PROFILE_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+
+    function rpcViaRouter(method, params, token, callOpts = {}) {
         return new Promise((resolve, reject) => {
             const url = new URL(routerUrl);
             const client = url.protocol === 'https:' ? https : http;
@@ -247,9 +250,21 @@ function createRelay(options) {
             // chain instead of minting a new one. Absent context = this call starts a chain.
             const traceHeaders = {};
             const store = walContext.getStore();
-            if (store && store.trace) {
-                traceHeaders['X-Trace-Id'] = String(store.trace);
-                traceHeaders['X-Trace-Depth'] = String(Number.isFinite(store.depth) ? store.depth : 0);
+            const effTrace = (callOpts && callOpts.trace) || (store && store.trace) || null;
+            if (effTrace) {
+                const effDepth = (callOpts && Number.isFinite(callOpts.depth))
+                    ? callOpts.depth
+                    : (store && Number.isFinite(store.depth) ? store.depth : 0);
+                traceHeaders['X-Trace-Id'] = String(effTrace);
+                traceHeaders['X-Trace-Depth'] = String(effDepth);
+            }
+            const effFulfillmentId = (callOpts && callOpts.fulfillmentId) || (store && store.fulfillmentId) || null;
+            if (typeof effFulfillmentId === 'string' && FULFILLMENT_ID_RE.test(effFulfillmentId)) {
+                traceHeaders['X-Fulfillment-Id'] = effFulfillmentId;
+            }
+            const effProfileId = (callOpts && callOpts.profileId) || (store && store.profileId) || null;
+            if (typeof effProfileId === 'string' && FULFILLMENT_PROFILE_RE.test(effProfileId)) {
+                traceHeaders['X-Fulfillment-Profile'] = effProfileId;
             }
             const req = client.request({
                 hostname: url.hostname,
@@ -307,10 +322,10 @@ function createRelay(options) {
      * @returns {Promise<any>} the `result` field of the JSON-RPC response
      * @throws  RelayError (NO_TOKEN | TOKEN_EXPIRED | REFRESH_FAILED | RPC_FAILED)
      */
-    async function call(method, params) {
+    async function call(method, params, opts) {
         const token = await getValidToken();
         audit('call', { method });
-        return await rpcViaRouter(method, params, token);
+        return await rpcViaRouter(method, params, token, opts);
     }
 
     /**
@@ -338,10 +353,10 @@ function createRelay(options) {
      * @param {string} method  e.g. 'collection.payment.get'
      * @param {object} params  RPC params
      */
-    async function callAs(token, method, params) {
+    async function callAs(token, method, params, opts) {
         if (!token || typeof token !== 'string') throw ERR.INVALID_TOKEN('callAs requires a token string');
         audit('call_as', { method });
-        return await rpcViaRouter(method, params, token);
+        return await rpcViaRouter(method, params, token, opts);
     }
 
     /**

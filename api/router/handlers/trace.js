@@ -24,6 +24,8 @@
 const crypto = require('crypto');
 
 const TRACE_RE = /^[A-Za-z0-9_-]{4,64}$/;
+const FULFILLMENT_ID_RE = /^[A-Za-z0-9_:-]{1,64}$/;
+const FULFILLMENT_PROFILE_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 const MAX_DEPTH_VALUE = 10000;   // sanity clamp for the header value itself
 
 function mint() {
@@ -32,9 +34,11 @@ function mint() {
 
 /**
  * Resolve the request's trace context from headers: inherit-or-mint.
- * @returns {{ trace: string, depth: number }}
+ * Optional fulfillment attribution headers (`X-Fulfillment-Id` / `X-Fulfillment-Profile`)
+ * are accepted ONLY when `opts.authenticated !== false` and match strict allowlist regexes.
+ * @returns {{ trace: string, depth: number, fulfillmentId?: string, profileId?: string }}
  */
-function resolve(headers = {}) {
+function resolve(headers = {}, opts = {}) {
     const raw = headers['x-trace-id'];
     const trace = (typeof raw === 'string' && TRACE_RE.test(raw)) ? raw : mint();
 
@@ -42,7 +46,19 @@ function resolve(headers = {}) {
     if (!Number.isFinite(depth) || depth < 0) depth = 0;
     if (depth > MAX_DEPTH_VALUE) depth = MAX_DEPTH_VALUE;
 
-    return { trace, depth };
+    const out = { trace, depth };
+    if (opts.authenticated !== false) {
+        const rawFid = headers['x-fulfillment-id'];
+        if (typeof rawFid === 'string' && FULFILLMENT_ID_RE.test(rawFid)) {
+            out.fulfillmentId = rawFid;
+        }
+        const rawProf = headers['x-fulfillment-profile'];
+        if (typeof rawProf === 'string' && FULFILLMENT_PROFILE_RE.test(rawProf)) {
+            out.profileId = rawProf;
+        }
+    }
+
+    return out;
 }
 
-module.exports = { resolve, mint };
+module.exports = { resolve, mint, FULFILLMENT_ID_RE, FULFILLMENT_PROFILE_RE };
