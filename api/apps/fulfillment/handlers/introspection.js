@@ -56,6 +56,7 @@ const INSTANCE_BASE = [
 const INSTANCE_WITH_TASKS = [
     ...INSTANCE_BASE,
     { name: '_tasks', type: 'array', required: true },
+    { name: '_peerDispatch', type: 'array' }, // present when transition executes peer_rpc_with_callback actions
 ];
 
 // Profile = Entity-Factory record (library/entity.js). create/get/update/restore/delete all

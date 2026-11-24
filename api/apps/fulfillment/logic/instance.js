@@ -17,6 +17,16 @@ const PROTO_KEYS              = new Set(['__proto__', 'constructor', 'prototype'
 // ADR-002: never persist bearer capability tokens into instance.meta / history.meta_update.
 const sensitiveFields         = ['callbackToken', 'callback_token'];
 const SENSITIVE_META_KEY_RE   = /^callback_?token$/i;
+const SAFE_META_KEY_RE        = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+function isSafeMetaKey(k) {
+    return typeof k === 'string'
+        && SAFE_META_KEY_RE.test(k)
+        && !PROTO_KEYS.has(k)
+        && !k.startsWith('_')
+        && !sensitiveFields.includes(k)
+        && !SENSITIVE_META_KEY_RE.test(k);
+}
 
 function stripSensitiveMeta(raw, depth = 0) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || depth > 8) return {};
@@ -28,6 +38,14 @@ function stripSensitiveMeta(raw, depth = 0) {
             : v;
     }
     return copy;
+}
+
+function sanitizePeerResult(val) {
+    if (!val || typeof val !== 'object') return val ?? null;
+    if (Array.isArray(val)) {
+        return val.map((item) => (item && typeof item === 'object' && !Array.isArray(item) ? stripSensitiveMeta(item) : item));
+    }
+    return stripSensitiveMeta(val);
 }
 
 /**
@@ -241,14 +259,23 @@ module.exports = (redis, config, relay = null) => {
      * JsonLogic condition (override), applies the state change + history, and
      * builds idempotency-keyed _tasks. See docs/IMPLEMENTATION.md §幂等契约.
      */
-    async function advance({ id, event, metaUpdate = {}, skipCondition = false, forced = false, reason = null, expectedTransitionId = null, consumeCallbackId = null }, req) {
+    async function advance(opts, req) {
+        const id = opts && opts.id;
+        const event = opts && opts.event;
+        if (!id)    throw jsonrpc.MISSING_PARAM('id');
+        if (!event) throw jsonrpc.MISSING_PARAM('event');
+        const key = getInstanceKey(id);
+        return withInstanceLock(key, () => advanceUnlocked(opts, req));
+    }
+
+    async function advanceUnlocked({ id, event, metaUpdate = {}, skipCondition = false, forced = false, reason = null, expectedTransitionId = null, consumeCallbackId = null, _autoDepth = 0 }, req) {
         if (!id)    throw jsonrpc.MISSING_PARAM('id');
         if (!event) throw jsonrpc.MISSING_PARAM('event');
 
         const key = getInstanceKey(id);
         const safeMetaUpdate = stripSensitiveMeta(metaUpdate);
 
-        return withInstanceLock(key, async () => {
+        {
             const initialInstance = await getInstance(id, req);
             const profile = await loadProfile(initialInstance.profileId);
 
@@ -447,13 +474,33 @@ module.exports = (redis, config, relay = null) => {
             }
 
             // Persist pre-minted flcb_ tokens and dispatch declarative `peer_rpc_with_callback` actions
+            const _peerDispatch = [];
+            const postMetaWrites = {};
+            const revokedTokenIds = new Set();
+            let firstOnErrorTrigger = null;
+
+            const recordPeerFailure = (actionIndex, action, tokenRecord, errObj) => {
+                revokedTokenIds.add(tokenRecord.tokenId);
+                _peerDispatch.push({ actionIndex, method: action.method, ok: false, error: errObj });
+                if (isSafeMetaKey(action.resultMetaKey)) {
+                    postMetaWrites[action.resultMetaKey] = { ok: false, error: errObj };
+                }
+                if (action.onError && typeof action.onError === 'object') {
+                    if (isSafeMetaKey(action.onError.metaKey)) {
+                        postMetaWrites[action.onError.metaKey] = errObj;
+                    }
+                    if (!firstOnErrorTrigger && typeof action.onError.event === 'string' && action.onError.event.trim()) {
+                        firstOnErrorTrigger = {
+                            event: action.onError.event.trim(),
+                            reasonCode: action.onError.reasonCode || String(errObj.code || 'PEER_DISPATCH_FAILED'),
+                            errorObj: errObj,
+                        };
+                    }
+                }
+            };
+
             for (const item of issuedPeerTokens) {
                 const { actionIndex, action, rawToken, tokenHash, safeTtl, tokenRecord } = item;
-                await redis.set(
-                    `${CBTOKEN_PREF}${tokenHash}`,
-                    JSON.stringify(tokenRecord),
-                    { EX: Math.ceil(safeTtl / 1000) }
-                );
 
                 const fromMetaObj = (action.paramsFromMeta && instance.meta && typeof instance.meta[action.paramsFromMeta] === 'object' && !Array.isArray(instance.meta[action.paramsFromMeta]))
                     ? instance.meta[action.paramsFromMeta]
@@ -488,33 +535,231 @@ module.exports = (redis, config, relay = null) => {
                     || '';
                 const endpoint = action.endpoint || configuredEndpoint;
                 const canUseConfiguredCreds = !action.endpoint || (configuredEndpoint && action.endpoint === configuredEndpoint);
-                if (endpoint && action.method) {
-                    const peerOpts = {
-                        endpoint,
-                        apiKey:   action.apiKey   || (canUseConfiguredCreds ? (peerCfg.apiKey   || (peerKey && process.env[`SOLO_PEER_${peerKey}_API_KEY`]))   : '') || '',
-                        token:    action.token    || (canUseConfiguredCreds ? (peerCfg.token    || (peerKey && process.env[`SOLO_PEER_${peerKey}_TOKEN`]))     : '') || '',
-                        user:     action.user     || (canUseConfiguredCreds ? (peerCfg.user     || peerCfg.username || (peerKey && process.env[`SOLO_PEER_${peerKey}_USER`])) : '') || '',
-                        password: action.password || (canUseConfiguredCreds ? (peerCfg.password || (peerKey && process.env[`SOLO_PEER_${peerKey}_PASSWORD`]))  : '') || '',
-                        fetchFn:  config.fetchFn,
+                if (!endpoint || !action.method) {
+                    const errObj = {
+                        method: action.method || null,
+                        endpoint: endpoint || null,
+                        code: 'PEER_ENDPOINT_MISSING',
+                        message: `Peer endpoint is not configured for "${action.peer || action.method || 'unknown'}"`,
+                        at: clock.now(),
                     };
-                    const peerClient = typeof config.peerRelayFactory === 'function'
-                        ? config.peerRelayFactory(peerOpts)
-                        : createPeerRelay(peerOpts);
+                    logger.warn(`Instance ${id} peer_rpc_with_callback (${action.method}) failed: ${errObj.message}`);
+                    recordPeerFailure(actionIndex, action, tokenRecord, errObj);
+                    continue;
+                }
+
+                await redis.set(
+                    `${CBTOKEN_PREF}${tokenHash}`,
+                    JSON.stringify(tokenRecord),
+                    { EX: Math.ceil(safeTtl / 1000) }
+                );
+
+                const peerOpts = {
+                    endpoint,
+                    apiKey:   action.apiKey   || (canUseConfiguredCreds ? (peerCfg.apiKey   || (peerKey && process.env[`SOLO_PEER_${peerKey}_API_KEY`]))   : '') || '',
+                    token:    action.token    || (canUseConfiguredCreds ? (peerCfg.token    || (peerKey && process.env[`SOLO_PEER_${peerKey}_TOKEN`]))     : '') || '',
+                    user:     action.user     || (canUseConfiguredCreds ? (peerCfg.user     || peerCfg.username || (peerKey && process.env[`SOLO_PEER_${peerKey}_USER`])) : '') || '',
+                    password: action.password || (canUseConfiguredCreds ? (peerCfg.password || (peerKey && process.env[`SOLO_PEER_${peerKey}_PASSWORD`]))  : '') || '',
+                    fetchFn:  config.fetchFn,
+                };
+                const peerClient = typeof config.peerRelayFactory === 'function'
+                    ? config.peerRelayFactory(peerOpts)
+                    : createPeerRelay(peerOpts);
+                try {
+                    const remoteRes = await peerClient.call(action.method, dispatchPayload, {
+                        idempotencyKey,
+                        fulfillmentId: id,
+                        profileId: instance.profileId,
+                    });
+                    const safeRes = sanitizePeerResult(remoteRes);
+                    _peerDispatch.push({ actionIndex, method: action.method, ok: true, result: safeRes });
+                    if (isSafeMetaKey(action.resultMetaKey)) {
+                        postMetaWrites[action.resultMetaKey] = safeRes;
+                    }
+                } catch (err) {
+                    await redis.del(`${CBTOKEN_PREF}${tokenHash}`);
+                    const errCode = err.code ?? err.rpcCode ?? (err.httpStatus ? `HTTP_${err.httpStatus}` : 'PEER_DISPATCH_FAILED');
+                    const errObj = {
+                        method: action.method,
+                        endpoint,
+                        code: errCode,
+                        message: err.message || 'Peer RPC dispatch failed',
+                        at: clock.now(),
+                    };
+                    logger.warn(`Instance ${id} peer_rpc_with_callback (${action.method} -> ${endpoint}) failed: ${errObj.message}`);
+                    recordPeerFailure(actionIndex, action, tokenRecord, errObj);
+                }
+            }
+
+            let finalInstance = instance;
+            const finalTasks = [..._tasks];
+
+            if (revokedTokenIds.size > 0 || Object.keys(postMetaWrites).length > 0) {
+                finalInstance = await optimisticUpdate(redis, key, (cur) => ({
+                    ...cur,
+                    meta: { ...(cur.meta || {}), ...postMetaWrites },
+                    pending_callbacks: (Array.isArray(cur.pending_callbacks) ? cur.pending_callbacks : [])
+                        .filter((cb) => cb && !revokedTokenIds.has(cb.tokenId)),
+                }));
+            }
+
+            if (firstOnErrorTrigger && _autoDepth < 1) {
+                const latestTid = Array.isArray(finalInstance.history) ? finalInstance.history.at(-1)?.transition_id : null;
+                if (latestTid === transitionId) {
                     try {
-                        await peerClient.call(action.method, dispatchPayload, {
-                            idempotencyKey,
-                            fulfillmentId: id,
-                            profileId: instance.profileId,
-                        });
-                    } catch (err) {
-                        logger.warn(`Instance ${id} peer_rpc_with_callback (${action.method} -> ${endpoint}) failed: ${err.message}`);
+                        if (firstOnErrorTrigger.event === 'suspend') {
+                            finalInstance = await suspendUnlocked({
+                                id,
+                                reason: firstOnErrorTrigger.errorObj.message,
+                                reasonCode: firstOnErrorTrigger.reasonCode || 'PEER_DISPATCH_FAILED',
+                                metaUpdate: postMetaWrites,
+                                expectedTransitionId: transitionId,
+                            }, req);
+                        } else {
+                            const errAdv = await advanceUnlocked({
+                                id,
+                                event: firstOnErrorTrigger.event,
+                                metaUpdate: postMetaWrites,
+                                reason: firstOnErrorTrigger.errorObj.message,
+                                expectedTransitionId: transitionId,
+                                _autoDepth: _autoDepth + 1,
+                            }, req);
+                            if (Array.isArray(errAdv._tasks)) finalTasks.push(...errAdv._tasks);
+                            const { _tasks: _ignoredTasks, _peerDispatch: _ignoredPd, ...cleanInst } = errAdv;
+                            finalInstance = cleanInst;
+                        }
+                    } catch (onErr) {
+                        logger.warn(`Instance ${id} peer_rpc_with_callback onError (${firstOnErrorTrigger.event}) skipped: ${onErr.message}`);
                     }
                 }
             }
 
-            logger.info(`Instance ${id}: ${fromState} → ${toState} (${transitionId}, ${_tasks.length} tasks${forced ? ', forced' : ''})`);
-            return { ...instance, _tasks };
+            logger.info(`Instance ${id}: ${fromState} → ${toState} (${transitionId}, ${finalTasks.length} tasks${forced ? ', forced' : ''})`);
+            return issuedPeerTokens.length > 0
+                ? { ...finalInstance, _tasks: finalTasks, _peerDispatch }
+                : { ...finalInstance, _tasks: finalTasks };
+        }
+    }
+
+    async function suspendUnlocked({
+        id,
+        reason,
+        reasonCode = 'MANUAL_INTERVENTION',
+        suspendState = 'ASSIST_REQUIRED',
+        checkpoint = null,
+        aiSuggestion = null,
+        metaUpdate,
+        meta,
+        expectedTransitionId = null,
+    } = {}, req) {
+        if (!id)     throw jsonrpc.MISSING_PARAM('id');
+        if (!reason) throw jsonrpc.MISSING_PARAM('reason');
+        const targetState = suspendState || 'ASSIST_REQUIRED';
+        if (typeof targetState !== 'string' || !STATE_NAME_RE.test(targetState)) {
+            throw jsonrpc.INVALID_PARAM(`suspendState must match ${STATE_NAME_RE}`);
+        }
+        const rawMeta = metaUpdate ?? meta ?? {};
+        const safeMetaUpdate = stripSensitiveMeta(rawMeta);
+        const key = getInstanceKey(id);
+
+        const initialInstance = await getInstance(id, req);
+        const profile = await loadProfile(initialInstance.profileId);
+        if (profile && profile.reviewState && profile.reviewState !== 'APPROVED') {
+            throw jsonrpc.FORBIDDEN(`Profile ${initialInstance.profileId} is not activated (reviewState: ${profile.reviewState}) — it must be (re-)approved before its instances can suspend`);
+        }
+        const profileTransitions = Array.isArray(profile && profile.transitions) ? profile.transitions : [];
+        const businessStates = new Set();
+        for (const t of profileTransitions) {
+            if (t && t.from) businessStates.add(t.from);
+            if (t && t.to) businessStates.add(t.to);
+        }
+        if (targetState !== 'ASSIST_REQUIRED' && businessStates.has(targetState)) {
+            throw jsonrpc.INVALID_PARAM(
+                `suspendState "${targetState}" collides with a declared business state in profile ${initialInstance.profileId}`
+            );
+        }
+
+        let fromState;
+        let transitionId;
+
+        const instance = await optimisticUpdate(redis, key, (current) => {
+            assertOwner(current, req);
+            const lastEntry = Array.isArray(current.history) ? current.history.at(-1) : null;
+            if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
+                const currentTransitionId = lastEntry?.transition_id || null;
+                if (currentTransitionId !== expectedTransitionId) {
+                    throw jsonrpc.INVALID_PARAM(
+                        `Stale transition_id for instance ${id}: expected "${expectedTransitionId}", current is "${currentTransitionId}"`
+                    );
+                }
+            }
+            if (current.state === 'CANCELLED' || current.state === 'COMPLETED') {
+                throw jsonrpc.INVALID_PARAM(`Instance ${id} is in terminal state ${current.state} and cannot be suspended`);
+            }
+            if (profileTransitions.length > 0 && !profileTransitions.some((t) => t && t.from === current.state)) {
+                throw jsonrpc.INVALID_PARAM(`Instance ${id} is in terminal state ${current.state} (no outgoing transitions) and cannot be suspended`);
+            }
+            if (current.suspension || current.state === targetState) {
+                throw jsonrpc.INVALID_PARAM(`Instance ${id} is already suspended in ${current.state}`);
+            }
+            if (lastEntry && lastEntry.event === 'hold_requested') {
+                throw jsonrpc.INVALID_PARAM(`Instance ${id} is currently on hold (${current.state}) and must be resumed before suspending`);
+            }
+
+            const now = clock.now();
+            fromState = current.state;
+            transitionId = `${id}-T${current.history.length + 1}`;
+            const mergedMeta = { ...current.meta, ...safeMetaUpdate };
+            const suspension = {
+                blockedState: fromState,
+                suspendState: targetState,
+                reasonCode:   reasonCode || 'MANUAL_INTERVENTION',
+                reason,
+                checkpoint:   (checkpoint && typeof checkpoint === 'object' && !Array.isArray(checkpoint)) ? checkpoint : null,
+                aiSuggestion: aiSuggestion || null,
+                suspendedAt:  now,
+                suspendedBy:  req?.user || null,
+                transitionId,
+            };
+
+            const entry = {
+                state:         targetState,
+                event:         'suspend',
+                transition_id: transitionId,
+                reason,
+                reason_code:   suspension.reasonCode,
+                user:          req?.user || null,
+                trace:         walContext.getStore()?.trace || null,
+                stamp:         now,
+            };
+            if (suspension.checkpoint) entry.checkpoint = suspension.checkpoint;
+            if (Object.keys(safeMetaUpdate).length) entry.meta_update = safeMetaUpdate;
+
+            return {
+                ...current,
+                prevState:      fromState,
+                state:          targetState,
+                stateChangedAt: now,
+                suspension,
+                meta:           mergedMeta,
+                history:        [...current.history, entry],
+            };
         });
+
+        emitTransitioned({
+            id,
+            profileId:    instance.profileId,
+            sourceId:     instance.sourceId,
+            fromState,
+            toState:      targetState,
+            event:        'suspend',
+            transitionId,
+            user:         req?.user || null,
+            stamp:        instance.stateChangedAt,
+        });
+
+        logger.info(`Instance ${id}: ${fromState} → ${targetState} (suspend:${reasonCode}, ${transitionId})`);
+        return instance;
     }
 
     return {
@@ -745,127 +990,11 @@ module.exports = (redis, config, relay = null) => {
          * `ASSIST_REQUIRED`) from ANY active state without requiring N×M `transitions` rules,
          * saving `blockedState` + `checkpoint` so `resume` returns to the exact interrupted state.
          */
-        async suspend({
-            id,
-            reason,
-            reasonCode = 'MANUAL_INTERVENTION',
-            suspendState = 'ASSIST_REQUIRED',
-            checkpoint = null,
-            aiSuggestion = null,
-            metaUpdate,
-            meta,
-            expectedTransitionId = null,
-        } = {}, req) {
-            if (!id)     throw jsonrpc.MISSING_PARAM('id');
-            if (!reason) throw jsonrpc.MISSING_PARAM('reason');
-            const targetState = suspendState || 'ASSIST_REQUIRED';
-            if (typeof targetState !== 'string' || !STATE_NAME_RE.test(targetState)) {
-                throw jsonrpc.INVALID_PARAM(`suspendState must match ${STATE_NAME_RE}`);
-            }
-            const rawMeta = metaUpdate ?? meta ?? {};
-            const safeMetaUpdate = stripSensitiveMeta(rawMeta);
+        async suspend(params = {}, req) {
+            const id = params && params.id;
+            if (!id) throw jsonrpc.MISSING_PARAM('id');
             const key = getInstanceKey(id);
-
-            return withInstanceLock(key, async () => {
-                const initialInstance = await getInstance(id, req);
-                const profile = await loadProfile(initialInstance.profileId);
-                if (profile && profile.reviewState && profile.reviewState !== 'APPROVED') {
-                    throw jsonrpc.FORBIDDEN(`Profile ${initialInstance.profileId} is not activated (reviewState: ${profile.reviewState}) — it must be (re-)approved before its instances can suspend`);
-                }
-                const profileTransitions = Array.isArray(profile && profile.transitions) ? profile.transitions : [];
-                const businessStates = new Set();
-                for (const t of profileTransitions) {
-                    if (t && t.from) businessStates.add(t.from);
-                    if (t && t.to) businessStates.add(t.to);
-                }
-                if (targetState !== 'ASSIST_REQUIRED' && businessStates.has(targetState)) {
-                    throw jsonrpc.INVALID_PARAM(
-                        `suspendState "${targetState}" collides with a declared business state in profile ${initialInstance.profileId}`
-                    );
-                }
-
-                let fromState;
-                let transitionId;
-
-                const instance = await optimisticUpdate(redis, key, (current) => {
-                    assertOwner(current, req);
-                    const lastEntry = Array.isArray(current.history) ? current.history.at(-1) : null;
-                    if (expectedTransitionId !== undefined && expectedTransitionId !== null) {
-                        const currentTransitionId = lastEntry?.transition_id || null;
-                        if (currentTransitionId !== expectedTransitionId) {
-                            throw jsonrpc.INVALID_PARAM(
-                                `Stale transition_id for instance ${id}: expected "${expectedTransitionId}", current is "${currentTransitionId}"`
-                            );
-                        }
-                    }
-                    if (current.state === 'CANCELLED' || current.state === 'COMPLETED') {
-                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is in terminal state ${current.state} and cannot be suspended`);
-                    }
-                    if (profileTransitions.length > 0 && !profileTransitions.some((t) => t && t.from === current.state)) {
-                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is in terminal state ${current.state} (no outgoing transitions) and cannot be suspended`);
-                    }
-                    if (current.suspension || current.state === targetState) {
-                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is already suspended in ${current.state}`);
-                    }
-                    if (lastEntry && lastEntry.event === 'hold_requested') {
-                        throw jsonrpc.INVALID_PARAM(`Instance ${id} is currently on hold (${current.state}) and must be resumed before suspending`);
-                    }
-
-                    const now = clock.now();
-                    fromState = current.state;
-                    transitionId = `${id}-T${current.history.length + 1}`;
-                    const mergedMeta = { ...current.meta, ...safeMetaUpdate };
-                    const suspension = {
-                        blockedState: fromState,
-                        suspendState: targetState,
-                        reasonCode:   reasonCode || 'MANUAL_INTERVENTION',
-                        reason,
-                        checkpoint:   (checkpoint && typeof checkpoint === 'object' && !Array.isArray(checkpoint)) ? checkpoint : null,
-                        aiSuggestion: aiSuggestion || null,
-                        suspendedAt:  now,
-                        suspendedBy:  req?.user || null,
-                        transitionId,
-                    };
-
-                    const entry = {
-                        state:         targetState,
-                        event:         'suspend',
-                        transition_id: transitionId,
-                        reason,
-                        reason_code:   suspension.reasonCode,
-                        user:          req?.user || null,
-                        trace:         walContext.getStore()?.trace || null,
-                        stamp:         now,
-                    };
-                    if (suspension.checkpoint) entry.checkpoint = suspension.checkpoint;
-                    if (Object.keys(safeMetaUpdate).length) entry.meta_update = safeMetaUpdate;
-
-                    return {
-                        ...current,
-                        prevState:      fromState,
-                        state:          targetState,
-                        stateChangedAt: now,
-                        suspension,
-                        meta:           mergedMeta,
-                        history:        [...current.history, entry],
-                    };
-                });
-
-                emitTransitioned({
-                    id,
-                    profileId:    instance.profileId,
-                    sourceId:     instance.sourceId,
-                    fromState,
-                    toState:      targetState,
-                    event:        'suspend',
-                    transitionId,
-                    user:         req?.user || null,
-                    stamp:        instance.stateChangedAt,
-                });
-
-                logger.info(`Instance ${id}: ${fromState} → ${targetState} (suspend:${reasonCode}, ${transitionId})`);
-                return instance;
-            });
+            return withInstanceLock(key, () => suspendUnlocked(params, req));
         },
 
         /**

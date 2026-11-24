@@ -1025,6 +1025,160 @@ describe('peer_rpc_with_callback & fulfillment.barrier', () => {
         expect(cbOut.meta.invoiceNo).toBe('26332000000012345678');
     });
 
+    test('peer_rpc_with_callback writes sanitized remote return to resultMetaKey and exposes _peerDispatch', async () => {
+        const customLogic = createLogic(redis, {
+            ...config,
+            peers: { steward: { endpoint: 'https://rpa-api.w3os.net/rpc' } },
+            peerRelayFactory() {
+                return {
+                    async call() {
+                        return { id: 'BR-9001', jobId: 'HJ-1001', state: 'CLAIMED', callbackToken: 'must-strip' };
+                    },
+                };
+            },
+        });
+
+        await customLogic.profile.create({
+            id: 'rpa-result-prof',
+            name: 'RPA Result Profile',
+            transitions: [
+                {
+                    event: 'dispatch_requested',
+                    from: 'DRAFT',
+                    to: 'EXECUTING',
+                    actions: [{
+                        kind: 'peer_rpc_with_callback',
+                        peer: 'steward',
+                        method: 'steward.bridge.dispatch',
+                        callback: { allowedEvents: ['rpa_done'] },
+                        resultMetaKey: 'lastBridgeDispatch',
+                    }],
+                },
+                { event: 'rpa_done', from: 'EXECUTING', to: 'COMPLETED' },
+            ],
+        });
+
+        const inst = await customLogic.instance.create({ sourceId: 'INV-RES-01', profileId: 'rpa-result-prof' }, MOCK_REQ);
+        const out = await customLogic.instance.transition({ id: inst.id, event: 'dispatch_requested' }, MOCK_REQ);
+
+        expect(out.state).toBe('EXECUTING');
+        expect(out.meta.lastBridgeDispatch).toEqual({ id: 'BR-9001', jobId: 'HJ-1001', state: 'CLAIMED' });
+        expect(out.meta.lastBridgeDispatch.callbackToken).toBeUndefined();
+        expect(out._peerDispatch).toEqual([
+            {
+                actionIndex: 0,
+                method: 'steward.bridge.dispatch',
+                ok: true,
+                result: { id: 'BR-9001', jobId: 'HJ-1001', state: 'CLAIMED' },
+            },
+        ]);
+
+        const persisted = await customLogic.instance.get({ id: inst.id }, MOCK_REQ);
+        expect(persisted.meta.lastBridgeDispatch).toEqual({ id: 'BR-9001', jobId: 'HJ-1001', state: 'CLAIMED' });
+    });
+
+    test('peer_rpc_with_callback onError revokes flcb_ token, records error meta, and auto-fires onError event or built-in suspend (including missing endpoint)', async () => {
+        let capturedCallbackToken = null;
+        const failingLogic = createLogic(redis, {
+            ...config,
+            peers: { steward: { endpoint: 'https://rpa-api.w3os.net/rpc' } },
+            peerRelayFactory() {
+                return {
+                    async call(_method, params) {
+                        capturedCallbackToken = params.upstream.callbackToken;
+                        const err = new Error('Playbook chinatax.blue.issue is not approved');
+                        err.code = -32005;
+                        throw err;
+                    },
+                };
+            },
+        });
+
+        await failingLogic.profile.create({
+            id: 'rpa-onerror-prof',
+            name: 'RPA OnError Profile',
+            transitions: [
+                {
+                    event: 'dispatch_requested',
+                    from: 'DRAFT',
+                    to: 'EXECUTING',
+                    actions: [{
+                        kind: 'peer_rpc_with_callback',
+                        peer: 'steward',
+                        method: 'steward.bridge.dispatch',
+                        callback: { allowedEvents: ['rpa_done', 'assist_required'] },
+                        resultMetaKey: 'lastBridgeDispatch',
+                        onError: { event: 'assist_required', metaKey: 'peerDispatchError' },
+                    }],
+                },
+                { event: 'rpa_done', from: 'EXECUTING', to: 'COMPLETED' },
+                { event: 'assist_required', from: 'EXECUTING', to: 'ASSIST_REQUIRED' },
+            ],
+        });
+
+        const inst = await failingLogic.instance.create({ sourceId: 'INV-ERR-01', profileId: 'rpa-onerror-prof' }, MOCK_REQ);
+        const out = await failingLogic.instance.transition({ id: inst.id, event: 'dispatch_requested' }, MOCK_REQ);
+
+        expect(out.state).toBe('ASSIST_REQUIRED');
+        expect(out.pending_callbacks).toEqual([]);
+        expect(out.meta.peerDispatchError).toMatchObject({
+            method: 'steward.bridge.dispatch',
+            endpoint: 'https://rpa-api.w3os.net/rpc',
+            code: -32005,
+            message: 'Playbook chinatax.blue.issue is not approved',
+        });
+        expect(typeof out.meta.peerDispatchError.at).toBe('number');
+        expect(out.meta.lastBridgeDispatch).toMatchObject({
+            ok: false,
+            error: { code: -32005 },
+        });
+        expect(out._peerDispatch).toMatchObject([
+            { actionIndex: 0, method: 'steward.bridge.dispatch', ok: false, error: { code: -32005 } },
+        ]);
+
+        // Revoked flcb_ token must be unusable
+        await expect(
+            failingLogic.instance.callback({ event: 'rpa_done' }, { callbackToken: capturedCallbackToken })
+        ).rejects.toMatchObject({ code: -32003 });
+
+        // Missing endpoint + built-in onError: { event: 'suspend' } must auto-suspend instead of silently skipping
+        const unconfiguredLogic = createLogic(redis, { ...config, peers: {} });
+        await unconfiguredLogic.profile.create({
+            id: 'rpa-no-endpoint-prof',
+            name: 'RPA Missing Endpoint Profile',
+            transitions: [
+                {
+                    event: 'dispatch_requested',
+                    from: 'DRAFT',
+                    to: 'EXECUTING',
+                    actions: [{
+                        kind: 'peer_rpc_with_callback',
+                        peer: 'unconfigured_peer',
+                        method: 'steward.bridge.dispatch',
+                        callback: { allowedEvents: ['rpa_done'] },
+                        onError: { event: 'suspend', metaKey: 'peerDispatchError' },
+                    }],
+                },
+                { event: 'rpa_done', from: 'EXECUTING', to: 'COMPLETED' },
+            ],
+        });
+
+        const inst2 = await unconfiguredLogic.instance.create({ sourceId: 'INV-ERR-02', profileId: 'rpa-no-endpoint-prof' }, MOCK_REQ);
+        const out2 = await unconfiguredLogic.instance.transition({ id: inst2.id, event: 'dispatch_requested' }, MOCK_REQ);
+
+        expect(out2.state).toBe('ASSIST_REQUIRED');
+        expect(out2.suspension).toMatchObject({
+            blockedState: 'EXECUTING',
+            suspendState: 'ASSIST_REQUIRED',
+            reasonCode: 'PEER_ENDPOINT_MISSING',
+        });
+        expect(out2.pending_callbacks).toEqual([]);
+        expect(out2.meta.peerDispatchError.code).toBe('PEER_ENDPOINT_MISSING');
+
+        const resumed = await unconfiguredLogic.instance.resume({ id: inst2.id, resolution: 'Added SOLO_PEER_URL' }, MOCK_REQ);
+        expect(resumed.state).toBe('EXECUTING');
+    });
+
     test('fulfillment.barrier — idempotent fan-in settles exactly once at expectedCount and advances target instance', async () => {
         await redis.set(`${config.redis.profilePrefix}${SM_ID}`, JSON.stringify(SM_PROFILE));
         const inst = await logic.instance.create({ sourceId: 'PULSE-2026-11-12', profileId: SM_ID }, MOCK_REQ);

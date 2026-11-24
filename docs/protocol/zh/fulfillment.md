@@ -229,8 +229,10 @@
 | `peer` / `endpoint` | 对端 SOLO 栈标识（映射环境变量 `SOLO_PEER_<PEER>_URL` 或 `config.peers[peer]`）或显式 JSON-RPC 端点 URL |
 | `method` | 对端 RPC 方法名（如 `steward.bridge.dispatch`） |
 | `callback.allowedEvents` | 必填非空数组，允许对端回调触发的 `transition.event` 白名单（Lint 强制核验这些事件在目标态 `to` 下有定义） |
-| `callback.ttlMs` | 可选，回调令牌有效期（毫秒，默认 30 分钟，上限 7 天） |
-| `paramsFromMeta` | 可选，从 `instance.meta[paramsFromMeta]` 读取业务派单参数并与 `params` 合并，自动附加 `idempotencyKey` 与 `upstream: { instanceId, profileId, sourceId, transitionId, expectedTransitionId, callbackToken, tokenId, allowedEvents, expiresAt, callbackUrl }` |
+| `callback.ttlMs` | 可选，回调令牌有效期（毫秒，默认 60 分钟，上限 7 天） |
+| `paramsFromMeta` | 可选，从 `instance.meta[paramsFromMeta]` 读取业务派单参数并与 `params` 合并，在顶层自动注入 `idempotencyKey`（注：SOLO Router `validateParams` 仅校验已声明参数而不拒绝额外字段；对端方法若需幂等应在 `introspection.js` 中显式声明 `idempotencyKey`，未声明则会被安全忽略）与 `upstream: { instanceId, profileId, sourceId, transitionId, expectedTransitionId, callbackToken, tokenId, allowedEvents, expiresAt, callbackUrl }` |
+| `resultMetaKey` | 可选，合法非敏感字段名。投递成功时将对端返回值（经 `stripSensitiveMeta` 脱敏）原子写回 `instance.meta[resultMetaKey]`（如保存 Steward `bridgeId`/`jobId`）；投递失败时写入 `{ ok: false, error }` |
+| `onError` | 可选，`{ event?: string, metaKey?: string, reasonCode?: string }`。当对端 `endpoint` 未配置或 RPC 投递失败时，引擎立即作废并清理刚签发的 `flcb_` 令牌，将 `{ method, endpoint, code, message, at }` 写入 `meta[metaKey]`，并在当前跃迁锁内携带 `expectedTransitionId` 自动触发 `onError.event`（支持填 Profile 中从目标态出发的事件名，或填内置 `'suspend'` 直接断点挂起至 `ASSIST_REQUIRED`）。此外，含该类动作的 `transition` 响应会附带 `_peerDispatch: [{ actionIndex, method, ok, result?, error? }]` 供调用方即时观测 |
 
 ### 2.3 Profile 存储与双轴治理规范
 Profile 由 `library/entity.js` 存储在 Redis 中（支持软删除与投稿审批双轴）：

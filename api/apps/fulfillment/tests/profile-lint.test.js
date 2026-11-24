@@ -196,6 +196,28 @@ describe('lintProfile — action methods (rule 4: a TASK action must dispatch to
         expect(rBad.errors.join('\n')).toMatch(/missing a valid 'peer'/);
         expect(rBad.errors.join('\n')).toMatch(/invalid remote method/);
         expect(rBad.errors.join('\n')).toMatch(/allowedEvents/);
+
+        const badOnError = {
+            id: 'act-peer-bad-onerror',
+            transitions: [
+                {
+                    event: 'dispatch',
+                    from: 'DRAFT',
+                    to: 'EXECUTING',
+                    actions: [{
+                        kind: 'peer_rpc_with_callback',
+                        peer: 'steward',
+                        method: 'steward.bridge.dispatch',
+                        callback: { allowedEvents: ['rpa_done'] },
+                        onError: { event: 'ghost_event', metaKey: 'callbackToken' },
+                    }],
+                },
+                { event: 'rpa_done', from: 'EXECUTING', to: 'DONE' },
+            ],
+        };
+        const rBadErr = lintProfile(badOnError, methodIndex);
+        expect(rBadErr.errors.join('\n')).toMatch(/onError\.event 'ghost_event' is not defined/);
+        expect(rBadErr.errors.join('\n')).toMatch(/onError\.metaKey/);
     });
     test('WARNING: action params reference an unbacked instance.meta var', () => {
         const p = { id: 'act-pv', transitions: [

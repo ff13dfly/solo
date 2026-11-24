@@ -233,6 +233,30 @@ function lintProfile(profile, methodIndex = {}, options = {}) {
                 if (a.paramsFromMeta && typeof a.paramsFromMeta === 'string' && !fieldKeys.has(a.paramsFromMeta)) {
                     warnings.push(`${pname}: transition '${t.event || '?'}' peer_rpc_with_callback '${a.method}' reads paramsFromMeta '${a.paramsFromMeta}' with no declared meta_field — ensure it is populated in instance.meta`);
                 }
+                if (a.resultMetaKey !== undefined) {
+                    if (typeof a.resultMetaKey !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(a.resultMetaKey) || /^callback_?token$/i.test(a.resultMetaKey)) {
+                        errors.push(`${pname}: transition '${t.event || '?'}' peer_rpc_with_callback action '${a.method}' has invalid resultMetaKey '${String(a.resultMetaKey)}'`);
+                    }
+                }
+                if (a.onError !== undefined) {
+                    if (!a.onError || typeof a.onError !== 'object' || Array.isArray(a.onError)) {
+                        errors.push(`${pname}: transition '${t.event || '?'}' peer_rpc_with_callback action '${a.method}' onError must be an object`);
+                    } else {
+                        if (a.onError.event !== undefined) {
+                            const errEv = a.onError.event;
+                            if (typeof errEv !== 'string' || !errEv.trim()) {
+                                errors.push(`${pname}: transition '${t.event || '?'}' peer_rpc_with_callback action '${a.method}' onError.event must be a non-empty string`);
+                            } else if (errEv !== 'suspend' && !transitions.some((tr) => tr && tr.event === errEv && (tr.from === t.to || tr.from === '*'))) {
+                                errors.push(`${pname}: transition '${t.event || '?'}' peer_rpc_with_callback action '${a.method}' onError.event '${errEv}' is not defined from target state '${t.to}'`);
+                            }
+                        }
+                        if (a.onError.metaKey !== undefined) {
+                            if (typeof a.onError.metaKey !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(a.onError.metaKey) || /^callback_?token$/i.test(a.onError.metaKey)) {
+                                errors.push(`${pname}: transition '${t.event || '?'}' peer_rpc_with_callback action '${a.method}' has invalid or reserved onError.metaKey '${String(a.onError.metaKey)}'`);
+                            }
+                        }
+                    }
+                }
                 continue;
             }
             if (!hasOwn(methodIndex, a.method)) {
