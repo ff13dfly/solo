@@ -13,6 +13,27 @@ SOLO 各发布版本的变更记录。**消费者升级前读这个。**
 
 ---
 
+## [v1.3.6] — 2026-11-25
+
+### 🟢 `core/agent` 分层用量账本与 `X-Fulfillment-Id` 归因、履约 `peer_rpc_with_callback` 失败自愈与结果回写、`doctor.sh` 跨箱契约探活（`../feedback/done/2026-11-16-agent-fulfillment-usage-metering.md`、`../feedback/done/fulfillment-peer-rpc-dispatch-failure-swallowed.md`、`../feedback/done/2026-11-14-doctor-cross-box-manifest-and-ollama-keepalive.md`）
+
+- **`core/agent` 本地/云端/跨箱/RPA 分层计量与 `fulfillment` 单据级用量账本（`api/core/agent/`、`api/router/`、`api/library/`、`api/core/nexus/`）**：
+  - `tokenLogger` 新增 `resolveTier(provider, explicitTier)`：`ollama` / `local` / `apple-vision` 归入 `local`（`costUsd = 0`，不再按默认单价计入虚拟美金），`solo-peer` 归入 `peer`（`SoloPeerProvider` 在调用箱本地记录委托次数与 Token 且 `costUsd = 0` 防双计费），`rpa` / `*-rpa` 归入 `rpa`，其余云 API 归入 `cloud`；`AGENT:TOKEN:DAILY:YYYYMMDD` 保留原顶层字段并在 `daily()` 返回中附带 `byTier` 与 `byProvider`。
+  - 零侵入 `X-Fulfillment-Id` / `X-Fulfillment-Profile` 归因链路：Router 仅对已鉴权调用方按白名单正则清洗后签入 `X-Router-Token.meta`（含 `_tasks` 异步延续）；`requestContext`、`relay.call` 与 `peerRelay.call` 支持从 `walContext` 自动继承及第 3 参数 `{ fulfillmentId, profileId }` 显式透传；`apps/fulfillment` 动作发射与 `core/nexus` Sentinel 消费 `EVENT:FULFILLMENT:*` 时自动染色。
+  - 新增 `agent.stats.fulfillment`（支持单张 `id`、批量 `ids <= 100` 及按 `profile` 日维度聚合查询，90 天 TTL）与 `agent.stats.record`（供 admin / `system.*` / `bot.*` 幂等补记网关外异构 AI 与 RPA 会话用量，非授权账号 `-32003` 拒绝）。
+- **`apps/fulfillment` `peer_rpc_with_callback` 失败回推、令牌即时回收与对端结果回写（`api/apps/fulfillment/`）**：
+  - 新增 `resultMetaKey`：投递成功时在实例锁内将对端返回值经 `stripSensitiveMeta` 清洗后写回 `instance.meta[resultMetaKey]`（如保存 Steward `bridgeId` / `jobId`），失败时写入 `{ ok: false, error }`。
+  - 新增 `onError: { event?, metaKey?, reasonCode? }`：当对端 `endpoint` 未配置或 RPC 投递失败时，立即销毁刚签发的 `CBTOKEN` 并从 `pending_callbacks` 移除，把 `{ method, endpoint, code, message, at }` 写入 `meta[metaKey]`，并在同一实例锁内携带 `expectedTransitionId` 自动触发 `onError.event`（支持 Profile 目标态事件或内置 `'suspend'` 直接断点挂起至 `ASSIST_REQUIRED`）；Profile Lint 同步校验 `onError.event` 可达性。
+  - 含 `peer_rpc_with_callback` 的 `transition` 响应附带 `_peerDispatch: [{ actionIndex, method, ok, result?, error? }]`，并更新 `docs/protocol/zh/fulfillment.md` §2.2。
+- **`deploy/scaffold/doctor.sh` 跨箱脱敏清单与网关/Ollama 探活**：
+  - 新增 `bash deploy/doctor.sh --json` 输出零密钥脱敏契约清单（`soloVersion`、`assetIdLength`、`storage`、`agent`、`services`、`summary`、`checks`）；
+  - 修正 `STORAGE_PROVIDER` 判断偏差，显式报告 `ASSET_ID_LENGTH` 并在栈运行时对 `LOCAL_OSS_OUTWARD_ORIGIN` 执行只读 HTTP 探活（识别未剥离 `/_oss` 前缀导致的 `NoSuchBucket` 与 `502`/HTML 错误页）；
+  - 新增 Ollama `OLLAMA_KEEP_ALIVE=-1` 保活提示、`/api/tags` 探活与 `SOLO_AGENT_PEER_URL` 连通性巡检。
+
+下游 action：无。全部改动向后兼容；`finance`、`catalog`、`steward`、`procurement` 等消费方直接执行 `bash ../solo/deploy/scaffold/upgrade.sh .` 升至 `v1.3.6` 即可获得新版 `solo.v1.3.6.js` 与 `deploy/doctor.sh`。
+
+---
+
 ## [v1.3.5] — 2026-11-14
 
 ### 🟢 统一出站底座、原生 Ollama / 跨箱 Peer 算力路由、履约跨栈回调与扇入屏障、密封信封及 `run-2` 对抗性安全深审收口（`../feedback/done/outbound-layering-ollama-agent-and-peer-relay.md`、`../feedback/done/2026-11-13-storage-asset-id-length-and-163-imap-followup.md`、`../security/V1_3_4_RUN2_AUDIT_REPORT.md`）
